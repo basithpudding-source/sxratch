@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0b10" />
+  <title>Sxratch/Pad — browser DJ</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Sxratch" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/studio.css" />
+</head>
+<body>
+  <!-- Audio needs a user gesture to start -->
+  <div id="start-overlay">
+    <div class="start-card">
+      <h1 class="brand">SXRATCH/PAD</h1>
+      <p class="tagline">Two decks. One surface. Scratch with your trackpad or thumbs.</p>
+      <button id="start-btn">Enter the booth</button>
+      <p class="hint">Headphones recommended · works on desktop &amp; mobile</p>
+    </div>
+  </div>
+
+  <header id="topbar">
+    <div class="brandnav" role="tablist">
+      <button id="nav-decks" class="brand-seg active" title="Decks — scratch &amp; mix">SXRATCH</button>
+      <span class="brand-slash">/</span>
+      <button id="nav-studio" class="brand-seg" title="PAD — Studio Song Builder">PAD</button>
+    </div>
+    <div class="master deck-only">
+      <label for="master-vol">MASTER</label>
+      <input id="master-vol" type="range" min="0" max="1" step="0.01" value="0.9" />
+    </div>
+    <button id="stack-btn" class="deck-only" title="Stacked beat-match waveform view">⤢</button>
+    <button id="practice-btn" class="deck-only" title="Practice mode — guided tutorials">🎓 Practice</button>
+    <button id="record-btn" class="deck-only" title="Record mix">🔴 REC</button>
+    <button id="settings-btn" class="deck-only" title="Customize keys &amp; gestures">⚙</button>
+    <button id="help-btn" title="Controls">?</button>
+  </header>
+
+  <main id="console">
+    <!-- Waveforms + track meta, left/right -->
+    <section class="decks-top">
+      <div class="deck-meta" data-deck="A">
+        <div class="meta-line">
+          <span class="badge">A</span>
+          <span class="title" id="title-A">No track loaded</span>
+          <span class="time" id="time-A">0:00 / 0:00</span>
+        </div>
+        <canvas class="waveform" id="wave-A" title="Drag to scrub · click to jump · Shift-click to set a hot cue · double-click a cue to clear"></canvas>
+        <div class="hotcues" data-deck="A"></div>
+        <div class="load-row">
+          <button class="btn load-btn" data-deck="A">⤓ Load file</button>
+          <button class="btn url-btn" data-deck="A">link</button>
+          <button class="btn dbl-btn" data-deck="A" title="Instant double — copy this deck onto the other">DBL ⇄</button>
+          <select class="preset-select" data-deck="A">
+            <option value="" disabled selected>Presets</option>
+            <option value="scratch">Scratch Tool</option>
+            <option value="beat">100 BPM Beat</option>
+            <option value="laser">Laser Preset</option>
+          </select>
+          <span class="spacer"></span>
+          <button class="btn zoom-btn" data-deck="A" data-dir="out" title="Zoom out">－</button>
+          <button class="btn zoom-btn" data-deck="A" data-dir="in" title="Zoom in">＋</button>
+          <input class="file-input" data-deck="A" type="file" accept="audio/*" hidden />
+        </div>
+        <div class="loop-row" data-deck="A">
+          <span class="loop-label">LOOP</span>
+          <button class="btn loop-btn loop-auto" data-deck="A" title="Auto 4-beat loop">4</button>
+          <button class="btn loop-btn loop-half" data-deck="A" title="Halve loop">½</button>
+          <button class="btn loop-btn loop-double" data-deck="A" title="Double loop">2×</button>
+          <button class="btn loop-btn loop-in" data-deck="A" title="Set loop in">IN</button>
+          <button class="btn loop-btn loop-out" data-deck="A" title="Set loop out">OUT</button>
+          <button class="btn loop-btn loop-exit" data-deck="A" title="Exit loop">EXIT</button>
+          <button class="btn loop-btn loop-to-pad" data-deck="A" title="Map loop region to sampler pad">→ PAD</button>
+        </div>
+      </div>
+      <div class="deck-meta" data-deck="B">
+        <div class="meta-line">
+          <span class="badge">B</span>
+          <span class="title" id="title-B">No track loaded</span>
+          <span class="time" id="time-B">0:00 / 0:00</span>
+        </div>
+        <canvas class="waveform" id="wave-B" title="Drag to scrub · click to jump · Shift-click to set a hot cue · double-click a cue to clear"></canvas>
+        <div class="hotcues" data-deck="B"></div>
+        <div class="load-row">
+          <button class="btn load-btn" data-deck="B">⤓ Load file</button>
+          <button class="btn url-btn" data-deck="B">link</button>
+          <button class="btn dbl-btn" data-deck="B" title="Instant double — copy this deck onto the other">DBL ⇄</button>
+          <select class="preset-select" data-deck="B">
+            <option value="" disabled selected>Presets</option>
+            <option value="scratch">Scratch Tool</option>
+            <option value="beat">100 BPM Beat</option>
+            <option value="laser">Laser Preset</option>
+          </select>
+          <span class="spacer"></span>
+          <button class="btn zoom-btn" data-deck="B" data-dir="out" title="Zoom out">－</button>
+          <button class="btn zoom-btn" data-deck="B" data-dir="in" title="Zoom in">＋</button>
+          <input class="file-input" data-deck="B" type="file" accept="audio/*" hidden />
+        </div>
+        <div class="loop-row" data-deck="B">
+          <span class="loop-label">LOOP</span>
+          <button class="btn loop-btn loop-auto" data-deck="B" title="Auto 4-beat loop">4</button>
+          <button class="btn loop-btn loop-half" data-deck="B" title="Halve loop">½</button>
+          <button class="btn loop-btn loop-double" data-deck="B" title="Double loop">2×</button>
+          <button class="btn loop-btn loop-in" data-deck="B" title="Set loop in">IN</button>
+          <button class="btn loop-btn loop-out" data-deck="B" title="Set loop out">OUT</button>
+          <button class="btn loop-btn loop-exit" data-deck="B" title="Exit loop">EXIT</button>
+          <button class="btn loop-btn loop-to-pad" data-deck="B" title="Map loop region to sampler pad">→ PAD</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- THE SCRATCH SURFACE — split down the middle -->
+    <section class="scratch-zone" id="scratch-zone">
+      <div class="deck-rail" data-deck="A">
+        <div class="rail-label">TEMPO</div>
+        <div class="fader v tempo" id="tempo-A" data-deck="A"></div>
+        <div class="rail-read" id="tempo-A-read">±0.0%</div>
+      </div>
+
+      <div class="jog-pad" id="pad-A" data-deck="A">
+        <div class="armed-tag">DECK A — right&nbsp;Ctrl</div>
+        <div class="platter">
+          <div class="platter-ref"></div>
+          <div class="platter-disc" id="disc-A">
+            <div class="platter-ring"></div>
+            <div class="platter-mark"></div>
+            <div class="platter-sticker"></div>
+          </div>
+          <div class="platter-label">A</div>
+        </div>
+        <div class="pad-hint">drag ← → to scratch</div>
+      </div>
+
+      <div class="center-divider"></div>
+
+      <div class="jog-pad" id="pad-B" data-deck="B">
+        <div class="armed-tag">DECK B — left&nbsp;Ctrl</div>
+        <div class="platter">
+          <div class="platter-ref"></div>
+          <div class="platter-disc" id="disc-B">
+            <div class="platter-ring"></div>
+            <div class="platter-mark"></div>
+            <div class="platter-sticker"></div>
+          </div>
+          <div class="platter-label">B</div>
+        </div>
+        <div class="pad-hint">drag ← → to scratch</div>
+      </div>
+
+      <div class="deck-rail" data-deck="B">
+        <div class="rail-label">TEMPO</div>
+        <div class="fader v tempo" id="tempo-B" data-deck="B"></div>
+        <div class="rail-read" id="tempo-B-read">±0.0%</div>
+      </div>
+    </section>
+
+    <!-- Transport -->
+    <section class="transport-row">
+      <div class="transport" data-deck="A">
+        <button class="btn tp-start" data-deck="A" title="To start">⏮</button>
+        <button class="btn tp-rew" data-deck="A" title="Rewind (hold)">⏪</button>
+        <button class="btn cue-btn" data-deck="A">CUE</button>
+        <button class="btn set-btn" data-deck="A">SET</button>
+        <button class="btn play-btn" data-deck="A" id="play-A">▶</button>
+        <button class="btn tp-ff" data-deck="A" title="Fast-forward (hold)">⏩</button>
+        <button class="btn sync-btn" data-deck="A" title="Beat-match this deck to the other">SYNC</button>
+      </div>
+      <div class="transport-center">
+        <button class="btn both-btn" id="both-btn" title="Play / pause both decks">▶❚❚ BOTH</button>
+      </div>
+      <div class="transport" data-deck="B">
+        <button class="btn sync-btn" data-deck="B" title="Beat-match this deck to the other">SYNC</button>
+        <button class="btn tp-ff" data-deck="B" title="Fast-forward (hold)">⏩</button>
+        <button class="btn play-btn" data-deck="B" id="play-B">▶</button>
+        <button class="btn set-btn" data-deck="B">SET</button>
+        <button class="btn cue-btn" data-deck="B">CUE</button>
+        <button class="btn tp-rew" data-deck="B" title="Rewind (hold)">⏪</button>
+        <button class="btn tp-start" data-deck="B" title="To start">⏮</button>
+      </div>
+    </section>
+
+
+
+    <!-- Mixer: EQ + volume per side, crossfader in the middle -->
+    <section class="mixer">
+      <div class="channel" data-deck="A">
+        <div class="eq">
+          <div class="knob-group"><div class="knob-dial"><svg class="knob-scale" viewBox="0 0 100 100" aria-hidden="true"></svg><div class="knob" data-deck="A" data-band="trim"><span class="knob-dot"></span></div></div><label>TRIM</label></div>
+          <div class="knob-group"><div class="knob-dial"><svg class="knob-scale" viewBox="0 0 100 100" aria-hidden="true"></svg><div class="knob" data-deck="A" data-band="high"><span class="knob-dot"></span></div></div><label>HI</label></div>
+          <div class="knob-group"><div class="knob-dial"><svg class="knob-scale" viewBox="0 0 100 100" aria-hidden="true"></svg><div class="knob" data-deck="A" data-band="mid"><span class="knob-dot"></span></div></div><label>MID</label></div>
+          <div class="knob-group"><div class="knob-dial"><svg class="knob-scale" viewBox="0 0 100 100" aria-hidden="true"></svg><div class="knob" data-deck="A" data-band="low"><span class="knob-dot"></span></div></div><label>LO</label></div>
+          <div class="knob-group"><div class="knob-dial"><svg class="knob-scale" viewBox="0 0 100 100" aria-hidden="true"></svg><div class="knob filter-knob" data-deck="A" data-band="filter"><span class="knob-dot"></span></div></div><label>FILTER</label></div>
+        </div>
+        <div class="deck-fx-panel" data-deck="A">
+          <div class="fx-panel-row">
+            <button class="btn fx-brake" data-deck="A" title="Hold to brake to a stop">BRAKE</button>
+            <button class="btn fx-spin" data-deck="A" title="Back-spin">SPIN</button>
+          </div>
+          <div class="fx-select">
+            <button class="btn fx-btn active" data-deck="A" data-fx="echo">ECHO</button>
+            <button class="btn fx-btn" data-deck="A" data-fx="reverb">REVERB</button>
+            <button class="btn fx-btn" data-deck="A" data-fx="flanger">FLANGER</button>
+            <button class="btn fx-btn" data-deck="A" data-fx="phaser">PHASER</button>
+          </div>
+          <div class="fx-depth">
+            <label>DEPTH</label>
+            <input class="fx-depth-slider" data-deck="A" type="range" min="0" max="1" step="0.01" value="0.5" />
+          </div>
+          <button class="btn fx-on" data-deck="A">FX ON</button>
+        </div>
+        <div class="vfader">
+          <div class="vol-row">
+            <div class="vu" id="vu-A"></div>
+            <div class="fader v vol" id="vol-A" data-deck="A"></div>
+          </div>
+          <label>VOL</label>
+        </div>
+      </div>
+
+      <div class="crossfade-col">
+        <div class="sampler-inline">
+          <div class="sampler-head">
+            <span class="sampler-title">SAMPLER</span>
+            <span class="sampler-hint">click a pad to load · click to fire · ■ to stop · double-click to clear</span>
+            <button class="btn samp-stopall" id="samp-stopall" title="Stop all samples">■ STOP</button>
+            <span class="samp-vol-wrap"><label>VOL</label><input id="sampler-vol" type="range" min="0" max="1" step="0.01" value="0.9" /></span>
+          </div>
+          <div class="sampler-pads" id="sampler-pads"></div>
+        </div>
+        <div class="visualizers-container">
+          <div class="visualizer-wrap deck-viz-wrap" data-deck="A">
+            <canvas id="viz-A" width="145" height="34"></canvas>
+          </div>
+          <div class="visualizer-wrap deck-viz-wrap" data-deck="B">
+            <canvas id="viz-B" width="145" height="34"></canvas>
+          </div>
+        </div>
+        <div class="crossfader-wrap">
+          <div class="xf-end">A</div>
+          <div class="fader h cross" id="crossfader"></div>
+          <div class="xf-end">B</div>
+        </div>
+      </div>
+
+      <div class="channel" data-deck="B">
+        <div class="eq">
+          <div class="knob-group"><div class="knob-dial"><svg class="knob-scale" viewBox="0 0 100 100" aria-hidden="true"></svg><div class="knob" data-deck="B" data-band="trim"><span class="knob-dot"></span></div></div><label>TRIM</label></div>
+          <div class="knob-group"><div class="knob-dial"><svg class="knob-scale" viewBox="0 0 100 100" aria-hidden="true"></svg><div class="knob" data-deck="B" data-band="high"><span class="knob-dot"></span></div></div><label>HI</label></div>
+          <div class="knob-group"><div class="knob-dial"><svg class="knob-scale" viewBox="0 0 100 100" aria-hidden="true"></svg><div class="knob" data-deck="B" data-band="mid"><span class="knob-dot"></span></div></div><label>MID</label></div>
+          <div class="knob-group"><div class="knob-dial"><svg class="knob-scale" viewBox="0 0 100 100" aria-hidden="true"></svg><div class="knob" data-deck="B" data-band="low"><span class="knob-dot"></span></div></div><label>LO</label></div>
+          <div class="knob-group"><div class="knob-dial"><svg class="knob-scale" viewBox="0 0 100 100" aria-hidden="true"></svg><div class="knob filter-knob" data-deck="B" data-band="filter"><span class="knob-dot"></span></div></div><label>FILTER</label></div>
+        </div>
+        <div class="deck-fx-panel" data-deck="B">
+          <div class="fx-panel-row">
+            <button class="btn fx-brake" data-deck="B" title="Hold to brake to a stop">BRAKE</button>
+            <button class="btn fx-spin" data-deck="B" title="Back-spin">SPIN</button>
+          </div>
+          <div class="fx-select">
+            <button class="btn fx-btn active" data-deck="B" data-fx="echo">ECHO</button>
+            <button class="btn fx-btn" data-deck="B" data-fx="reverb">REVERB</button>
+            <button class="btn fx-btn" data-deck="B" data-fx="flanger">FLANGER</button>
+            <button class="btn fx-btn" data-deck="B" data-fx="phaser">PHASER</button>
+          </div>
+          <div class="fx-depth">
+            <label>DEPTH</label>
+            <input class="fx-depth-slider" data-deck="B" type="range" min="0" max="1" step="0.01" value="0.5" />
+          </div>
+          <button class="btn fx-on" data-deck="B">FX ON</button>
+        </div>
+        <div class="vfader">
+          <div class="vol-row">
+            <div class="vu" id="vu-B"></div>
+            <div class="fader v vol" id="vol-B" data-deck="B"></div>
+          </div>
+          <label>VOL</label>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- PAD — Studio Song Builder -->
+  <main id="studio" hidden>
+    <div class="studio-head">
+      <h2>🎹 PAD · Song Builder</h2>
+      <p class="studio-sub">Compose a multi-track backing — chords, bass, lead &amp; drums across arranged sections — then send it to a deck to scratch &amp; mix, or download it.</p>
+    </div>
+    <div id="song-builder" class="song-builder"></div>
+  </main>
+
+  <!-- URL load dialog -->
+  <div id="url-dialog" class="dialog" hidden>
+    <div class="dialog-card">
+      <h3>Load from URL</h3>
+      <p class="muted">Paste a direct link to an audio file (.mp3, .wav, .ogg, .m4a). The host must allow cross-origin access (CORS).</p>
+      <input id="url-input" type="url" placeholder="https://example.com/track.mp3" />
+      <div class="dialog-actions">
+        <button class="btn" id="url-cancel">Cancel</button>
+        <button class="btn primary" id="url-load">Load</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Help / controls -->
+  <div id="help-dialog" class="dialog" hidden>
+    <div class="dialog-card">
+      <h3>How to play</h3>
+      <ul class="help-list">
+        <li><b>Scratch (trackpad):</b> hold <kbd>Ctrl</kbd> and move <b>one finger</b> up/down — no click, no second finger.
+          Hold <b>right</b> Ctrl (left hand scratches) → Deck&nbsp;A; hold <b>left</b> Ctrl (right hand scratches) → Deck&nbsp;B.</li>
+        <li><b>Slam crossfade:</b> right <kbd>Ctrl</kbd>+<kbd>Alt</kbd> throws the fader fully to <b>A</b>;
+          left <kbd>Ctrl</kbd>+<kbd>Shift</kbd> throws it fully to <b>B</b> (while you scratch that deck). Release to snap back.</li>
+        <li><b>Remap anything:</b> the <b>⚙</b> button lets you rebind every key and trackpad
+          gesture, invert the scratch, and tune sensitivity. Saved in your browser.</li>
+        <li><b>Crossfade (trackpad):</b> two fingers left/right (no Ctrl needed).</li>
+        <li><b>Scratch (mouse / touch):</b> press-drag left/right on a platter.</li>
+        <li><b>Waveforms are interactive:</b> drag to scrub (you hear it), click to jump,
+          <kbd>Shift</kbd>-click to drop a hot cue, double-click a cue to clear. <kbd>＋</kbd>/<kbd>－</kbd> zoom.</li>
+        <li><b>Hot cues:</b> <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd> Deck A, <kbd>6</kbd><kbd>7</kbd><kbd>8</kbd><kbd>9</kbd> Deck B
+          (tap to set/recall, <kbd>Shift</kbd>+ to clear).</li>
+        <li><b>Transport:</b> <kbd>Q</kbd>/<kbd>P</kbd> play, <kbd>W</kbd>/<kbd>O</kbd> jump cue, <kbd>E</kbd>/<kbd>I</kbd> set cue.
+          Each deck also has ⏮ to-start, ⏪/⏩ hold-to-rewind/forward, and <b>SYNC</b>.</li>
+        <li><b>Both decks &amp; sync:</b> <kbd>Space</kbd> plays/pauses both at once; <kbd>T</kbd>/<kbd>Y</kbd> beat-match A→B / B→A
+          (or the <b>SYNC</b> / <b>BOTH</b> buttons).</li>
+        <li><b>Crossfade:</b> center fader, or ← / → keys (↓ re-centers).</li>
+        <li><b>EQ / Volume / Tempo:</b> drag the knobs &amp; faders (each shows a scale).
+          <b>Double-click</b> any of them to snap back to neutral (tempo → 0%, crossfader → centre).</li>
+        <li><b>Load:</b> drop a file onto a deck, click “Load file”, or paste a URL.</li>
+      </ul>
+      <div class="dialog-actions">
+        <button class="btn primary" id="help-close">Got it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings / key & gesture mapping -->
+  <div id="settings-dialog" class="dialog" hidden>
+    <div class="dialog-card wide">
+      <h3>Customize controls</h3>
+      <p class="muted">Click a key button, then press the key you want. <kbd>Esc</kbd> cancels. Changes save automatically.</p>
+      <div id="settings-body"></div>
+      <div class="dialog-actions">
+        <button class="btn" id="settings-reset">Reset to defaults</button>
+        <button class="btn primary" id="settings-close">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Practice mode menu -->
+  <div id="practice-dialog" class="dialog" hidden>
+    <div class="dialog-card wide">
+      <h3>🎓 Practice mode</h3>
+      <p class="muted">Guided lessons that teach real DJ &amp; turntablist technique — from your first
+        play to flares. Each lesson loads a practice beat and coaches you step by step.</p>
+      <div id="practice-list"></div>
+      <div class="dialog-actions">
+        <button class="btn primary" id="practice-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script type="module" src="js/app.js"></script>
+  <script>
+    // Register the service worker (no-ops on insecure origins, e.g. plain-http LAN).
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/sw.js").catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

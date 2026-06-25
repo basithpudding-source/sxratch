@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sxratch",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js"],
+      "port": 5173
+    },
+    {
+      "name": "sxratch-dist",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js", "--dist"],
+      "port": 5173
+    }
+  ]
+}

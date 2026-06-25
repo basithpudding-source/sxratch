@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020", "DOM", "DOM.Iterable", "WebWorker"],
+    "checkJs": true,
+    "strict": false,
+    "noEmit": true,
+    "allowJs": true
+  },
+  "include": ["js/**/*.js", "test/**/*.js", "build.js", "server.js"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,15 @@
+# dependencies
+node_modules/
+
+# build output (regenerate with `npm run build`)
+dist/
+
+# firebase
+.firebase/
+firebase-debug.log
+
+# local editor / tooling
+.claude/settings.local.json
+*.log
+.DS_Store
+Thumbs.db

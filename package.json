@@ -1,0 +1,27 @@
+{
+  "name": "sxratch",
+  "version": "0.1.0",
+  "description": "Sxratch — a browser-based DJ app for scratching and mixing on desktop and mobile.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "build": "node build.js",
+    "start:dist": "node server.js --dist",
+    "test": "node --test",
+    "icons": "node scripts/make-icons.js"
+  },
+  "keywords": [
+    "dj",
+    "scratch",
+    "turntable",
+    "web-audio",
+    "audioworklet",
+    "mixer"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "sharp": "^0.35.2"
+  }
+}
