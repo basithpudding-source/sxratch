@@ -9,6 +9,7 @@ import { SongBuilder } from "./songbuilder.js";
 import { generateScratchPreset, generateLaserPreset } from "./presets.js";
 import { MidiInput, DEFAULT_MIDI_MAP } from "./midi.js";
 import { haptic, setHapticsEnabled, hapticsSupported } from "./haptics.js";
+import { detectBPM } from "./bpm.js";
 
 let coach = null;
 let sampler = null;
@@ -19,12 +20,369 @@ const analysers = {};
 const discs = {};                               // rotating platter elements
 const vizCache = {};                            // per-deck { canvas, ctx, buf } for the FFT visualizer (reused each frame)
 const rot = { A: { pos: 0, rate: 0, t: 0 }, B: { pos: 0, rate: 0, t: 0 } };
-const hot = { A: [null, null, null, null], B: [null, null, null, null] };
+const HOT_CUE_COUNT = 8;
+const hot = { A: Array(HOT_CUE_COUNT).fill(null), B: Array(HOT_CUE_COUNT).fill(null) };
 let mappingSource = null;                       // { deckId, start, end } for sampler region mapping
 
-const DECK_COLORS = { A: "#37e6c8", B: "#ff5d8f" };
-const CUE_COLORS = ["#ffd23f", "#37e6c8", "#ff5d8f", "#6c7bff"];
+const DECK_COLORS = { A: "#48ddd3", B: "#ff6175" };
+const CUE_COLORS = ["#ffd23f", "#48ddd3", "#ff6175", "#6c7bff", "#f89b29", "#79e66b", "#b16cff", "#6ad7ff"];
 const DEG_PER_SEC = 200;                          // 33⅓ RPM platter spin
+
+// BPM truthfulness: only display a number when we actually know it (metadata
+// from a preset / PAD render, or a confident detection) — otherwise "--".
+const bpmKnown = { A: false, B: false };
+const bpmDetectToken = { A: 0, B: 0 };            // invalidates stale async detections
+const arts = {};                                  // per-deck album-art tiles (real thumbnails)
+
+// Live master metering (topbar), created in setupTopbarMaster().
+let masterVuEl = null, masterAnalyser = null, masterBuf = null, masterPeak = 0;
+
+const demoChips = {};                             // per-deck "load a demo" chips on empty decks
+
+// Monochrome line icons (inline SVG — crisp at any DPI, no emoji tofu).
+const ICONS = {
+  link: '<svg viewBox="0 0 24 24"><path d="M10.6 13.4a4 4 0 0 0 5.6 0l3.2-3.2a4 4 0 1 0-5.6-5.6l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M13.4 10.6a4 4 0 0 0-5.6 0l-3.2 3.2a4 4 0 1 0 5.6 5.6l1.4-1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  zoomOut: '<svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.6 15.6 21 21M7.5 10.5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  zoomIn: '<svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.6 15.6 21 21M10.5 7.5v6M7.5 10.5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  folder: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4.2l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>',
+  grid: '<svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" fill="currentColor"/></svg>',
+  phones: '<svg viewBox="0 0 24 24"><path d="M4 14a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="3" y="13.5" width="4.2" height="7" rx="1.6" fill="currentColor"/><rect x="16.8" y="13.5" width="4.2" height="7" rx="1.6" fill="currentColor"/></svg>',
+  gear: '<svg viewBox="0 0 24 24"><path d="M12 15.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4zm7.4-3.2c0-.5 0-.9-.1-1.3l2.1-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2.2-1.3L14.4 3H9.6l-.4 2.4a7.6 7.6 0 0 0-2.2 1.3l-2.4-1-2 3.4L4.7 10.7a8 8 0 0 0 0 2.6l-2.1 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 2.2 1.3l.4 2.4h4.8l.4-2.4a7.6 7.6 0 0 0 2.2-1.3l2.4 1 2-3.4-2.1-1.6c.1-.4.1-.8.1-1.3z" fill="currentColor"/></svg>',
+};
+function icon(name) {
+  const s = document.createElement("span");
+  s.className = "ic";
+  s.setAttribute("aria-hidden", "true");
+  s.innerHTML = ICONS[name] || "";
+  return s;
+}
+const label = (text, cls = "") => {
+  const s = document.createElement("span");
+  if (cls) s.className = cls;
+  s.textContent = text;
+  return s;
+};
+
+// Recompose the legacy document bands into one controller chassis. Moving the
+// existing nodes keeps every event target, canvas, and audio control intact.
+composeDeckConsole();
+styleTopbarChrome();
+
+/** Swap the topbar's emoji for line icons + the reference labels. */
+function styleTopbarChrome() {
+  const drawer = document.getElementById("drawer-btn");
+  if (drawer) { drawer.replaceChildren(icon("grid"), label("PADS + FX")); }
+  const practice = document.getElementById("practice-btn");
+  if (practice) { practice.replaceChildren(icon("phones"), label("PRACTICE")); }
+  const rec = document.getElementById("record-btn");
+  if (rec) {
+    rec.replaceChildren();
+    const dot = document.createElement("i");
+    dot.className = "rec-dot";
+    dot.setAttribute("aria-hidden", "true");
+    rec.append(dot, label("REC", "rec-label"));
+  }
+  const settings = document.getElementById("settings-btn");
+  if (settings) { settings.replaceChildren(icon("gear")); }
+}
+
+function composeDeckConsole() {
+  const consoleEl = document.getElementById("console");
+  if (!consoleEl || consoleEl.querySelector(".controller-shell")) return;
+
+  const decksTop = consoleEl.querySelector(".decks-top");
+  const scratchZone = consoleEl.querySelector(".scratch-zone");
+  const transportRow = consoleEl.querySelector(".transport-row");
+  const mixer = consoleEl.querySelector(".mixer");
+  if (!decksTop || !scratchZone || !transportRow || !mixer) return;
+
+  const shell = document.createElement("section");
+  shell.className = "controller-shell";
+  shell.setAttribute("aria-label", "Sxratch dual-deck controller");
+
+  const center = document.createElement("section");
+  center.className = "controller-center";
+  center.setAttribute("aria-label", "Waveforms and mixer");
+
+  const waveConsole = document.createElement("section");
+  waveConsole.className = "wave-console";
+  waveConsole.setAttribute("aria-label", "Deck waveform controls");
+
+  const centerToolbar = document.createElement("div");
+  centerToolbar.className = "wave-toolbar";
+  centerToolbar.dataset.deck = "A";
+
+  const waveStage = document.createElement("div");
+  waveStage.className = "wave-stage";
+  waveStage.setAttribute("aria-label", "Stacked deck waveforms");
+
+  const loopStrip = document.createElement("div");
+  loopStrip.className = "center-loop-strip";
+  loopStrip.dataset.deck = "A";
+
+  // Explicit A | B switch: the centre toolbar + loop strip are shared between
+  // decks, so which deck they control must always be visible and tappable.
+  const deckSwitch = document.createElement("div");
+  deckSwitch.className = "deck-switch";
+  deckSwitch.setAttribute("role", "group");
+  deckSwitch.setAttribute("aria-label", "Toolbar deck");
+  const deckPicks = {};
+  for (const id of ["A", "B"]) {
+    const b = document.createElement("button");
+    b.className = "deck-pick";
+    b.dataset.deck = id;
+    b.type = "button";
+    b.textContent = id;
+    b.title = `Point the toolbar & loop controls at Deck ${id}`;
+    deckSwitch.append(b);
+    deckPicks[id] = b;
+  }
+
+  const activeDeckControls = [];
+  let loopLabelEl = null;
+  const setActiveDeck = (deckId) => {
+    shell.dataset.activeDeck = deckId;
+    centerToolbar.dataset.deck = deckId;
+    loopStrip.dataset.deck = deckId;
+    if (loopLabelEl) loopLabelEl.textContent = `LOOP ${deckId}`;
+    for (const id of ["A", "B"]) {
+      deckPicks[id].classList.toggle("active", id === deckId);
+      deckPicks[id].setAttribute("aria-pressed", id === deckId ? "true" : "false");
+    }
+    // Brief flash so auto-follow (touch a deck → toolbar retargets) is noticed.
+    const pick = deckPicks[deckId];
+    pick.classList.remove("flash");
+    void pick.offsetWidth;
+    pick.classList.add("flash");
+    activeDeckControls.forEach((el) => {
+      el.dataset.deck = deckId;
+      if (el.classList.contains("preset-select")) {
+        el.setAttribute("aria-label", `Preset loader for Deck ${deckId}`);
+      }
+    });
+    Object.values(sides).forEach((side) => {
+      if (side) side.classList.toggle("active", side.dataset.deck === deckId);
+    });
+  };
+  deckPicks.A.addEventListener("click", () => setActiveDeck("A"));
+  deckPicks.B.addEventListener("click", () => setActiveDeck("B"));
+  centerToolbar.append(deckSwitch);
+
+  const sides = {};
+  for (const id of ["A", "B"]) {
+    const side = document.createElement("section");
+    side.className = `deck-side deck-${id.toLowerCase()}`;
+    side.dataset.deck = id;
+    side.setAttribute("aria-label", `Deck ${id}`);
+
+    const meta = decksTop.querySelector(`.deck-meta[data-deck="${id}"]`);
+    const wave = meta?.querySelector(".waveform");
+    const metaLine = meta?.querySelector(".meta-line");
+    const title = meta?.querySelector(".title");
+    const time = meta?.querySelector(".time");
+    const badge = meta?.querySelector(".badge");
+    const hotcues = meta?.querySelector(".hotcues");
+    const loadRow = meta?.querySelector(".load-row");
+    const loopRow = meta?.querySelector(".loop-row");
+    const rail = scratchZone.querySelector(`.deck-rail[data-deck="${id}"]`);
+    const jog = scratchZone.querySelector(`.jog-pad[data-deck="${id}"]`);
+    const transport = transportRow.querySelector(`.transport[data-deck="${id}"]`);
+    if (!meta || !wave || !metaLine || !title || !time || !hotcues || !loadRow || !loopRow || !rail || !jog || !transport) continue;
+
+    const deckLabel = document.createElement("div");
+    deckLabel.className = "deck-heading";
+    deckLabel.innerHTML = `<span>DECK ${id}</span>`;
+
+    const trackCard = document.createElement("div");
+    trackCard.className = "track-card";
+
+    const art = document.createElement("div");
+    art.className = "album-art";
+    art.setAttribute("aria-hidden", "true");
+    arts[id] = art;
+
+    const trackInfo = document.createElement("div");
+    trackInfo.className = "track-info";
+
+    const trackStats = document.createElement("div");
+    trackStats.className = "track-stats";
+    // Live BPM readout — "--" until the value is actually known (preset / PAD
+    // metadata or a confident detection). No fake numbers.
+    const bpm = document.createElement("span");
+    bpm.className = "track-bpm";
+    bpm.textContent = "--";
+    bpm.title = "Effective BPM (track BPM × tempo)";
+    ui.bpmEl[id] = bpm;
+    const bpmUnit = document.createElement("span");
+    bpmUnit.className = "track-bpm-unit";
+    bpmUnit.textContent = "BPM";
+    trackStats.append(bpm, bpmUnit, time);
+
+    if (badge) badge.remove();
+    metaLine.remove();
+    trackInfo.append(title, trackStats);
+
+    const loadBtn = loadRow.querySelector(".load-btn");
+    const fileInput = loadRow.querySelector(".file-input");
+    if (loadBtn) {
+      loadBtn.classList.add("load-tile");
+      loadBtn.replaceChildren(icon("folder"), label("LOAD"));
+    }
+    trackCard.append(art, trackInfo);
+    if (loadBtn) trackCard.append(loadBtn);
+    if (fileInput) trackCard.append(fileInput);
+
+    const hotBlock = document.createElement("div");
+    hotBlock.className = "hotcue-block";
+    const hotLabel = document.createElement("span");
+    hotLabel.className = "section-label";
+    hotLabel.textContent = "HOT CUES";
+    hotBlock.append(hotLabel, hotcues);
+
+    meta.replaceChildren(deckLabel, trackCard, hotBlock);
+
+    if (id === "A") {
+      const urlBtn = loadRow.querySelector(".url-btn");
+      const dblBtn = loadRow.querySelector(".dbl-btn");
+      const preset = loadRow.querySelector(".preset-select");
+      const zoomOut = loadRow.querySelector('.zoom-btn[data-dir="out"]');
+      const zoomIn = loadRow.querySelector('.zoom-btn[data-dir="in"]');
+      if (urlBtn) {
+        urlBtn.replaceChildren(icon("link"), label("LINK"));
+        centerToolbar.append(urlBtn);
+        activeDeckControls.push(urlBtn);
+      }
+      if (dblBtn) {
+        dblBtn.textContent = "DBL";
+        centerToolbar.append(dblBtn);
+        activeDeckControls.push(dblBtn);
+      }
+      if (preset) {
+        const placeholder = preset.querySelector('option[value=""]');
+        if (placeholder) placeholder.textContent = "Default";
+        const presetWrap = document.createElement("label");
+        presetWrap.className = "preset-wrap";
+        presetWrap.innerHTML = `<span>PRESETS</span>`;
+        presetWrap.append(preset);
+        centerToolbar.append(presetWrap);
+        activeDeckControls.push(preset);
+      }
+      const zoomGroup = document.createElement("div");
+      zoomGroup.className = "zoom-group";
+      if (zoomOut) {
+        zoomOut.replaceChildren(icon("zoomOut"));
+        zoomGroup.append(zoomOut);
+        activeDeckControls.push(zoomOut);
+      }
+      if (zoomIn) {
+        zoomIn.replaceChildren(icon("zoomIn"));
+        zoomGroup.append(zoomIn);
+        activeDeckControls.push(zoomIn);
+      }
+      centerToolbar.append(zoomGroup);
+
+      loopStrip.append(loopRow);
+      loopLabelEl = loopRow.querySelector(".loop-label");
+      const toPadBtn = loopRow.querySelector(".loop-to-pad");
+      if (toPadBtn) toPadBtn.textContent = "TO PAD";
+      activeDeckControls.push(...loopRow.querySelectorAll("[data-deck]"));
+    } else {
+      loadRow.remove();
+      loopRow.remove();
+    }
+
+    const waveLane = document.createElement("div");
+    waveLane.className = "wave-lane";
+    waveLane.dataset.deck = id;
+    const laneLabel = document.createElement("span");
+    laneLabel.className = "wave-lane-label";
+    laneLabel.textContent = id;
+    laneLabel.setAttribute("aria-hidden", "true");
+    // Empty-deck demo chip — one tap to sound (wired in setup(), hidden on load).
+    const demo = document.createElement("button");
+    demo.className = "demo-chip";
+    demo.type = "button";
+    demo.dataset.deck = id;
+    demo.textContent = id === "A" ? "▶ LOAD DEMO BEAT" : "▶ LOAD SCRATCH SOUND";
+    demoChips[id] = demo;
+    waveLane.append(laneLabel, wave, demo);
+    waveStage.append(waveLane);
+
+    const deckBody = document.createElement("div");
+    deckBody.className = "deck-body";
+    deckBody.append(rail, jog);
+
+    transport.querySelector(".tp-start")?.replaceChildren(document.createTextNode("● START"));
+    transport.querySelector(".tp-rew")?.replaceChildren(document.createTextNode("◀◀ REW"));
+    transport.querySelector(".tp-ff")?.replaceChildren(document.createTextNode("▶▶ FF"));
+    transport.querySelector(".cue-btn")?.replaceChildren(document.createTextNode("CUE"));
+    transport.querySelector(".set-btn")?.replaceChildren(document.createTextNode("SET"));
+    transport.querySelector(".sync-btn")?.replaceChildren(document.createTextNode("SYNC"));
+    transport.querySelector(".play-btn")?.replaceChildren(document.createTextNode("▶ PLAY"));
+
+    side.append(meta, deckBody, transport);
+    side.addEventListener("pointerdown", () => setActiveDeck(id), { passive: true });
+    side.addEventListener("focusin", () => setActiveDeck(id));
+    sides[id] = side;
+  }
+
+  const transportCenter = transportRow.querySelector(".transport-center");
+  const crossfadeCol = mixer.querySelector(".crossfade-col");
+  if (transportCenter && crossfadeCol) {
+    const crossfader = crossfadeCol.querySelector(".crossfader-wrap");
+    crossfadeCol.insertBefore(transportCenter, crossfader || null);
+  }
+
+  const centerFaders = document.createElement("div");
+  centerFaders.className = "center-faders";
+  const vfaderA = mixer.querySelector('.channel[data-deck="A"] .vfader');
+  const vfaderB = mixer.querySelector('.channel[data-deck="B"] .vfader');
+  if (vfaderA && vfaderB && crossfadeCol) {
+    centerFaders.append(vfaderA, vfaderB);
+    const crossfader = crossfadeCol.querySelector(".crossfader-wrap");
+    crossfadeCol.insertBefore(centerFaders, crossfader || null);
+  }
+
+  // Centre dB meters (reference layout): lift each channel's VU out of its
+  // fader row and pair them between the EQ columns, flanked by dB scales.
+  // The scale labels match the meter's actual dB mapping (see frameLoop).
+  const meterBridge = document.createElement("div");
+  meterBridge.className = "meter-bridge";
+  meterBridge.setAttribute("aria-hidden", "true");
+  const mkScale = (side) => {
+    const sc = document.createElement("div");
+    sc.className = "meter-scale " + side;
+    ["0", "-6", "-12", "-18", "-24", "-30"].forEach((t) => sc.append(label(t)));
+    return sc;
+  };
+  const vuA = document.getElementById("vu-A");
+  const vuB = document.getElementById("vu-B");
+  if (vuA && vuB && crossfadeCol) {
+    meterBridge.append(mkScale("l"), vuA, vuB, mkScale("r"));
+    crossfadeCol.insertBefore(meterBridge, transportCenter && transportCenter.parentElement === crossfadeCol ? transportCenter : crossfadeCol.firstChild);
+  }
+
+  // Truthful ruler chrome: the canvases draw real beat/bar grids, so the
+  // stage can carry the "Bars" caption and one shared centre playhead.
+  const barsCaption = document.createElement("span");
+  barsCaption.className = "wave-caption";
+  barsCaption.textContent = "Bars";
+  barsCaption.title = "Bar ruler — numbers appear when the beat grid is anchored (presets & PAD renders)";
+  const stagePlayhead = document.createElement("div");
+  stagePlayhead.className = "stage-playhead";
+  stagePlayhead.setAttribute("aria-hidden", "true");
+  waveStage.append(barsCaption, stagePlayhead);
+
+  waveConsole.append(centerToolbar, waveStage, loopStrip);
+  center.append(waveConsole, mixer);
+  shell.append(sides.A, center, sides.B);
+  consoleEl.prepend(shell);
+  setActiveDeck("A");
+
+  decksTop.remove();
+  scratchZone.remove();
+  transportRow.remove();
+}
 
 // ---------- Configurable controls (persisted to localStorage) ----------
 const DEFAULT_KEYS = {
@@ -90,7 +448,20 @@ document.getElementById("start-btn").addEventListener("click", async () => {
     overlay.style.display = "none";
   } catch (err) {
     console.error(err);
-    alert("Couldn't start audio: " + err.message);
+    // No alert(): render the failure into the start card so the user gets a
+    // styled, actionable message (and a Retry) instead of a browser popup.
+    const card = overlay.querySelector(".start-card");
+    let msg = card && card.querySelector(".start-error");
+    if (card && !msg) {
+      msg = document.createElement("p");
+      msg.className = "start-error";
+      card.insertBefore(msg, document.getElementById("start-btn"));
+    }
+    if (msg) {
+      msg.textContent = "Couldn't start audio — " +
+        (err && err.message ? err.message : "this browser may not support AudioWorklet.");
+    }
+    document.getElementById("start-btn").textContent = "Retry";
   }
 });
 
@@ -120,7 +491,24 @@ function setup() {
     analysers[id] = { node: an, buf: new Float32Array(an.fftSize), el: document.getElementById(`vu-${id}`) };
 
     // Scratch pad (mouse / touch press-drag)
-    attachScratchPad(document.getElementById(`pad-${id}`), deck, { sensitivity: 0.0024 });
+    const padEl = document.getElementById(`pad-${id}`);
+    attachScratchPad(padEl, deck, { sensitivity: 0.0024 });
+
+    // Keyboard access to the platter: focus it and nudge with ← →.
+    padEl.tabIndex = 0;
+    padEl.setAttribute("role", "slider");
+    padEl.setAttribute("aria-label", `Deck ${id} platter — drag to scratch, arrow keys nudge`);
+    padEl.setAttribute("aria-valuemin", "0");
+    padEl.setAttribute("aria-valuemax", "1");
+    padEl.addEventListener("keydown", (e) => {
+      const dir = e.code === "ArrowRight" ? 1 : e.code === "ArrowLeft" ? -1 : 0;
+      if (!dir) return;
+      e.preventDefault();
+      e.stopPropagation();
+      deck.touchStart();
+      deck.jog(dir * (e.shiftKey ? 6 : 2.5));
+      setTimeout(() => deck.touchEnd(), 70);
+    });
 
     // Interactive waveform: scrub / seek / hot cues
     attachWaveformScrub(canvas, deck, wave, {
@@ -139,6 +527,7 @@ function setup() {
   setupLoading();
   setupTransport();
   setupMixer();
+  setupTopbarMaster();
   setupDialogs();
   setupWaveTools();
   setupHotcues();
@@ -151,34 +540,112 @@ function setup() {
   setupNav();
   setupGlobalRecorder();
   setupPresets();
+  setupDemoChips();
   attachTrackpadGestures(engine, ui, config);
+  maybeStartTour();
 
   // Debug handle (handy in the console for testing/automation).
   window.sxratch = { engine, ui, analysers, hot, config, coach, get sampler() { return sampler; }, get midi() { return midi; } };
 
+  // Layout class manager. Portrait phones get a REAL portrait layout
+  // (body.portrait-mode) — the old approach of CSS-rotating the whole page
+  // 90° is gone: native widgets, scrolling and viewport math all behave now.
+  function updateLayoutClass() {
+    const isStudio = document.body.classList.contains("view-studio");
+    const isLandscape = window.innerWidth > window.innerHeight;
+    const portrait = !isLandscape && !isStudio;
+
+    const wasPortrait = document.body.classList.contains("portrait-mode");
+    const wasLandscapeCls = document.body.classList.contains("use-landscape-layout");
+
+    document.body.classList.toggle("use-landscape-layout", !portrait && !isStudio);
+    document.body.classList.toggle("portrait-mode", portrait);
+    document.body.classList.remove("ui-rotated"); // retired transform hack
+
+    if (wasPortrait !== portrait || wasLandscapeCls !== (!portrait && !isStudio)) {
+      requestAnimationFrame(() => {
+        sizePlatters();
+        ui.waves.A?.resize();
+        ui.waves.B?.resize();
+      });
+    }
+  }
+
   // Keep the platters as perfect circles that fit the (dynamic) scratch zone.
-  sizePlatters();
-  const ro = new ResizeObserver(() => sizePlatters());
-  ro.observe(document.getElementById("scratch-zone"));
+  // The observer also re-derives the layout class: element resize fires even in
+  // environments where window `resize` doesn't (viewport emulation, webviews).
+  updateLayoutClass();
+  const ro = new ResizeObserver(() => { updateLayoutClass(); sizePlatters(); });
+  ro.observe(document.getElementById("console")); // scratch-zone is display:contents in the landscape grid
+
+  // Sampler / Beat FX dock toggle
+  document.getElementById("drawer-btn")?.addEventListener("click", () => {
+    const on = document.body.classList.toggle("drawer-open");
+    document.getElementById("drawer-btn").classList.toggle("active", on);
+    requestAnimationFrame(() => { sizePlatters(); ui.waves.A?.resize(); ui.waves.B?.resize(); });
+  });
 
   window.addEventListener("resize", () => {
+    updateLayoutClass();
     ui.waves.A?.resize();
     ui.waves.B?.resize();
     sizePlatters();
+  });
+  document.addEventListener("fullscreenchange", () => {
+    requestAnimationFrame(() => {
+      updateLayoutClass();
+      ui.waves.A?.resize();
+      ui.waves.B?.resize();
+      sizePlatters();
+    });
+  });
+  window.visualViewport?.addEventListener("resize", () => {
+    requestAnimationFrame(() => {
+      updateLayoutClass();
+      ui.waves.A?.resize();
+      ui.waves.B?.resize();
+      sizePlatters();
+    });
+  });
+  window.addEventListener("orientationchange", () => {
+    setTimeout(updateLayoutClass, 100);
   });
 
   requestAnimationFrame(frameLoop);
 }
 
-/** Size each platter to the largest circle that fits its jog pad. */
+/** Size each platter from stable viewport/shell geometry.
+ * Avoid measuring the platter's own content box: that created a feedback loop
+ * where restoring from a smaller browser/fullscreen state could keep shrinking
+ * the jog wheels on each resize.
+ */
 function sizePlatters() {
+  const shell = document.querySelector(".controller-shell");
+  const topbar = document.getElementById("topbar");
+  const shellRect = shell?.getBoundingClientRect();
+  const topbarH = topbar?.getBoundingClientRect().height || 60;
+  const portrait = document.body.classList.contains("portrait-mode");
+  const minSize = portrait ? 96 : window.innerHeight < 560 ? 118 : 190;
+  const maxSize = window.innerWidth >= 1500 ? 520 : 430;
+  // Portrait: two platters share the width (shell is a 2-column grid);
+  // landscape: three columns as before.
+  const byViewport = portrait
+    ? Math.min(window.innerWidth * 0.40, Math.max(96, (window.innerHeight - topbarH) * 0.26))
+    : Math.min(
+        window.innerWidth * 0.245,
+        Math.max(120, (window.innerHeight - topbarH) * 0.54)
+      );
+  const byShell = shellRect
+    ? Math.max(96, (shellRect.width / (portrait ? 2 : 3)) * (portrait ? 0.74 : 0.78))
+    : byViewport;
+  const size = Math.round(Math.max(minSize, Math.min(byViewport, byShell, maxSize)));
+  document.documentElement.style.setProperty("--deck-platter-size", `${size}px`);
   for (const id of ["A", "B"]) {
     const pad = document.getElementById(`pad-${id}`);
     const plat = pad && pad.querySelector(".platter");
     if (!plat) continue;
-    const size = Math.max(90, Math.min(pad.clientWidth * 0.86, pad.clientHeight * 0.82, 260));
-    plat.style.width = `${size}px`;
-    plat.style.height = `${size}px`;
+    plat.style.width = "";
+    plat.style.height = "";
   }
 }
 
@@ -251,35 +718,129 @@ async function loadFile(deck, file) {
 
 async function loadURL(deck, url) {
   ui.toast("Fetching…");
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000); // don't hang forever
   try {
-    const res = await fetch(url, { mode: "cors" });
+    const res = await fetch(url, { mode: "cors", signal: ctrl.signal });
     if (!res.ok) throw new Error(res.status + "");
-    const buf = await res.arrayBuffer();
+    // Stream with progress when the host reports a length — big files no
+    // longer look frozen behind a single "Fetching…" toast.
+    const total = Number(res.headers.get("content-length")) || 0;
+    let buf;
+    if (res.body && total > 0) {
+      const reader = res.body.getReader();
+      const chunks = [];
+      let got = 0, lastPct = -1;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        got += value.length;
+        const pct = Math.min(99, Math.floor((got / total) * 100));
+        if (pct >= lastPct + 10) { lastPct = pct; ui.toast(`Fetching… ${pct}%`); }
+      }
+      const all = new Uint8Array(got);
+      let o = 0;
+      for (const c of chunks) { all.set(c, o); o += c.length; }
+      buf = all.buffer;
+    } else {
+      buf = await res.arrayBuffer();
+    }
     const audio = await engine.decode(buf);
     const name = decodeURIComponent(url.split("/").pop().split("?")[0]) || "track";
     applyLoaded(deck, audio, name.replace(/\.[^.]+$/, ""));
   } catch (err) {
     console.error(err);
-    ui.toast("Load failed — check the URL allows cross-origin (CORS)");
+    ui.toast(err && err.name === "AbortError"
+      ? "Load timed out — the host is too slow or unreachable"
+      : "Load failed — check the URL allows cross-origin (CORS)");
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-function applyLoaded(deck, audio, name) {
+/**
+ * Load a decoded buffer onto a deck and refresh every readout.
+ * opts.bpm   — known tempo (presets, PAD renders, doubles): shown immediately.
+ * opts.detect — set false to skip BPM detection (FX one-shots, doubles).
+ */
+function applyLoaded(deck, audio, name, opts = {}) {
   engine.decks[deck].loadBuffer(audio, name);
   ui.waves[deck].setBuffer(audio);
   ui.setTitle(deck, name);
   ui.updatePosition(deck, 0);
   ui.setPlaying(deck, false);
-  hot[deck] = [null, null, null, null]; // fresh track, clear hot cues
+  hot[deck] = Array(HOT_CUE_COUNT).fill(null); // fresh track, clear hot cues
   renderHot(deck);
+  drawArtThumb(deck);
+
+  if (demoChips[deck]) demoChips[deck].hidden = true;
+
+  const token = ++bpmDetectToken[deck]; // any older in-flight detection is stale
+  if (opts.bpm) {
+    engine.decks[deck].setBpm(opts.bpm);
+    bpmKnown[deck] = true;
+    // Known tempo ⇒ anchored beat grid (PAD renders / presets start on the one).
+    ui.waves[deck].setBeatGrid({ bpm: opts.bpm, offset: 0, anchored: true });
+  } else {
+    bpmKnown[deck] = false;
+    ui.waves[deck].setBeatGrid(null);
+    if (opts.detect !== false) {
+      // Detect off the load path; only apply if this deck still holds the track.
+      setTimeout(() => {
+        if (bpmDetectToken[deck] !== token || engine.decks[deck].buffer !== audio) return;
+        const found = detectBPM(audio);
+        if (found && bpmDetectToken[deck] === token && engine.decks[deck].buffer === audio) {
+          engine.decks[deck].setBpm(found);
+          bpmKnown[deck] = true;
+          ui.setBpm(deck, true);
+          // Detected tempo ⇒ beat ticks only (downbeat unknown — no bar numbers).
+          ui.waves[deck].setBeatGrid({ bpm: found, offset: 0, anchored: false });
+        }
+      }, 40);
+    }
+  }
+  ui.setBpm(deck, bpmKnown[deck]);
   ui.toast(`Deck ${deck}: ${name}`);
+}
+
+/** Render a real mini-waveform of the loaded track into the album-art tile. */
+function drawArtThumb(deck) {
+  const art = arts[deck];
+  const wave = ui.waves[deck];
+  if (!art || !wave || !wave.peaks || !wave.peakCount) return;
+  let cv = art.querySelector("canvas");
+  if (!cv) { cv = document.createElement("canvas"); art.appendChild(cv); }
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(24, art.clientWidth || 64);
+  const h = Math.max(24, art.clientHeight || 64);
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = DECK_COLORS[deck];
+  ctx.globalAlpha = 0.85;
+  const n = wave.peakCount, mid = h / 2;
+  for (let x = 0; x < w; x++) {
+    const p = Math.min(n - 1, Math.floor((x / w) * n));
+    const min = wave.peaks[p * 2], max = wave.peaks[p * 2 + 1];
+    ctx.beginPath();
+    ctx.moveTo(x + 0.5, mid - max * (mid - 1));
+    ctx.lineTo(x + 0.5, mid - min * (mid - 1) + 0.5);
+    ctx.stroke();
+  }
+  art.classList.add("has-art");
 }
 
 function instantDoubles(from) {
   const src = engine.decks[from];
   if (!src.buffer) { ui.toast(`Deck ${from} is empty`); return; }
   const to = from === "A" ? "B" : "A";
-  applyLoaded(to, src.buffer, src.name);
+  applyLoaded(to, src.buffer, src.name, {
+    bpm: bpmKnown[from] ? src.bpm : null,
+    detect: false, // same audio — copying the source deck's knowledge is truthful
+  });
   engine.decks[to].seek(src.position);
   if (src.playing) engine.decks[to].play();
   ui.toast(`Doubled ${from} → ${to}`);
@@ -289,7 +850,9 @@ function instantDoubles(from) {
 function setupGlobalRecorder() {
   const recBtn = document.getElementById("record-btn");
   if (!recBtn) return;
-  
+  // The button is [red dot][label] — only the label text changes.
+  const recLabel = () => recBtn.querySelector(".rec-label") || recBtn;
+
   let rec = null;
   let chunks = [];
   let isRecording = false;
@@ -330,20 +893,21 @@ function setupGlobalRecorder() {
         a.click();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
         ui.toast("Mix saved!");
-        recBtn.textContent = "🔴 REC";
+        recLabel().textContent = "REC";
       };
 
       rec.start();
       isRecording = true;
       startTime = Date.now();
       recBtn.classList.add("recording");
+      document.body.classList.add("recording"); // subtle red frame on the whole rig
       ui.toast("Recording started...");
 
       timerInterval = setInterval(() => {
         const elapsed = Math.floor((Date.now() - startTime) / 1000);
         const m = Math.floor(elapsed / 60);
         const s = elapsed % 60;
-        recBtn.textContent = `🔴 REC [${m}:${s.toString().padStart(2, "0")}]`;
+        recLabel().textContent = `REC ${m}:${s.toString().padStart(2, "0")}`;
       }, 1000);
 
     } else {
@@ -353,6 +917,7 @@ function setupGlobalRecorder() {
       }
       isRecording = false;
       recBtn.classList.remove("recording");
+      document.body.classList.remove("recording");
     }
   });
 }
@@ -360,8 +925,8 @@ function setupGlobalRecorder() {
 // ---------- Presets Loader ----------
 function setupPresets() {
   document.querySelectorAll(".preset-select").forEach((sel) => {
-    const deckId = sel.dataset.deck;
     sel.addEventListener("change", async () => {
+      const deckId = sel.dataset.deck || "A";
       const val = sel.value;
       if (!val) return;
       sel.disabled = true;
@@ -369,6 +934,7 @@ function setupPresets() {
       try {
         let buffer = null;
         let label = "";
+        let opts = { detect: false }; // synth FX one-shots have no meaningful BPM
 
         if (val === "scratch") {
           label = "Scratch Tool (Synth)";
@@ -379,11 +945,11 @@ function setupPresets() {
         } else if (val === "beat") {
           label = "Practice Beat (100 BPM)";
           buffer = makeBeat(engine.ctx, 100, 24);
-          engine.decks[deckId].bpm = 100; // set deck BPM
+          opts = { bpm: 100 }; // known tempo — show it immediately
         }
 
         if (buffer) {
-          applyLoaded(deckId, buffer, label);
+          applyLoaded(deckId, buffer, label, opts);
         }
       } catch (err) {
         console.error(err);
@@ -396,6 +962,70 @@ function setupPresets() {
   });
 }
 
+// ---------- Demo chips + first-run tour ----------
+function setupDemoChips() {
+  const load = {
+    A: () => applyLoaded("A", makeBeat(engine.ctx, 100, 24), "Demo Beat (100 BPM)", { bpm: 100 }),
+    B: () => applyLoaded("B", generateScratchPreset(engine.ctx), "Scratch Tool (Synth)", { detect: false }),
+  };
+  for (const id of ["A", "B"]) {
+    demoChips[id]?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      load[id]();
+    });
+  }
+}
+
+/**
+ * First-run coach marks: three short steps from silence to a mix. Reuses the
+ * practice-mode .coach-target highlight. Runs once (localStorage flag);
+ * "Skip" and Esc both end it.
+ */
+function maybeStartTour() {
+  try { if (localStorage.getItem("sxratch.toured")) return; } catch {}
+  const coarse = window.matchMedia("(pointer: coarse)").matches;
+  const steps = [
+    { sel: ".wave-stage", text: "Load a track: tap a LOAD DEMO chip, drop an audio file anywhere on a deck, or use LOAD / LINK." },
+    { sel: "#pad-A", text: coarse ? "This is the platter — press and drag left/right to scratch." : "This is the platter — press-drag to scratch, or hold right Ctrl and move one finger on the trackpad." },
+    { sel: "#crossfader", text: "The crossfader blends Deck A and B. It snaps to the centre notch — double-click any control to reset it." },
+  ];
+  let i = -1, target = null;
+  const tip = document.createElement("div");
+  tip.id = "tour-tip";
+  tip.setAttribute("role", "dialog");
+  tip.setAttribute("aria-label", "Quick tour");
+  tip.innerHTML = `<p class="tour-text"></p>
+    <div class="tour-actions">
+      <span class="tour-count"></span>
+      <button type="button" class="btn tour-skip">Skip</button>
+      <button type="button" class="btn primary tour-next">Next</button>
+    </div>`;
+  const end = () => {
+    try { localStorage.setItem("sxratch.toured", "1"); } catch {}
+    target?.classList.remove("coach-target");
+    tip.remove();
+    window.removeEventListener("keydown", onKey, true);
+  };
+  const show = () => {
+    i++;
+    target?.classList.remove("coach-target");
+    if (i >= steps.length) { end(); return; }
+    target = document.querySelector(steps[i].sel);
+    if (!target) { show(); return; }
+    target.classList.add("coach-target");
+    tip.querySelector(".tour-text").textContent = steps[i].text;
+    tip.querySelector(".tour-count").textContent = `${i + 1} / ${steps.length}`;
+    tip.querySelector(".tour-next").textContent = i === steps.length - 1 ? "Done" : "Next";
+  };
+  const onKey = (e) => { if (e.code === "Escape") { end(); e.stopPropagation(); } };
+  tip.querySelector(".tour-skip").addEventListener("click", end);
+  tip.querySelector(".tour-next").addEventListener("click", show);
+  window.addEventListener("keydown", onKey, true);
+  document.body.appendChild(tip);
+  show();
+  tip.querySelector(".tour-next").focus();
+}
+
 // ---------- Sampler ----------
 function setupSampler() {
   sampler = new Sampler(engine, 8);
@@ -405,9 +1035,16 @@ function setupSampler() {
     const pad = document.createElement("div");
     pad.className = "samp-pad";
     pad.dataset.slot = String(i);
-    pad.innerHTML = `<input type="file" accept="audio/*" hidden /><button class="samp-stop" title="Stop">■</button><span class="samp-key"></span><span class="samp-name">empty</span>`;
+    // Keyboard/AT support for what is visually a pad surface.
+    pad.setAttribute("role", "button");
+    pad.tabIndex = 0;
+    pad.innerHTML = `<input type="file" accept="audio/*" hidden /><button class="samp-stop" title="Stop" tabindex="-1">■</button><span class="samp-key"></span><span class="samp-name">empty</span>`;
     const input = pad.querySelector("input");
     pad.querySelector(".samp-stop").addEventListener("click", (e) => { e.stopPropagation(); sampler.stop(i); });
+    pad.addEventListener("keydown", (e) => {
+      if (e.code === "Enter" || e.code === "Space") { e.preventDefault(); e.stopPropagation(); pad.click(); }
+      else if (e.code === "Delete" || e.code === "Backspace") { e.preventDefault(); sampler.stop(i); }
+    });
     pad.addEventListener("click", () => {
       if (mappingSource) {
         mapRegionToPad(mappingSource.deckId, mappingSource.start, mappingSource.end, i);
@@ -453,6 +1090,9 @@ function renderPad(i) {
   pad.classList.toggle("loaded", !!s);
   pad.querySelector(".samp-name").textContent = s ? s.name : "empty";
   pad.querySelector(".samp-key").textContent = fmtKey(config.keys["samp" + (i + 1)]);
+  pad.setAttribute("aria-label", s
+    ? `Sampler pad ${i + 1}: ${s.name} — Enter fires, Delete stops`
+    : `Sampler pad ${i + 1}: empty — Enter loads a sound`);
 }
 function renderPads() { for (let i = 0; i < 8; i++) renderPad(i); }
 
@@ -585,24 +1225,72 @@ function setupMixer() {
         { at: 8, label: "+8", major: true }, { at: 4 }, { at: 0, major: true },
         { at: -4 }, { at: -8, label: "−8", major: true },
       ],
-      onChange: (v) => { engine.decks[id].setTempo(v); read.textContent = fmt(v); coach?.notify("tempo"); },
+      onChange: (v) => {
+        engine.decks[id].setTempo(v);
+        read.textContent = fmt(v);
+        ui.setBpm(id, bpmKnown[id]); // effective BPM follows the tempo fader
+        coach?.notify("tempo");
+      },
     });
     read.textContent = fmt(0);
   }
 
-  // Crossfader (horizontal, neutral = centre)
+  // Crossfader (horizontal, neutral = centre, magnetic centre notch)
   const cf = attachFader(document.getElementById("crossfader"), {
     min: 0, max: 1, value: 0.5, default: 0.5,
     ticks: [0, 0.25, 0.5, 0.75, 1].map((at) => ({ at, major: at === 0.5 })),
+    detent: { at: 0.5, radius: 0.02, onSnap: () => haptic(6) },
     onChange: (v) => engine.setCrossfade(v),
   });
   ui.crossfadeSet = cf.set; // let keyboard / gestures move the on-screen fader
   midiTargets.crossfade = (v) => cf.set(v); // and MIDI
 
-  // Master (kept as a compact native slider in the header)
+  // Master (hidden native slider keeps the value; the real control is the
+  // topbar knob built in setupTopbarMaster)
   const master = document.getElementById("master-vol");
   engine.setMasterVolume(parseFloat(master.value));
   master.addEventListener("input", () => engine.setMasterVolume(parseFloat(master.value)));
+}
+
+/**
+ * Topbar master strip: a REAL knob (drag ↕ / wheel / double-click to 90%) and
+ * a live output meter with peak-hold — replacing the painted decorations.
+ */
+function setupTopbarMaster() {
+  const wrap = document.querySelector("#topbar .master");
+  const input = document.getElementById("master-vol");
+  if (!wrap || !input || wrap.querySelector(".master-knob")) return;
+
+  const vu = document.createElement("div");
+  vu.className = "master-vu";
+  vu.setAttribute("aria-hidden", "true");
+  vu.innerHTML = "<i></i>";
+
+  const knob = document.createElement("div");
+  knob.className = "master-knob";
+  knob.innerHTML = '<span class="knob-dot"></span>';
+  knob.title = "Master volume — drag ↕ · wheel · double-click = 90%";
+  knob.setAttribute("role", "slider");
+  knob.setAttribute("aria-label", "Master volume");
+  knob.setAttribute("aria-valuemin", "0");
+  knob.setAttribute("aria-valuemax", "1");
+
+  wrap.append(vu, knob);
+  attachKnob(knob, {
+    value: parseFloat(input.value),
+    default: 0.9,
+    onChange: (v) => {
+      engine.setMasterVolume(v);
+      input.value = String(v); // keep the hidden slider (and anything reading it) in sync
+    },
+  });
+
+  // Live output level, tapped post-limiter (what actually leaves the app).
+  masterAnalyser = engine.ctx.createAnalyser();
+  masterAnalyser.fftSize = 256;
+  masterBuf = new Float32Array(masterAnalyser.fftSize);
+  engine.limiter.connect(masterAnalyser);
+  masterVuEl = vu;
 }
 
 /**
@@ -961,6 +1649,12 @@ function midiJog(deck, value01) {
 
 function handleMidiNote(note, on) {
   if (!on) return;
+  // In the PAD view a MIDI keyboard plays the shared keyboard directly:
+  // chords build, bass/lead write at the cursor, drums map across the keys.
+  if (document.body.classList.contains("view-studio")) {
+    SongBuilder.midiNote?.(note);
+    return;
+  }
   // Notes 36..43 -> sampler pads 1..8 (the common finger-drum / pad range).
   if (note >= 36 && note <= 43) triggerSample(note - 36);
 }
@@ -968,8 +1662,7 @@ function handleMidiNote(note, on) {
 // ---------- Practice mode ----------
 function loadPracticeBeat(deck, bpm) {
   const buf = makeBeat(engine.ctx, bpm, 24);
-  applyLoaded(deck, buf, `practice • ${bpm} BPM`);
-  engine.decks[deck].bpm = bpm; // so auto-loop is beat-accurate
+  applyLoaded(deck, buf, `practice • ${bpm} BPM`, { bpm }); // known tempo → live readout + beat-accurate auto-loop
   return buf;
 }
 
@@ -1128,13 +1821,28 @@ function showView(view) {
       SongBuilder.init({
         getCtx: () => engine.ctx,
         toast: (m) => ui.toast(m),
-        onUse: (buf, label, deck) => { applyLoaded(deck, buf, label); showView("decks"); },
+        onUse: (buf, label, deck, bpm, sectionCues) => {
+          // PAD knows its own tempo — carry it onto the deck so the BPM
+          // readout, SYNC and auto-loops are correct for your composition.
+          applyLoaded(deck, buf, label, { bpm: bpm || null, detect: !bpm });
+          // Drop a hot cue at each section boundary so the arrangement is
+          // instantly navigable on the deck (slots 1..8).
+          if (Array.isArray(sectionCues) && sectionCues.length) {
+            sectionCues.slice(0, HOT_CUE_COUNT).forEach((pos, i) => {
+              if (pos > 0 && pos < 1) hot[deck][i] = pos;
+              else if (pos === 0) hot[deck][i] = 0;
+            });
+            renderHot(deck);
+          }
+          showView("decks");
+        },
         getSampler: () => sampler,
       });
     }
   } else {
     SongBuilder.stopPreview();
   }
+  window.dispatchEvent(new Event("resize"));
 }
 function setupNav() {
   document.getElementById("nav-decks").addEventListener("click", () => showView("decks"));
@@ -1144,27 +1852,51 @@ function setupNav() {
 // ---------- Dialogs ----------
 function setupDialogs() {
   const help = document.getElementById("help-dialog");
-  document.getElementById("help-btn").addEventListener("click", () => (help.hidden = false));
+  const helpKeys = document.getElementById("help-keys");
+  // The bindings section is generated from the live config so it can never
+  // drift from what the keys actually do (unlike hand-written help text).
+  const fillHelpKeys = () => {
+    if (!helpKeys) return;
+    let html = '<div class="set-group-title">Your key bindings</div><div class="help-keys-grid">';
+    for (const [, rows] of KEY_ACTION_GROUPS) {
+      for (const [name, label] of rows) {
+        html += `<span>${label}</span><kbd>${fmtKey(config.keys[name])}</kbd>`;
+      }
+    }
+    html += "</div>";
+    helpKeys.innerHTML = html;
+  };
+  const openHelp = () => {
+    fillHelpKeys();
+    help.hidden = false;
+    document.getElementById("help-close")?.focus();
+  };
+  document.getElementById("help-btn").addEventListener("click", openHelp);
   document.getElementById("help-close").addEventListener("click", () => (help.hidden = true));
   [help, document.getElementById("url-dialog")].forEach((d) =>
     d.addEventListener("click", (e) => { if (e.target === d) d.hidden = true; })
   );
+
+  // "?" opens the cheat sheet; Esc closes whichever dialog is open.
+  window.addEventListener("keydown", (e) => {
+    if (e.target.closest && e.target.closest("input, textarea, select")) return;
+    if (e.key === "?" && help.hidden) { openHelp(); e.preventDefault(); return; }
+    if (e.code === "Escape") {
+      for (const id of ["help-dialog", "url-dialog", "settings-dialog", "practice-dialog", "projects-dialog"]) {
+        const d = document.getElementById(id);
+        if (d && !d.hidden) { d.hidden = true; e.preventDefault(); return; }
+      }
+    }
+  });
 }
 
-// ---------- Waveform zoom + stacked beat-match view ----------
+// ---------- Waveform zoom ----------
 function setupWaveTools() {
   document.querySelectorAll(".zoom-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const wave = ui.waves[btn.dataset.deck];
       wave.zoomBy(btn.dataset.dir === "in" ? 1.5 : 1 / 1.5);
     });
-  });
-  const stackBtn = document.getElementById("stack-btn");
-  stackBtn.addEventListener("click", () => {
-    const on = document.body.classList.toggle("stack-view");
-    stackBtn.classList.toggle("active", on);
-    ui.waves.A?.resize();
-    ui.waves.B?.resize();
   });
 }
 
@@ -1173,12 +1905,12 @@ function setupHotcues() {
   for (const id of ["A", "B"]) {
     const wrap = document.querySelector(`.hotcues[data-deck="${id}"]`);
     wrap.innerHTML = "";
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < HOT_CUE_COUNT; i++) {
       const chip = document.createElement("button");
       chip.className = "hotcue-chip";
       chip.dataset.deck = id;
       chip.dataset.slot = String(i);
-      chip.textContent = id === "A" ? String(i + 1) : String(i + 6);
+      chip.textContent = String(i + 1);
       chip.title = "Click: set / jump · Shift-click: clear";
       chip.addEventListener("click", (e) => {
         if (e.shiftKey) clearCue(id, i);
@@ -1202,7 +1934,7 @@ function setCueSlot(id, slot, pos) {
   hot[id][slot] = pos;
   renderHot(id);
   haptic(12);
-  ui.toast(`Deck ${id}: cue ${id === "A" ? slot + 1 : slot + 6} set`);
+  ui.toast(`Deck ${id}: cue ${slot + 1} set`);
 }
 
 function clearCue(id, slot) {
@@ -1225,20 +1957,41 @@ function renderHot(id) {
 }
 
 // ---------- Animation loop: VU meters + platter rotation ----------
+/** RMS → meter height %, linear in dB from −30 dBFS (bottom) to 0 dBFS (top),
+ *  matching the printed scale beside the centre meters. */
+function vuPercent(rms) {
+  if (!(rms > 0)) return 0;
+  const db = 20 * Math.log10(rms);
+  return Math.max(0, Math.min(100, ((db + 30) / 30) * 100));
+}
+
 function frameLoop() {
   const now = performance.now();
   if (coach) coach.update();
   if (bothBtn) bothBtn.classList.toggle("playing", engine.decks.A.playing && engine.decks.B.playing);
 
+  // Live master output meter (with a slowly-decaying peak-hold cap).
+  if (masterAnalyser && masterVuEl) {
+    masterAnalyser.getFloatTimeDomainData(masterBuf);
+    let sum = 0;
+    for (let i = 0; i < masterBuf.length; i++) sum += masterBuf[i] * masterBuf[i];
+    const lvl = vuPercent(Math.sqrt(sum / masterBuf.length));
+    masterPeak = Math.max(lvl, masterPeak - 0.7);
+    masterVuEl.style.setProperty("--level", lvl.toFixed(1) + "%");
+    masterVuEl.style.setProperty("--peak", Math.min(99, masterPeak).toFixed(1) + "%");
+  }
+
   for (const id of ["A", "B"]) {
-    // VU
+    // VU (dB-calibrated so the printed scale next to it is honest)
     const a = analysers[id];
     if (a) {
       a.node.getFloatTimeDomainData(a.buf);
       let sum = 0;
       for (let i = 0; i < a.buf.length; i++) sum += a.buf[i] * a.buf[i];
-      const rms = Math.sqrt(sum / a.buf.length);
-      a.el.style.setProperty("--level", Math.min(100, rms * 180) + "%");
+      const lvl = vuPercent(Math.sqrt(sum / a.buf.length));
+      a.peak = Math.max(lvl, (a.peak || 0) - 0.8);
+      a.el.style.setProperty("--level", lvl + "%");
+      a.el.style.setProperty("--peak", Math.min(99, a.peak).toFixed(1) + "%");
     }
 
     // Platter rotation — extrapolate the playhead since the last position post
@@ -1270,6 +2023,7 @@ function frameLoop() {
 function drawDeckVisualizer(id) {
   const canvas = document.getElementById(`viz-${id}`);
   if (!canvas || !engine.ready) return;
+  if (!canvas.clientWidth) return; // hidden (e.g. inside the controller shell) — don't burn frames
   const d = engine.decks[id];
   if (!d || !d.analyser) return;
 
@@ -1371,6 +2125,7 @@ function extractAudioRegion(ctx, sourceBuffer, startFraction, endFraction) {
     const destData = newBuffer.getChannelData(c);
     destData.set(srcData.subarray(start, end));
   }
-  
+
   return newBuffer;
 }
+// (Phase 1 polish: live BPM + master metering + A|B toolbar switch — see DESIGN-REVIEW.md)

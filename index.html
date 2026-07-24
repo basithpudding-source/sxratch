@@ -5,20 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#0a0b10" />
   <title>Sxratch/Pad — browser DJ</title>
+  <meta name="description" content="SXRATCH/PAD — a two-deck scratch &amp; mix DJ rig with a studio song builder, entirely in your browser. Works on desktop and mobile." />
+  <meta property="og:title" content="SXRATCH / PAD — browser DJ" />
+  <meta property="og:description" content="Two decks, a real scratch engine, and a song builder — no install, no samples to download. Scratch with your trackpad or thumbs." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://sxratchpad.com/" />
+  <meta property="og:image" content="https://sxratchpad.com/icon-512.png" />
+  <meta name="twitter:card" content="summary" />
+  <link rel="canonical" href="https://sxratchpad.com/" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-192.png" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Sxratch" />
   <link rel="stylesheet" href="css/styles.css" />
   <link rel="stylesheet" href="css/studio.css" />
+  <link rel="stylesheet" href="css/decks.css" />
 </head>
 <body>
   <!-- Audio needs a user gesture to start -->
   <div id="start-overlay">
     <div class="start-card">
-      <h1 class="brand">SXRATCH/PAD</h1>
+      <h1 class="brand"><span class="brand-s">SXRATCH</span><span class="brand-sep">/</span><span class="brand-p">PAD</span></h1>
       <p class="tagline">Two decks. One surface. Scratch with your trackpad or thumbs.</p>
       <button id="start-btn">Enter the booth</button>
       <p class="hint">Headphones recommended · works on desktop &amp; mobile</p>
@@ -35,7 +45,7 @@
       <label for="master-vol">MASTER</label>
       <input id="master-vol" type="range" min="0" max="1" step="0.01" value="0.9" />
     </div>
-    <button id="stack-btn" class="deck-only" title="Stacked beat-match waveform view">⤢</button>
+    <button id="drawer-btn" class="deck-only" title="Show / hide the sampler &amp; Beat FX drawer">🎛 Sampler/FX</button>
     <button id="practice-btn" class="deck-only" title="Practice mode — guided tutorials">🎓 Practice</button>
     <button id="record-btn" class="deck-only" title="Record mix">🔴 REC</button>
     <button id="settings-btn" class="deck-only" title="Customize keys &amp; gestures">⚙</button>
@@ -324,7 +334,11 @@
         <li><b>Hot cues:</b> <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd> Deck A, <kbd>6</kbd><kbd>7</kbd><kbd>8</kbd><kbd>9</kbd> Deck B
           (tap to set/recall, <kbd>Shift</kbd>+ to clear).</li>
         <li><b>Transport:</b> <kbd>Q</kbd>/<kbd>P</kbd> play, <kbd>W</kbd>/<kbd>O</kbd> jump cue, <kbd>E</kbd>/<kbd>I</kbd> set cue.
-          Each deck also has ⏮ to-start, ⏪/⏩ hold-to-rewind/forward, and <b>SYNC</b>.</li>
+          Each deck also has <b>● START</b> (to start), <b>◀◀ REW</b> / <b>▶▶ FF</b> (hold to scan), and <b>SYNC</b>.</li>
+        <li><b>Shared centre toolbar:</b> the <b>A | B</b> switch above the waveforms picks which deck
+          LINK · DBL · Presets · zoom and the LOOP row control. It follows the deck you last touched.</li>
+        <li><b>Sampler &amp; FX:</b> the <b>PADS + FX</b> button opens 8 sample pads and each deck's
+          BRAKE / SPIN + Beat FX. Map a loop to a pad with <b>TO PAD</b>.</li>
         <li><b>Both decks &amp; sync:</b> <kbd>Space</kbd> plays/pauses both at once; <kbd>T</kbd>/<kbd>Y</kbd> beat-match A→B / B→A
           (or the <b>SYNC</b> / <b>BOTH</b> buttons).</li>
         <li><b>Crossfade:</b> center fader, or ← / → keys (↓ re-centers).</li>
@@ -332,6 +346,7 @@
           <b>Double-click</b> any of them to snap back to neutral (tempo → 0%, crossfader → centre).</li>
         <li><b>Load:</b> drop a file onto a deck, click “Load file”, or paste a URL.</li>
       </ul>
+      <div id="help-keys"></div>
       <div class="dialog-actions">
         <button class="btn primary" id="help-close">Got it</button>
       </div>

@@ -1,25 +1,33 @@
 :root {
-  --bg: #0a0b10;
-  --panel: #14161f;
-  --panel-2: #1b1e2b;
-  --line: #262a3a;
+  /* Deep-navy base (à la pro DJ gear) — warmer/more premium than flat black. */
+  --bg: #0a0f1c;
+  --panel: #131b2c;
+  --panel-2: #1c2740;
+  --line: #2b3650;
   --text: #e8ecf6;
   --muted: #8b93ab;
-  --accent-a: #37e6c8;   /* deck A teal */
-  --accent-b: #ff5d8f;   /* deck B pink */
+  --chrome: #cdd6ea;     /* muted indicator/label colour for desaturated controls */
+  /* One brand system across start screen, nav, decks and PAD:
+     SXRATCH = deck teal, PAD = studio amber (matches the actual UIs + icon). */
+  --brand-a: #48ddd3;    /* SXRATCH wordmark — teal (same family as Deck A) */
+  --brand-b: #ffbd3d;    /* PAD wordmark — amber (same family as the PAD studio) */
+  --accent-a: #48ddd3;   /* deck A teal  — reserved for content + active states */
+  --accent-b: #ff6175;   /* deck B pink  — reserved for content + active states */
   --accent: #6c7bff;
   --danger: #ff2d55;
-  --studio: #ffce4a;     /* PAD / Song Builder warm accent */
+  --studio: #ffbd3d;     /* PAD / Song Builder warm accent */
   --studio-dim: #c79a26;
   --radius: 14px;
-  --shadow: 0 8px 30px rgba(0,0,0,0.45);
+  --shadow: 0 8px 30px rgba(0,0,0,0.5);
+  /* All numeric readouts (time, BPM, tempo %) share one tabular mono stack. */
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono", Consolas, monospace;
 }
 
 * { box-sizing: border-box; }
 html, body {
   margin: 0;
   height: 100%;
-  background: radial-gradient(1200px 600px at 50% -10%, #161a28 0%, var(--bg) 60%);
+  background: radial-gradient(1200px 600px at 50% -10%, #15233f 0%, var(--bg) 60%);
   color: var(--text);
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -31,15 +39,18 @@ html, body {
 #start-overlay {
   position: fixed; inset: 0; z-index: 50;
   display: grid; place-items: center;
-  background: radial-gradient(800px 400px at 50% 30%, #1a1f33, #06070b);
+  background: radial-gradient(800px 400px at 50% 30%, #16243f, #05080f);
 }
 .start-card { text-align: center; padding: 2rem; }
 .brand {
-  font-size: clamp(2.5rem, 9vw, 5rem);
+  /* 11 glyphs + 0.12em tracking ≈ 9.3em wide: 7vw keeps it inside every
+     viewport (9vw clipped "PAD" off the right edge at ~800px windows). */
+  font-size: clamp(1.8rem, 7vw, 5rem);
   font-weight: 900; letter-spacing: 0.12em; margin: 0;
-  background: linear-gradient(90deg, var(--accent-a), var(--accent-b));
-  -webkit-background-clip: text; background-clip: text; color: transparent;
 }
+.brand .brand-s { color: var(--brand-a); }   /* SXRATCH — teal */
+.brand .brand-p { color: var(--brand-b); }   /* PAD — amber */
+.brand .brand-sep { color: var(--muted); }
 .tagline { color: var(--muted); max-width: 30ch; margin: 0.6rem auto 1.6rem; }
 #start-btn {
   font-size: 1.1rem; font-weight: 700; color: #06070b;
@@ -49,13 +60,25 @@ html, body {
 }
 #start-btn:active { transform: scale(0.97); }
 .hint { color: var(--muted); font-size: 0.8rem; margin-top: 1.2rem; }
+/* Boot failure message rendered into the start card (replaces alert()). */
+.start-error {
+  max-width: 42ch;
+  margin: 0 auto 1rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
 
 /* ---------- Top bar ---------- */
 #topbar {
   display: flex; align-items: center; gap: 1rem;
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--line);
-  background: rgba(10,11,16,0.7); backdrop-filter: blur(8px);
+  background: rgba(10,15,28,0.7); backdrop-filter: blur(8px);
 }
 .logo {
   font-weight: 900; letter-spacing: 0.18em; font-size: 1rem;
@@ -76,8 +99,8 @@ html, body {
 #console {
   height: calc(100% - 47px);
   display: flex; flex-direction: column;
-  gap: 0.6rem; padding: 0.6rem;
-  max-width: 1200px; margin: 0 auto; width: 100%;
+  gap: 0.6rem; padding: 0.6rem 1.1rem;
+  width: 100%;                  /* fill the full desktop width — landscape controller */
   overflow-y: auto; overflow-x: hidden;
 }
 
@@ -98,7 +121,7 @@ html, body {
 .deck-meta[data-deck="A"] .badge { background: var(--accent-a); }
 .deck-meta[data-deck="B"] .badge { background: var(--accent-b); }
 .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 0.72rem; flex: none; }
+.time { color: var(--muted); font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 0.72rem; flex: none; }
 .waveform {
   width: 100%; height: 72px; display: block; margin: 0.4rem 0;
   cursor: ew-resize; touch-action: none; border-radius: 6px;
@@ -129,11 +152,34 @@ html, body {
 .btn:hover { background: #232838; }
 .btn:active { transform: scale(0.97); }
 .btn.primary { background: linear-gradient(90deg, var(--accent-a), var(--accent)); color: #06070b; border: none; }
+
+/* Secondary / utility controls -> demoted to outlined "pills" (à la pro DJ gear),
+   so the primary actions (CUE · play · SYNC · BOTH · → PAD · FX ON) read as primary
+   and the dense transport/loop rows scan faster. Active/held states (defined later,
+   higher specificity) still win and fill with colour. */
+.tp-start, .tp-rew, .tp-ff, .set-btn,
+.loop-btn:not(.loop-to-pad),
+.dbl-btn, .zoom-btn,
+.fx-brake, .fx-spin {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 999px;
+  font-weight: 700;
+}
+.tp-start:hover, .tp-rew:hover, .tp-ff:hover, .set-btn:hover,
+.loop-btn:not(.loop-to-pad):hover,
+.dbl-btn:hover, .zoom-btn:hover,
+.fx-brake:hover, .fx-spin:hover {
+  background: rgba(205,214,234,0.06);
+  color: var(--text);
+  border-color: var(--chrome);
+}
 .url-btn { flex: none; }
 
 /* ---------- Scratch zone (the split surface) ---------- */
 .scratch-zone {
-  flex: 1; min-height: 180px;
+  flex: 1; min-height: clamp(240px, 42vh, 400px);
   display: flex; align-items: stretch;
   background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--radius); position: relative; overflow: hidden;
@@ -155,35 +201,55 @@ html, body {
   flex: none;
 }
 .platter {
-  /* width === height keeps it a perfect circle regardless of available space */
-  width: min(36vw, 44vh, 240px);
-  height: min(36vw, 44vh, 240px);
+  /* width === height keeps it a perfect circle regardless of available space.
+     Scales up on wide desktops so the jog wheels dominate like a real controller. */
+  width: min(32vw, 52vh, 380px);
+  height: min(32vw, 52vh, 380px);
   position: relative; display: grid; place-items: center;
 }
 /* The disc actually spins; the label + reference tick stay still. */
 .platter-disc {
   position: absolute; inset: 0; border-radius: 50%;
   background:
-    repeating-radial-gradient(circle at 50% 50%, #0c0d13 0 2px, #15171f 2px 4px),
-    radial-gradient(circle at 50% 50%, #20242f, #0a0b10);
-  box-shadow: inset 0 0 0 2px #2b3040, inset 0 0 40px rgba(0,0,0,0.7), var(--shadow);
+    repeating-radial-gradient(circle at 50% 50%, rgba(255,255,255,0.018) 0 1px, transparent 1px 5px),
+    radial-gradient(circle at 50% 30%, #333c50 0%, #1b212e 48%, #0b0e16 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,0.06),     /* crisp rim highlight */
+    inset 0 4px 12px rgba(255,255,255,0.05),    /* top sheen */
+    inset 0 -16px 44px rgba(0,0,0,0.6),         /* lower depth */
+    inset 0 0 70px rgba(0,0,0,0.45),
+    0 16px 48px rgba(0,0,0,0.5);                /* drop shadow */
   will-change: transform;
 }
+/* metallic rim peeking out behind the disc */
+.platter::before {
+  content: ""; position: absolute; inset: -7px; border-radius: 50%;
+  background: linear-gradient(155deg, #2c3346 0%, #11151f 62%);
+  box-shadow: inset 0 1px 2px rgba(255,255,255,0.08), inset 0 -3px 5px rgba(0,0,0,0.55), 0 14px 40px rgba(0,0,0,0.5);
+  z-index: -1;
+}
+/* centre "label" disc, like a vinyl label */
 .platter-ring {
-  position: absolute; inset: 14%; border-radius: 50%;
-  border: 1px dashed rgba(255,255,255,0.08);
+  position: absolute; inset: 32%; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.04);
+  background: radial-gradient(circle at 50% 36%, #242b3a, #10141d);
+  box-shadow: inset 0 1px 3px rgba(255,255,255,0.05), inset 0 -4px 10px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,0,0,0.35);
 }
 .platter-mark {
-  position: absolute; top: 4%; left: 50%; width: 4px; height: 24%;
-  transform: translateX(-50%); border-radius: 2px;
+  position: absolute; top: 3%; left: 50%; width: 3px; height: 27%;
+  transform: translateX(-50%); border-radius: 3px;
   background: linear-gradient(var(--accent-a), transparent);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--accent-a) 55%, transparent);
 }
-.jog-pad[data-deck="B"] .platter-mark { background: linear-gradient(var(--accent-b), transparent); }
-/* The "tape sticker" — a reference dot the user can scratch back to. */
+.jog-pad[data-deck="B"] .platter-mark {
+  background: linear-gradient(var(--accent-b), transparent);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--accent-b) 55%, transparent);
+}
+/* The "tape sticker" — a small reference mark the user can scratch back to. */
 .platter-sticker {
-  position: absolute; top: 22%; left: 50%; width: 12px; height: 12px;
+  position: absolute; top: 19%; left: 50%; width: 8px; height: 8px;
   transform: translateX(-50%); border-radius: 50%;
-  background: #ffd23f; box-shadow: 0 0 8px rgba(255,210,63,0.7);
+  background: #ffd23f; box-shadow: 0 0 5px rgba(255,210,63,0.55), inset 0 0 2px rgba(0,0,0,0.4);
 }
 /* Fixed reference tick at 12 o'clock — align the sticker/mark to it. */
 .platter-ref {
@@ -237,16 +303,22 @@ html, body {
 .knob {
   position: absolute; top: 7px; left: 7px;       /* centred in the 58px dial */
   width: 44px; height: 44px; border-radius: 50%;
-  background: radial-gradient(circle at 50% 35%, #2a2f40, #141620);
+  background: radial-gradient(circle at 50% 30%, #353f59, #0f1422 82%);
   border: 1px solid var(--line); cursor: ns-resize;
-  box-shadow: inset 0 2px 4px rgba(255,255,255,0.05), 0 2px 6px rgba(0,0,0,0.4);
+  box-shadow:
+    inset 0 2px 3px rgba(255,255,255,0.12),    /* top highlight */
+    inset 0 -3px 6px rgba(0,0,0,0.5),          /* bottom shade — gives it dome depth */
+    0 3px 8px rgba(0,0,0,0.5);                 /* drop shadow */
   touch-action: none;
 }
+/* Indicator: muted "chrome" (white-ish), not deck colour — colour is reserved for
+   the waveform, VU meter and active states (cf. pro DJ-gear restraint). */
 .knob-dot {
   position: absolute; top: 5px; left: 50%; width: 4px; height: 14px;
-  transform: translateX(-50%); border-radius: 2px; background: var(--accent-a);
+  transform: translateX(-50%); border-radius: 2px; background: var(--chrome);
+  box-shadow: 0 0 4px rgba(0,0,0,0.45);
 }
-.channel[data-deck="B"] .knob-dot { background: var(--accent-b); }
+.channel[data-deck="B"] .knob-dot { background: var(--chrome); }
 
 .vfader { display: flex; flex-direction: column; align-items: center; gap: 5px; }
 .vfader label { font-size: 0.55rem; color: var(--muted); letter-spacing: 0.08em; }
@@ -262,19 +334,25 @@ html, body {
   background: linear-gradient(0deg, #2ecc71, #f1c40f 72%, var(--danger));
   transition: height 0.06s linear;
 }
+/* Peak-hold cap — a thin bright line that rides the recent maximum. */
+.vu::before {
+  content: ""; position: absolute; left: 0; right: 0; bottom: var(--peak, 0%);
+  height: 2px; background: #f2f7fa; opacity: 0.75; z-index: 1;
+}
 
 /* ---------- Custom faders (tempo / volume / crossfader) ---------- */
 .fader { position: relative; touch-action: none; user-select: none; }
 .fader.v { width: 46px; }
 .fader.h { width: 100%; height: 44px; }
 .fader-track {
-  position: absolute; background: var(--panel-2);
-  border: 1px solid var(--line); border-radius: 7px;
+  position: absolute; background: linear-gradient(90deg, #0b0e16, #161b27);
+  border: 1px solid rgba(0,0,0,0.5); border-radius: 7px;
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.02); /* recessed groove */
 }
-.fader.v .fader-track { left: 50%; top: 8px; bottom: 8px; width: 10px; transform: translateX(-50%); }
-.fader.h .fader-track { top: 50%; left: 10px; right: 10px; height: 10px; transform: translateY(-50%); }
-.fader-fill { position: absolute; border-radius: 7px; opacity: 0.5; }
-.fader.v .fader-fill { left: 0; right: 0; bottom: 0; background: linear-gradient(0deg, var(--accent), transparent); }
+.fader.v .fader-track { left: 50%; top: 8px; bottom: 8px; width: 8px; transform: translateX(-50%); }
+.fader.h .fader-track { top: 50%; left: 10px; right: 10px; height: 8px; transform: translateY(-50%); }
+.fader-fill { position: absolute; border-radius: 7px; opacity: 0.7; }
+.fader.v .fader-fill { left: 0; right: 0; bottom: 0; background: linear-gradient(0deg, color-mix(in srgb, var(--accent) 55%, #2a3148), transparent); }
 .fader.h .fader-fill { display: none; }
 .fader-ticks { position: absolute; inset: 0; pointer-events: none; }
 .tick { position: absolute; background: rgba(255,255,255,0.22); }
@@ -308,9 +386,11 @@ html, body {
 .rail-label { font-size: 0.55rem; letter-spacing: 0.1em; color: var(--muted); }
 .deck-rail .fader.v { flex: 1; min-height: 120px; }
 .rail-read {
-  font-size: 0.64rem; color: var(--text); font-variant-numeric: tabular-nums;
+  font-size: 0.64rem; color: var(--text);
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px;
 }
+.track-bpm, .fs-timer, .coach-prog { font-family: var(--font-mono); }
 
 .crossfade-col {
   flex: 1; display: flex; flex-direction: column; gap: 0.5rem;
@@ -466,17 +546,8 @@ input[type="range"]::-moz-range-thumb {
 .knob-dial { width: 52px; height: 52px; }
 .knob { width: 40px; height: 40px; top: 6px; left: 6px; }
 .eq { gap: 0.4rem; }
-.knob.filter-knob .knob-dot { background: #6c7bff; }
+.knob.filter-knob .knob-dot { background: var(--chrome); }
 .dbl-btn { flex: none; font-weight: 700; }
-#stack-btn {
-  width: 30px; height: 30px; border-radius: 8px; flex: none; cursor: pointer; font-size: 1rem;
-  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-}
-#stack-btn.active { background: var(--accent); color: #06070b; border-color: var(--accent); }
-
-/* Stacked beat-match waveform view */
-body.stack-view .decks-top { flex-direction: column; }
-body.stack-view .deck-meta .waveform { height: 84px; }
 
 /* Sampler */
 .sampler-section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.5rem 0.7rem; flex: none; }
@@ -583,8 +654,8 @@ body.stack-view .deck-meta .waveform { height: 84px; }
 .fs-dl { text-decoration: none; display: inline-flex; align-items: center; }
 
 @media (max-width: 720px) {
-  #practice-btn { font-size: 0; padding: 0 0.55rem; }
-  #practice-btn::before { content: "🎓"; font-size: 0.95rem; }
+  /* Icon-only practice button on narrow screens (the SVG stays visible). */
+  #practice-btn span:not(.ic) { display: none; }
   #coach { top: 52px; width: 94vw; }
 }
 .muted { color: var(--muted); font-size: 0.85rem; }
@@ -598,9 +669,65 @@ body.stack-view .deck-meta .waveform { height: 84px; }
   background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px;
   border-radius: 5px; padding: 1px 6px; font-size: 0.78rem;
 }
+/* Live key-binding table (generated from config so it can't drift) */
+#help-keys { max-height: 30vh; overflow-y: auto; margin-top: 0.4rem; }
+.help-keys-grid {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto;
+  gap: 3px 12px;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.help-keys-grid kbd {
+  justify-self: end;
+  background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 5px; padding: 1px 6px; font-size: 0.72rem; color: var(--text);
+}
 
 /* Drag-over highlight */
 .deck-meta.dragover, .jog-pad.dragover { outline: 2px dashed var(--accent); outline-offset: -4px; }
+
+/* Needle-drop ripple on waveform taps */
+.needle-ripple {
+  position: absolute; z-index: 7; width: 10px; height: 10px;
+  margin: -5px 0 0 -5px; border-radius: 50%;
+  border: 2px solid #ff2d55; pointer-events: none;
+  animation: needleRipple 0.45s ease-out forwards;
+}
+@keyframes needleRipple {
+  0% { transform: scale(0.4); opacity: 0.9; }
+  100% { transform: scale(3.4); opacity: 0; }
+}
+
+/* First-run tour tip */
+#tour-tip {
+  position: fixed; z-index: 70; left: 50%; bottom: 22px; transform: translateX(-50%);
+  width: min(400px, 92vw); padding: 0.9rem 1rem;
+  background: rgba(16, 20, 30, 0.96); border: 1px solid var(--accent-a);
+  border-radius: 12px; box-shadow: 0 14px 44px rgba(0, 0, 0, 0.55);
+}
+#tour-tip .tour-text { margin: 0 0 0.7rem; font-size: 0.9rem; line-height: 1.45; }
+#tour-tip .tour-actions { display: flex; align-items: center; gap: 0.5rem; justify-content: flex-end; }
+#tour-tip .tour-count { margin-right: auto; color: var(--muted); font-size: 0.75rem; font-family: var(--font-mono); }
+
+/* Keyboard focus on custom (non-native) controls */
+.knob:focus-visible, .fader:focus-visible, .jog-pad:focus-visible,
+.samp-pad:focus-visible, .master-knob:focus-visible {
+  outline: 2px solid #f1f8fb; outline-offset: 2px;
+}
+
+/* Reduced motion: silence every decorative animation app-wide (the platter's
+   rotation is a JS transform tied to real playback, so it stays). */
+@media (prefers-reduced-motion: reduce) {
+  .needle-ripple { animation: none; display: none; }
+  .coach-target, .deck-pick.flash, #record-btn.recording, .fx-on.active,
+  .loop-to-pad.active, .samp-pad.mappable, .key-btn.capturing, .coach-check.show {
+    animation: none !important;
+  }
+  #toast { transition: none; }
+  .platter-disc { transition: none !important; }
+}
 
 /* ---------- Toast ---------- */
 #toast {
@@ -611,62 +738,49 @@ body.stack-view .deck-meta .waveform { height: 84px; }
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-/* ---------- Responsive: phones ---------- */
-@media (max-width: 720px) {
-  #console { padding: 0.4rem; gap: 0.4rem; }
-  .waveform { height: 48px; }
-  .mixer { flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem; }
-  .channel { flex: 1 1 40%; justify-content: center; }
-  .crossfade-col { flex: 1 1 100%; order: 3; }
-  .vol-row { min-height: 104px; }
-  .deck-rail { width: 46px; padding: 6px 1px; }
-  .deck-rail .rail-label { display: none; }
-  .deck-rail .fader.v { width: 38px; }
-  .deck-rail .tick-label { display: none; }
-  .rail-read { font-size: 0.55rem; padding: 1px 3px; }
-  .sampler-pads { grid-template-columns: repeat(4, 1fr); }
-  .sampler-hint { display: none; }
-  .fx-row { flex-wrap: wrap; }
-  .beatfx { flex: 1 1 100%; order: 3; }
-  .loop-btn { padding: 0.3rem 0.4rem; }
-  .knob-dial { width: 46px; height: 46px; }
-  .knob { width: 36px; height: 36px; top: 5px; left: 5px; }
-  .load-row { flex-wrap: wrap; }
-  .load-row .spacer { display: none; }
-  #topbar .master input { width: 90px; }
-  .deck-fx-panel {
-    width: 96px;
-    padding: 0.4rem 0.3rem;
-  }
-  .deck-fx-panel .fx-panel-row .btn {
-    font-size: 0.6rem;
-    padding: 0.25rem 0;
-  }
-  /* Restore 2x2 grid on mobile to save vertical space */
-  .deck-fx-panel .fx-select {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.25rem;
-    width: 100%;
-  }
-  .deck-fx-panel .fx-btn {
-    font-size: 0.58rem;
-    padding: 0.25rem 0.1rem;
-  }
-  .deck-fx-panel .fx-on {
-    font-size: 0.68rem;
-    padding: 0.35rem 0;
-  }
-}
+/* (Legacy pre-controller-shell phone layouts and the 90° body-rotation hack
+   were removed — phones get a real portrait layout in decks.css, and the
+   controller shell handles landscape at every size.) */
 
-@media (max-width: 720px) and (orientation: landscape) {
-  .decks-top { display: none; } /* maximize scratch area in landscape */
-  .scratch-zone { min-height: 46vh; }
-}
+/* (The interim "OMNIS" #console grid that predated the controller shell was
+   removed — decks.css owns the deck-view layout at every breakpoint now.) */
 
-/* Larger touch targets on coarse pointers */
+/* (OMNIS styling + its small-height variants removed with the grid above.) */
+
+/* ---------- Touch ergonomics (coarse pointers) ----------
+   Two techniques:
+   1. Invisible hit-area expansion: a centred pseudo-element guarantees a
+      ≥ 44px tap zone even where the visual control stays compact.
+   2. Real size bumps where there's room (chip buttons, tabs).            */
 @media (pointer: coarse) {
   .btn { padding: 0.6rem 0.8rem; }
+
+  .btn, .hotcue-chip, .knob, .master-knob, .samp-stop, .deck-pick,
+  .pad-mode-tab, .kbd-range-jump, .coach-min, .coach-x, #help-btn,
+  .song-lane-focus, .samp-row-x {
+    position: relative;
+  }
+  .btn::before, .hotcue-chip::before, .knob::before, .master-knob::before,
+  .samp-stop::before, .deck-pick::before, .pad-mode-tab::before,
+  .kbd-range-jump::before, .coach-min::before, .coach-x::before,
+  #help-btn::before, .song-lane-focus::before, .samp-row-x::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+    /* transparent — purely a hit target */
+  }
+
+  /* Real growth where the layout affords it. */
+  .song-chip-btn, .song-chip-btn2 { min-width: 30px; min-height: 30px; }
+  .hotcue-chip { min-height: 30px; }
+  .samp-stop { width: 24px; height: 24px; font-size: 0.7rem; }
+}
+/* Comfortable knobs when there's vertical room for them. */
+@media (pointer: coarse) and (min-height: 561px) {
   .knob { width: 44px; height: 44px; }
 }
 
@@ -752,11 +866,12 @@ body.stack-view .deck-meta .waveform { height: 84px; }
   flex-direction: column;
   justify-content: space-between;
   align-items: stretch;
-  padding: 0.8rem 0.6rem;
+  gap: 0.4rem;
+  padding: 0.45rem 0.5rem;
   border-left: 1px dashed var(--line);
   border-right: 1px dashed var(--line);
   background: rgba(255, 255, 255, 0.02);
-  width: 130px;
+  width: 150px;
   flex: none;
   box-sizing: border-box;
 }
@@ -771,10 +886,10 @@ body.stack-view .deck-meta .waveform { height: 84px; }
   padding: 0.4rem 0;
   font-weight: 700;
 }
-/* Stack selector buttons vertically on desktop for readability */
+/* 2x2 selector grid keeps the FX panel compact so the platters get the height */
 .deck-fx-panel .fx-select {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 0.35rem;
   width: 100%;
 }

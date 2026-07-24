@@ -1,10 +1,12 @@
 {
   "hosting": {
     "public": "dist",
-    "ignore": ["firebase.json", "**/node_modules/**"],
+    "ignore": [
+      "firebase.json",
+      "**/node_modules/**"
+    ],
     "headers": [
       {
-        "//": "Cross-origin isolation -> enables the low-latency SharedArrayBuffer scratch channel. 'credentialless' keeps the cross-origin sample CDNs working.",
         "source": "**",
         "headers": [
           { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
@@ -12,12 +14,15 @@
         ]
       },
       {
-        "//": "Never long-cache the entry points or the service worker, so updates ship immediately.",
-        "source": "/index.html",
-        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+        "source": "/samples/**",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
       },
       {
         "source": "/sw.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/index.html",
         "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
       },
       {

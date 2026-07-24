@@ -15,6 +15,9 @@ duplicate or delete them; each chip's width is proportional to its duration.
 * **Section Custom Renaming:** Double-click or type in the **Name** input inside the section editor header to custom-name your arrangement blocks (e.g. "Verse 1 Vocal", "Double Drop"). The timeline arrangement chips update instantly.
 * **Undo / Redo History:** Full state-cloning undo/redo stacks allow you to revert or repeat any step trigger, note write, tempo slider edit, or structural change. Fully accessible via toolbar **Undo / Redo** buttons and global `Ctrl+Z` / `Ctrl+Y` keyboard shortcuts.
 * **Persistent Auto-Save & File Transfer:** The builder automatically serializes the entire song structure to browser `localStorage` on every note toggle, drum edit, and parameter change. Use the **Export JSON** and **Import JSON** buttons to backup projects to local files and reload them instantly.
+* **Named project slots:** the **Projects** button saves/loads named snapshots in the browser (separate from the working autosave), so starting a new idea never destroys the last one. Loading a project is one `Ctrl+Z` away from your previous song.
+* **Swing & drum dynamics:** each section has a **Swing** slider (MPC-style — delays every 2nd step; ~33% ≈ triplet feel), and drum cells cycle **hit → accent → ghost → off** so grooves breathe instead of marching.
+* **MIDI both ways:** with a Web MIDI controller enabled (⚙ in SXRATCH), playing keys while PAD is open writes through the shared keyboard into the focused lane. The **MIDI** button exports the arrangement as a standard `.mid` file (chords / bass / lead / drums on channel 10, swing and accents included) for any DAW.
 * **Synth or Sampled Engine:** The **Sound** selector defaults to the offline synth engine, or can load General MIDI-style sampled instruments for richer playback when the network is available.
 
 Each section has its own **key**, **time signature** (4/4, 3/4, 6/8, 5/4, 7/8, 12/8…),
@@ -42,12 +45,42 @@ and a cursor sweeps the grids). **Preview song** plays the whole arrangement;
 deck so you can scratch it in SXRATCH; **⬇ WAV** downloads it.
 
 **Sound engine — synth or sampled.** By default, instruments are synthesized in the
-browser (oscillators + filters + envelopes, Karplus–Strong plucks, noise-based drums),
-so the composer works offline with zero assets. Flip the **Sound** selector in the
-toolbar to **Sampled · GM** to play real multisampled **General MIDI instruments** and
-**sampled drum kits** instead (fetched on demand from a soundfont CDN, decoded only for
-the notes a song uses). The sampled engine is optional and falls back to synth playback
-if the remote assets can't load.
+browser by a dedicated DSP engine (`js/synth.js`): detuned stereo-unison pads, strings
+and leads with exponential envelopes and real release tails, an FM tine electric piano,
+a nine-drawbar organ with key click and percussion, Karplus–Strong guitars and upright
+bass with body resonance and pick transients, and analog-style drum kits (layered
+kicks, metallic oscillator-bank hats and cymbals) rendered as cached one-shots. Tracks
+run through tempo-synced ping-pong echo, convolution reverb with early reflections, and
+ensemble chorus; the final render is glue-compressed, loudness-normalized and
+brickwall-limited — so the composer works offline with zero assets. Flip the **Sound**
+selector in the toolbar to **Sampled · GM** to play real multisampled **General MIDI
+instruments** and **sampled drum kits** instead. The 14 GM programs the app uses are
+**self-hosted** under `samples/FluidR3_GM/` (MIT-licensed FluidR3, fetched once with
+`npm run samples`) — served same-origin, cached on demand by the service worker so
+the sampled engine **works offline after first use**, with the public soundfont CDN
+as an automatic fallback if a local file is missing. Sample playback is normalized
+against each sample's measured peak (consistent loudness across programs), softer
+velocities darken naturally through a low-pass, and decaying instruments (e-piano,
+celesta, guitars, basses) **ring past the note end** instead of being gated. The
+sampled engine is optional and falls back to synth playback if assets can't load.
+
+**Edit the synth.** Every chord / bass / lead sound is a real, editable patch, not a
+fixed preset. Select a lane and the inspector's **Synth** panel exposes that sound's
+engine:
+
+| Engine | Sounds | Controls |
+| --- | --- | --- |
+| **Analog** (subtractive) | pads, strings, leads, flute, electric/synth/sub bass | 2 oscillators + sub + noise, drive, unison voices/detune/stereo spread, filter (type, cutoff, resonance, key-follow, envelope amount/time, velocity routing, LFO), ADSR, vibrato, attack transient |
+| **FM** | electric piano, bell | mod ratio, index + index decay, velocity→index, overtone ratio/level/decay, ADSR, pan spread |
+| **Drawbar** | organ | nine drawbars (16′…1′), percussion harmonic/level/decay, key click, vibrato |
+| **String** (Karplus–Strong) | acoustic guitar, plucked lead, upright bass | sustain, brightness, damping, pick attack, body thump, strum spread, ring-past-note |
+
+Every control auditions live, the panel shows a **real rendered waveform** of the
+current patch, and edited parameters are dotted so you can see what you changed.
+**Reset patch** returns a sound to its factory design; **Apply to all sections** copies
+it across the arrangement. Patches are saved inside the song (so they travel through
+undo/redo, autosave, project slots and JSON export) and are stored sparsely — only the
+parameters you actually changed.
 
 ## Run it
 
@@ -62,7 +95,9 @@ Then open **http://localhost:5173**.
 
 To use it on your phone, make sure the phone is on the same Wi‑Fi, find your computer's
 LAN IP (e.g. `192.168.1.x`), and open `http://<that-ip>:5173`. Set the port with
-`PORT=8080 npm start` if 5173 is taken.
+`PORT=8080 npm start` if 5173 is taken. Phones work in **both orientations**: landscape
+gets the full controller, portrait gets a purpose-built stacked layout (waveforms on
+top, both platters side by side, mixer below) — no forced rotation.
 
 Useful scripts:
 
@@ -128,8 +163,9 @@ URL-loaded worklets and workers at stable paths (`js/scratch-processor.js`,
 **Transport, sync & both decks:** Each deck has **⏮ to-start**, **⏪/⏩ hold-to-rewind/fast-forward**, **CUE / SET / ▶**, and **SYNC** (matches the deck's BPM and aligns the beat phase to the other deck). The centre **▶❚❚ BOTH** button (or `Space`) plays/pauses both decks simultaneously; `T`/`Y` sync A→B / B→A.
 
 **Extras & Sampler Pad Loop Mapping:**
-* **Instant Doubles** — The **DBL ⇄** button copies a deck's loaded track and playhead position onto the other deck instantly for beat-juggling routines.
-* **Stacked beat-match view** — The **⤢** button stacks the waveforms on top of each other with a shared central playhead, letting you line up the beats visually.
+* **Instant Doubles** — The **DBL** button copies a deck's loaded track, playhead position and BPM onto the other deck instantly for beat-juggling routines.
+* **Live BPM readout** — each deck shows its **effective BPM** (track BPM × pitch fader). Tempo is detected automatically when you load a file (onset-envelope autocorrelation, `js/bpm.js`); presets and PAD renders carry their exact tempo. The readout shows `--` until a tempo is actually known — it never guesses.
+* **A | B toolbar switch** — the centre toolbar (LINK · DBL · Presets · zoom) and the LOOP row are shared between decks; the **A | B** switch above the waveforms shows and sets which deck they control (it also follows the deck you last touched).
 * **Sampler & Loop Region Mapping** — 8 pads in the center of the mixer. Click an empty pad to load an audio file, click again to trigger it, **■** to stop it (or **■ STOP** to stop all), and double-click to clear. Adjust sampler volume with the fader.
 * **→ PAD Loop Mapping** — Create a loop on Deck A or B (using the auto **4-beat** loop or manual **IN / OUT** points). A **→ PAD** button appears in the loop row. Click **→ PAD** to enter Mapping Mode (the button highlights, and all sampler pads pulse green), then click a sampler pad (1-8) to extract and map that exact looped audio region. The pad's name updates to `[Track Name]... [Slice]`, and clicking the pad triggers the sliced region independently. Pads are triggerable via keys (default A S D F G H J K) and customizable in **⚙**.
 
@@ -239,8 +275,12 @@ js/waveform-worker.js       OffscreenCanvas waveform renderer
 js/practice.js              guided lessons, scoring, freestyle recorder hooks
 js/songbuilder.js           PAD composer, offline rendering, JSON/WAV import/export
 js/instruments.js           optional sampled General MIDI soundfont loader
+samples/FluidR3_GM/         self-hosted GM instrument samples (npm run samples)
+scripts/fetch-samples.js    downloads the sample set (MIT, see samples/README.md)
 js/theory.js                music theory helpers used by PAD/tests
 js/presets.js               synthetic deck presets
+js/bpm.js                   onset-envelope BPM detection for loaded tracks
+js/midiexport.js            Standard MIDI File writer for PAD arrangements
 js/midi.js                  Web MIDI input + default controller map
 js/haptics.js               vibration helpers for mobile feedback
 js/ui.js                    display + toast helpers

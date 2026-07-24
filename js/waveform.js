@@ -20,11 +20,13 @@ export class Waveform {
     this.color = opts.color || "#37e6c8";
     this.dim = opts.dim || "rgba(255,255,255,0.18)";
     this.bg = opts.bg || "transparent";
-    this.peaks = null;       // Float32Array of [min,max] pairs (kept for geometry)
-    this.peakCount = 0;
+    this.peaks = null;       // level-0 full-range peaks (kept for geometry + thumbnails)
+    this.peakCount = 0;      // level-0 count — all geometry is expressed against this
+    this.levels = null;      // [{count, total, low}] coarse→fine, for zoomable two-band drawing
+    this.grid = null;        // { bpm, offset, anchored } — real beat grid, or null
     this.position = 0;       // 0..1
     this.duration = 0;       // seconds
-    this.pixelsPerPeak = 1;  // horizontal zoom (samples view)
+    this.pixelsPerPeak = 1;  // horizontal zoom (pixels per level-0 peak)
     this.cues = [];          // [{ pos, color, label }]
     this.loop = null;        // { start, end } in 0..1, or null
     this.dirty = true;       // set by state changes; the app's RAF loop flushes it
@@ -36,7 +38,9 @@ export class Waveform {
     if (typeof OffscreenCanvas !== "undefined" && typeof Worker !== "undefined" &&
         typeof canvas.transferControlToOffscreen === "function") {
       try {
-        this.worker = new Worker("/js/waveform-worker.js", { type: "module" });
+        // Resolve relative to this module so it works from any base path
+        // (dev, dist bundle, or subpath hosting) — esbuild keeps import.meta.url in ESM output.
+        this.worker = new Worker(new URL("./waveform-worker.js", import.meta.url), { type: "module" });
         const dpr = window.devicePixelRatio || 1;
         const rect = canvas.getBoundingClientRect();
         this.w = Math.max(1, Math.floor(rect.width));
@@ -60,8 +64,9 @@ export class Waveform {
   _state() {
     return {
       w: this.w, h: this.h, bg: this.bg, color: this.color, dim: this.dim,
-      peaks: this.peaks, peakCount: this.peakCount, position: this.position,
+      levels: this.levels, baseCount: this.peakCount, position: this.position,
       pixelsPerPeak: this.pixelsPerPeak, cues: this.cues, loop: this.loop,
+      grid: this.grid, duration: this.duration,
     };
   }
 
@@ -120,7 +125,24 @@ export class Waveform {
   }
 
   zoomBy(factor) {
-    this.pixelsPerPeak = Math.max(0.25, Math.min(16, this.pixelsPerPeak * factor));
+    // Finer peak levels back the higher zooms, so 64 px/peak stays detailed.
+    this.pixelsPerPeak = Math.max(0.25, Math.min(64, this.pixelsPerPeak * factor));
+    this.dirty = true;
+  }
+
+  /**
+   * Real beat grid drawn under the waveform. `bpm` in track time (the grid
+   * belongs to the file, so the tempo fader does not move it), `offset` =
+   * first-downbeat seconds, `anchored` = the downbeat is actually known
+   * (PAD renders / presets) — bar numbers only show when it is.
+   */
+  setBeatGrid(grid) {
+    this.grid = grid && grid.bpm ? {
+      bpm: grid.bpm,
+      offset: grid.offset || 0,
+      anchored: !!grid.anchored,
+    } : null;
+    if (this.worker) this.worker.postMessage({ type: "grid", grid: this.grid, duration: this.duration });
     this.dirty = true;
   }
 
@@ -139,33 +161,78 @@ export class Waveform {
     this.dirty = true;
   }
 
-  /** Build ~4000 peaks/track regardless of length; cheap to scroll. */
+  /**
+   * Build a 3-level peak pyramid (~4k / 16k / 64k peaks) in two bands:
+   * full-range and low-band (one-pole LPF ≈ 180 Hz), one pass over the samples.
+   * Level 0 backs all geometry; the draw routine picks the finest level the
+   * current zoom needs, so high zooms stay detailed instead of blocky.
+   */
   setBuffer(audioBuffer) {
     this.duration = audioBuffer.duration;
-    const targetPeaks = 4000;
     const ch0 = audioBuffer.getChannelData(0);
     const ch1 = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : ch0;
     const total = ch0.length;
-    const block = Math.max(1, Math.floor(total / targetPeaks));
-    const count = Math.ceil(total / block);
-    const peaks = new Float32Array(count * 2);
-    for (let p = 0; p < count; p++) {
-      let min = 1, max = -1;
+    const sr = audioBuffer.sampleRate || 44100;
+
+    // Finest level first (≤ 64k peaks), then reduce ×4 twice.
+    const fineTarget = Math.min(total, 64000);
+    const block = Math.max(1, Math.floor(total / fineTarget));
+    const fineCount = Math.ceil(total / block);
+    const fineTotal = new Float32Array(fineCount * 2);
+    const fineLow = new Float32Array(fineCount * 2);
+    const a = 1 - Math.exp((-2 * Math.PI * 180) / sr); // low-band one-pole coefficient
+    let lp = 0;
+    for (let p = 0; p < fineCount; p++) {
+      let min = 1, max = -1, lmin = 1, lmax = -1;
       const start = p * block;
       const end = Math.min(total, start + block);
       for (let i = start; i < end; i++) {
         const v = (ch0[i] + ch1[i]) * 0.5;
+        lp += a * (v - lp);
         if (v < min) min = v;
         if (v > max) max = v;
+        if (lp < lmin) lmin = lp;
+        if (lp > lmax) lmax = lp;
       }
-      peaks[p * 2] = min;
-      peaks[p * 2 + 1] = max;
+      fineTotal[p * 2] = min; fineTotal[p * 2 + 1] = max;
+      fineLow[p * 2] = lmin;  fineLow[p * 2 + 1] = lmax;
     }
-    this.peaks = peaks;
-    this.peakCount = count;
+
+    const reduce = (src, count) => {
+      const outCount = Math.ceil(count / 4);
+      const out = new Float32Array(outCount * 2);
+      for (let p = 0; p < outCount; p++) {
+        let min = 1, max = -1;
+        for (let k = p * 4; k < Math.min(count, p * 4 + 4); k++) {
+          if (src[k * 2] < min) min = src[k * 2];
+          if (src[k * 2 + 1] > max) max = src[k * 2 + 1];
+        }
+        out[p * 2] = min; out[p * 2 + 1] = max;
+      }
+      return { out, outCount };
+    };
+    const t1 = reduce(fineTotal, fineCount), l1 = reduce(fineLow, fineCount);
+    const t0 = reduce(t1.out, t1.outCount), l0 = reduce(l1.out, l1.outCount);
+
+    this.levels = [
+      { count: t0.outCount, total: t0.out, low: l0.out },
+      { count: t1.outCount, total: t1.out, low: l1.out },
+      { count: fineCount, total: fineTotal, low: fineLow },
+    ];
+    this.peaks = t0.out;        // compat: geometry + album-art thumbnails
+    this.peakCount = t0.outCount;
+
     if (this.worker) {
-      const copy = peaks.slice();
-      this.worker.postMessage({ type: "peaks", peaks: copy.buffer, peakCount: count }, [copy.buffer]);
+      const transfer = [];
+      const payload = this.levels.map((L) => {
+        const total2 = L.total.slice(), low2 = L.low.slice();
+        transfer.push(total2.buffer, low2.buffer);
+        return { count: L.count, total: total2.buffer, low: low2.buffer };
+      });
+      this.worker.postMessage(
+        { type: "peaks", levels: payload, baseCount: this.peakCount, duration: this.duration },
+        transfer
+      );
     }
     this.dirty = true;
   }
@@ -179,10 +246,13 @@ export class Waveform {
   clear() {
     this.peaks = null;
     this.peakCount = 0;
+    this.levels = null;
+    this.grid = null;
     this.position = 0;
     this.duration = 0;
     this.cues = [];
-    if (this.worker) this.worker.postMessage({ type: "peaks", peaks: null, peakCount: 0 });
+    if (this.worker) this.worker.postMessage({ type: "peaks", levels: null, baseCount: 0, duration: 0 });
     this.dirty = true;
   }
 }
+// Worker URL resolves via import.meta.url so subpath hosting works (see ctor).

@@ -1,13 +1,14 @@
 // Sxratch waveform worker — owns a transferred OffscreenCanvas and does all the
 // per-frame stroking off the main thread. The main thread keeps the peak data
-// for geometry/interaction and just streams it position/cue/loop updates.
+// for geometry/interaction and just streams it position/cue/loop/grid updates.
 
 import { drawWaveform } from "./waveform-draw.js";
 
 let ctx = null;
 const s = {
-  w: 1, h: 1, bg: "transparent", color: "#37e6c8", dim: "rgba(255,255,255,0.18)",
-  peaks: null, peakCount: 0, position: 0, pixelsPerPeak: 1, cues: [], loop: null,
+  w: 1, h: 1, bg: "transparent", color: "#48ddd3", dim: "rgba(255,255,255,0.18)",
+  levels: null, baseCount: 0, duration: 0, grid: null,
+  position: 0, pixelsPerPeak: 1, cues: [], loop: null,
 };
 
 self.onmessage = (e) => {
@@ -24,8 +25,16 @@ self.onmessage = (e) => {
       if (ctx) resize(ctx.canvas, m.w, m.h, m.dpr);
       break;
     case "peaks":
-      s.peaks = m.peaks ? new Float32Array(m.peaks) : null;
-      s.peakCount = m.peakCount || 0;
+      s.levels = m.levels
+        ? m.levels.map((L) => ({ count: L.count, total: new Float32Array(L.total), low: new Float32Array(L.low) }))
+        : null;
+      s.baseCount = m.baseCount || 0;
+      s.duration = m.duration || 0;
+      draw();
+      break;
+    case "grid":
+      s.grid = m.grid || null;
+      if (m.duration != null) s.duration = m.duration;
       draw();
       break;
     case "draw":

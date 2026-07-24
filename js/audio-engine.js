@@ -8,6 +8,7 @@
 // together don't clip harshly.
 
 import { crossfadeGains } from "./theory.js";
+import { makeReverbIR } from "./synth.js";
 
 export class Deck {
   /**
@@ -176,10 +177,17 @@ export class Deck {
   brake(on) { this.node.port.postMessage({ type: "brake", on: !!on }); }
   backspin() { this.node.port.postMessage({ type: "backspin" }); }
 
+  /** Set the track BPM and keep tempo-synced FX (echo) on the beat. */
+  setBpm(bpm) {
+    this.bpm = bpm;
+    this.fx.setBpm(this.bpm * (1 + this.tempo / 100));
+  }
+
   /** tempo in percent, e.g. -8..+8 */
   setTempo(percent) {
     this.tempo = percent;
     this.node.port.postMessage({ type: "rate", value: 1 + percent / 100 });
+    this.fx.setBpm(this.bpm * (1 + this.tempo / 100));
   }
 
   setVolume(v) { // 0..1
@@ -327,12 +335,26 @@ export class BeatFX {
     const ctx = this.ctx;
     const inGain = ctx.createGain();
     const delay = ctx.createDelay(2);
-    delay.delayTime.value = 0.375;
+    delay.delayTime.value = 0.375; // re-synced to the deck BPM via setBpm()
     const fb = ctx.createGain();
     fb.gain.value = 0.4;
+    // Filter the feedback loop so repeats darken like an analog delay
+    // instead of accumulating hiss. Butterworth Q (0.707) keeps the corners
+    // flat — the default Q=1 adds ~1 dB resonance that, inside the loop,
+    // makes max-depth repeats ring for far longer than the feedback implies.
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 2600;
+    lp.Q.value = 0.707;
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 170;
+    hp.Q.value = 0.707;
     const out = ctx.createGain();
     inGain.connect(delay);
-    delay.connect(fb);
+    delay.connect(lp);
+    lp.connect(hp);
+    hp.connect(fb);
     fb.connect(delay);
     delay.connect(out);
     this.effects.echo = { in: inGain, out, delay, fb };
@@ -341,7 +363,7 @@ export class BeatFX {
     const ctx = this.ctx;
     const inGain = ctx.createGain();
     const conv = ctx.createConvolver();
-    conv.buffer = this._impulse(2.4, 2.6);
+    conv.buffer = makeReverbIR(ctx, { seconds: 2.1, decay: 2.8, predelay: 0.02, damp: 0.45 });
     const out = ctx.createGain();
     inGain.connect(conv);
     conv.connect(out);
@@ -351,7 +373,10 @@ export class BeatFX {
     const ctx = this.ctx;
     const inGain = ctx.createGain();
     const delay = ctx.createDelay(0.02);
-    delay.delayTime.value = 0.005;
+    // Base 8 ms: the delay is in a feedback cycle, so its effective time floors
+    // at one render quantum (~2.9 ms); with max modulation depth 4 ms the sweep
+    // stays in 4–12 ms and never crosses that floor or goes negative.
+    delay.delayTime.value = 0.008;
     const fb = ctx.createGain();
     fb.gain.value = 0.5;
     const out = ctx.createGain();
@@ -393,15 +418,11 @@ export class BeatFX {
     lfo.start();
     this.effects.phaser = { in: inGain, out, lfoGain };
   }
-  _impulse(dur, decay) {
-    const ctx = this.ctx;
-    const len = Math.floor(ctx.sampleRate * dur);
-    const buf = ctx.createBuffer(2, len, ctx.sampleRate);
-    for (let c = 0; c < 2; c++) {
-      const d = buf.getChannelData(c);
-      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
-    }
-    return buf;
+  /** Beat-sync the echo to a deck's effective BPM (dotted-eighth repeats). */
+  setBpm(bpm) {
+    if (!bpm || !isFinite(bpm) || bpm <= 0) return;
+    const t = Math.max(0.05, Math.min(1.9, (60 / bpm) * 0.75));
+    this.effects.echo.delay.delayTime.setTargetAtTime(t, this.ctx.currentTime, 0.08);
   }
 
   select(name) {
@@ -427,7 +448,7 @@ export class BeatFX {
     if (this.on) this.wet.gain.setTargetAtTime(d, t, 0.02);
     this.effects.echo.fb.gain.setTargetAtTime(0.2 + 0.55 * d, t, 0.02);
     this.effects.flanger.fb.gain.setTargetAtTime(0.3 + 0.45 * d, t, 0.02);
-    this.effects.flanger.lfoGain.gain.value = 0.001 + 0.005 * d;
+    this.effects.flanger.lfoGain.gain.value = 0.001 + 0.003 * d; // ≤4 ms swing (see _buildFlanger)
     this.effects.phaser.lfoGain.gain.value = 150 + 500 * d;
   }
 }

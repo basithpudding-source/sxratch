@@ -1,0 +1,1182 @@
+// Sxratch synthesis library — the S1 sound-fidelity engine.
+//
+// Everything the PAD composer plays comes through here:
+//  · adsr()            exponential envelopes with true release tails past note end
+//  · unison()          detuned multi-voice oscillator banks with stereo spread
+//  · INSTRUMENTS       the designed patches (pads, strings, FM e-piano, drawbar
+//                      organ, Karplus-Strong guitars, basses, leads)
+//  · drum samples      analog-style drum voices rendered to buffers with pure
+//                      JS math (deterministic, cheap to trigger, Node-testable)
+//  · makeReverbIR      impulse responses with pre-delay, early reflections and
+//                      a progressively damped tail (replaces raw noise bursts)
+//  · makeEchoSend      tempo-synced ping-pong delay with filtered feedback
+//  · makeChorus        stereo ensemble chorus insert
+//  · glueCompressor    gentle 2.5:1 bus glue (replaces default-settings squash)
+//  · masterFinalize    pure-JS loudness normalize + look-ahead brickwall limit
+//                      applied to the rendered buffer
+//
+// Pure-math helpers (masterFinalize, reverbIRData, drumSampleData, biquadApply,
+// mulberry32) never touch Web Audio, so they run under node:test.
+
+export const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+
+/** Deterministic PRNG (mulberry32) — seeded so renders are reproducible. */
+export function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** One deterministic 0..1 value per (seed, step) — for humanized velocity. */
+export function stepRand(seed, step) {
+  return mulberry32((seed ^ (step * 0x9E3779B9)) >>> 0)();
+}
+
+/* ================================ envelopes ================================ */
+
+/**
+ * Exponential-feel ADSR on a GainNode.gain AudioParam.
+ * Linear micro-attack (click-free), setTargetAtTime decay to sustain, and a
+ * release that starts at the note end and rings PAST it — notes no longer
+ * hard-stop on the grid line. Returns the safe source stop time.
+ */
+export function adsr(gp, at, dur, { a = 0.004, d = 0.12, s = 0.75, r = 0.25, peak = 1 } = {}) {
+  const atk = Math.max(0.0015, a);
+  gp.setValueAtTime(0.0001, at);
+  gp.linearRampToValueAtTime(Math.max(0.0002, peak), at + atk);
+  gp.setTargetAtTime(Math.max(0.0001, peak * s), at + atk, Math.max(0.01, d / 3));
+  const relAt = Math.max(at + atk + 0.005, at + dur);
+  gp.setTargetAtTime(0.0001, relAt, Math.max(0.008, r / 4));
+  return relAt + r + 0.1;
+}
+
+/* ============================ oscillator voices ============================ */
+
+const clampPan = (p) => Math.max(-1, Math.min(1, p));
+
+/**
+ * A detuned unison oscillator bank. Voices alternate across three stereo
+ * buses (centre / left / right) so wide patches cost 3 panners, not N.
+ * Caller normalizes level by 1/sqrt(voices) via the env peak.
+ */
+export function unison(ctx, dest, { f, type = "sawtooth", voices = 3, detune = 10, spread = 0.7, pan = 0 } = {}) {
+  const canPan = !!ctx.createStereoPanner;
+  const mkPan = (p) => { const sp = ctx.createStereoPanner(); sp.pan.value = clampPan(p); sp.connect(dest); return sp; };
+  // A single centred voice connects straight through: a StereoPanner at pan 0
+  // applies the equal-power law to a mono source and would cost it 3 dB.
+  const solo = voices === 1 && Math.abs(pan) < 1e-6;
+  const wide = voices > 1 && canPan;
+  // Only build the centre bus when a voice actually sits there (odd counts).
+  const centre = !canPan || solo ? dest : (voices === 1 || voices % 2 === 1 ? mkPan(pan) : null);
+  const left = wide ? mkPan(pan - spread) : centre;
+  const right = wide ? mkPan(pan + spread) : centre;
+  const oscs = [];
+  for (let i = 0; i < voices; i++) {
+    const o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.value = f;
+    // Bus by detune position so the stereo image stays balanced for any voice
+    // count: k<0 → left, k>0 → right, k==0 → centre (even counts have no
+    // centre voice, so they split symmetrically).
+    const k = voices > 1 ? i - (voices - 1) / 2 : 0;
+    if (voices > 1) o.detune.value = detune * k * (2 / Math.max(1, voices - 1));
+    o.connect(k === 0 ? (centre || dest) : (k < 0 ? left : right));
+    oscs.push(o);
+  }
+  return {
+    oscs,
+    start: (t) => oscs.forEach((o) => o.start(t)),
+    stop: (t) => oscs.forEach((o) => { try { o.stop(t); } catch {} }),
+  };
+}
+
+/** Delayed-onset vibrato on a set of oscillators' detune (depth in cents). */
+function vibrato(ctx, oscs, { rate = 5.2, cents = 5, delay = 0.2, at, stop }) {
+  const lfo = ctx.createOscillator();
+  lfo.frequency.value = rate;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, at);
+  g.gain.setTargetAtTime(cents, at + delay, 0.16);
+  lfo.connect(g);
+  oscs.forEach((o) => g.connect(o.detune));
+  lfo.start(at);
+  lfo.stop(stop);
+  return lfo;
+}
+
+function bq(ctx, type, f, Q = 0.7, gainDb = 0) {
+  const n = ctx.createBiquadFilter();
+  n.type = type;
+  n.frequency.value = f;
+  n.Q.value = Q;
+  if (gainDb) n.gain.value = gainDb;
+  return n;
+}
+
+/** Short filtered-noise burst (pick / key-click / breath chiff transients). */
+function noiseBurst(ctx, dest, noise, { at, len = 0.004, peak = 0.1, hp = 0, lp = 0, decay = 0.0015 }) {
+  if (!noise) return;
+  const src = ctx.createBufferSource();
+  src.buffer = noise;
+  let node = src;
+  if (hp) { const h = bq(ctx, "highpass", hp, 0.7); node.connect(h); node = h; }
+  if (lp) { const l = bq(ctx, "lowpass", lp, 0.7); node.connect(l); node = l; }
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(peak, at);
+  g.gain.setTargetAtTime(0.0001, at + 0.001, decay);
+  node.connect(g).connect(dest);
+  // random-ish but deterministic offset into the noise buffer
+  src.start(at, (at * 7.13) % Math.max(0.05, noise.duration - 0.1));
+  src.stop(at + len + decay * 5);
+}
+
+/* ========================== Karplus-Strong strings ========================= */
+
+/**
+ * Karplus-Strong pluck with a brightness-shaped excitation burst and a
+ * pick-position comb — richer and less "zingy" than raw white-noise KS.
+ */
+export function ksBuffer(ctx, f, dur, { decay = 0.996, brightness = 0.6, pickPos = 0.18, seed = 1234 } = {}) {
+  const sr = ctx.sampleRate;
+  const N = Math.max(2, Math.round(sr / f));
+  const total = Math.ceil(dur * sr);
+  const buf = ctx.createBuffer(1, total, sr);
+  const out = buf.getChannelData(0);
+  const rand = mulberry32(seed);
+  const burst = new Float32Array(N);
+  let lp = 0;
+  const bcoef = 0.18 + 0.78 * Math.max(0, Math.min(1, brightness));
+  for (let i = 0; i < N; i++) { lp += bcoef * ((rand() * 2 - 1) - lp); burst[i] = lp; }
+  const pd = Math.max(1, Math.round(N * pickPos));
+  const ring = new Float32Array(N);
+  for (let i = 0; i < N; i++) ring[i] = burst[i] - 0.7 * burst[(i - pd + N) % N];
+  let idx = 0;
+  for (let i = 0; i < total; i++) {
+    const cur = ring[idx], nxt = ring[(idx + 1) % N];
+    out[i] = cur;
+    ring[idx] = 0.5 * (cur + nxt) * decay;
+    idx = (idx + 1) % N;
+  }
+  return buf;
+}
+
+/**
+ * Play a KS pluck through a guitar-ish body (low-shelf warmth + top-plate
+ * peak), with a pick transient and a gated release so it never clicks off.
+ */
+function playKS(ctx, dest, f, at, dur, { decay = 0.996, brightness = 0.6, gain = 0.5, tone = 3800, body = true, pan = 0, noise = null, pick = 0.1, seed = 1 } = {}) {
+  const src = ctx.createBufferSource();
+  src.buffer = ksBuffer(ctx, f, dur + 0.05, { decay, brightness, seed: (seed * 7919 + Math.round(f)) >>> 0 });
+  let node = src;
+  if (body) {
+    const warm = bq(ctx, "lowshelf", 120, 0.7, 2.5);
+    const plate = bq(ctx, "peaking", 210, 1.1, 3);
+    node.connect(warm); warm.connect(plate); node = plate;
+  }
+  const damp = bq(ctx, "lowpass", tone, 0.6);
+  node.connect(damp);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(gain, at);
+  g.gain.setTargetAtTime(0.0001, at + Math.max(0.02, dur - 0.03), 0.035); // gate, not click
+  damp.connect(g);
+  let outNode = g;
+  if (pan && ctx.createStereoPanner) {
+    const sp = ctx.createStereoPanner();
+    sp.pan.value = clampPan(pan);
+    g.connect(sp);
+    outNode = sp;
+  }
+  outNode.connect(dest);
+  if (pick && noise) noiseBurst(ctx, dest, noise, { at, peak: pick * gain, hp: 2500, decay: 0.0012 });
+  src.start(at);
+  src.stop(at + dur + 0.15);
+}
+
+/* ============================ instrument patches =========================== */
+// Patches are DATA, not code. Each factory sound is an engine id plus a set of
+// numeric parameters, and the PAD synth editor edits exactly those parameters.
+// Songs persist only the values a user actually changed (sparse overrides), so
+// untouched sounds keep tracking the factory design and songs saved before the
+// editor existed (no overrides at all) render exactly as they always did.
+//
+// Engines: subtractive (osc/filter/env), fm (2-op), organ (drawbars), pluck
+// (Karplus-Strong). Between them they cover all 14 factory sounds.
+
+const vnorm = (voices) => 1 / Math.sqrt(voices);
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+export const WAVES = ["sine", "triangle", "sawtooth", "square"];
+export const FILTER_TYPES = ["lowpass", "highpass", "bandpass"];
+
+/** One editable parameter. `unit` drives both display formatting and the control type. */
+const P = (key, label, min, max, step, unit) => ({ key, label, min, max, step, unit });
+
+const AMP_PARAMS = [
+  P("attack", "Attack", 0.001, 2, 0.001, "s"),
+  P("decay", "Decay", 0.01, 3, 0.01, "s"),
+  P("sustain", "Sustain", 0, 1, 0.01, "pct"),
+  P("release", "Release", 0.02, 3, 0.01, "s"),
+  P("level", "Level", 0.005, 0.6, 0.005, "amp"),
+];
+
+const FILTER_PARAMS = [
+  P("type", "Type", 0, 2, 1, "filtertype"),
+  P("cutoff", "Cutoff", 60, 16000, 10, "hz"),
+  P("keyTrack", "Key follow", 0, 1.5, 0.01, "x"),
+  P("q", "Resonance", 0.1, 14, 0.1, "x"),
+  P("envAmount", "Env amount", -6000, 6000, 25, "hz"),
+  P("envTime", "Env time", 0.01, 1.5, 0.01, "s"),
+  P("velToCutoff", "Vel → cutoff", 0, 6000, 25, "hz"),
+  P("envVel", "Vel → env", 0, 1, 0.01, "pct"),
+  P("lfoRate", "LFO rate", 0, 8, 0.01, "hz"),
+  P("lfoDepth", "LFO depth", 0, 3000, 10, "hz"),
+];
+
+export const ENGINE_SCHEMA = {
+  subtractive: [
+    { key: "osc", label: "Oscillators", params: [
+      P("wave1", "Wave 1", 0, 3, 1, "wave"),
+      P("level1", "Level 1", 0, 1, 0.01, "pct"),
+      P("wave2", "Wave 2", 0, 3, 1, "wave"),
+      P("level2", "Level 2", 0, 1, 0.01, "pct"),
+      P("detune2", "Osc 2 detune", -1200, 1200, 1, "ct"),
+      P("sub", "Sub oscillator", 0, 1, 0.01, "pct"),
+      P("noise", "Noise", 0, 0.3, 0.002, "pct"),
+      P("drive", "Drive", 1, 4, 0.05, "x"),
+    ] },
+    { key: "unison", label: "Unison", params: [
+      P("voices", "Voices", 1, 7, 1, "int"),
+      P("detune", "Detune", 0, 40, 0.5, "ct"),
+      P("spread", "Stereo spread", 0, 1, 0.01, "pct"),
+    ] },
+    { key: "filter", label: "Filter", params: FILTER_PARAMS },
+    { key: "amp", label: "Amplitude envelope", params: AMP_PARAMS },
+    { key: "vib", label: "Vibrato", params: [
+      P("vibRate", "Rate", 0, 10, 0.1, "hz"),
+      P("vibCents", "Depth", 0, 40, 0.5, "ct"),
+      P("vibDelay", "Onset delay", 0, 1.5, 0.01, "s"),
+    ] },
+    { key: "transient", label: "Attack transient", params: [
+      P("trLevel", "Level", 0, 0.3, 0.005, "pct"),
+      P("trHp", "High-pass", 100, 8000, 50, "hz"),
+      P("trDecay", "Decay", 0.0005, 0.05, 0.0005, "s"),
+    ] },
+    { key: "out", label: "Output", params: [P("chorus", "Chorus", 0, 1, 0.01, "pct")] },
+  ],
+  fm: [
+    { key: "fm", label: "FM operator", params: [
+      P("ratio", "Mod ratio", 0.25, 20, 0.0001, "x"),
+      P("index", "Mod index", 0, 20, 0.1, "x"),
+      P("indexDecay", "Index decay", 0.005, 2, 0.005, "s"),
+      P("indexVel", "Vel → index", 0.2, 3, 0.05, "x"),
+    ] },
+    { key: "ot", label: "Overtone", params: [
+      P("otRatio", "Ratio", 0.5, 12, 0.0001, "x"),
+      P("otLevel", "Level", 0, 0.5, 0.005, "pct"),
+      P("otDecay", "Decay", 0.01, 2, 0.01, "s"),
+    ] },
+    { key: "amp", label: "Amplitude envelope", params: [...AMP_PARAMS, P("velCurve", "Vel curve", 0.4, 2.5, 0.05, "x")] },
+    { key: "out", label: "Output", params: [
+      P("panSpread", "Pan spread", 0, 0.6, 0.01, "pct"),
+      P("chorus", "Chorus", 0, 1, 0.01, "pct"),
+    ] },
+  ],
+  organ: [
+    { key: "drawbars", label: "Drawbars", params: [
+      P("d1", "16′", 0, 1, 0.01, "pct"), P("d2", "5⅓′", 0, 1, 0.01, "pct"), P("d3", "8′", 0, 1, 0.01, "pct"),
+      P("d4", "4′", 0, 1, 0.01, "pct"), P("d5", "2⅔′", 0, 1, 0.01, "pct"), P("d6", "2′", 0, 1, 0.01, "pct"),
+      P("d7", "1⅗′", 0, 1, 0.01, "pct"), P("d8", "1⅓′", 0, 1, 0.01, "pct"), P("d9", "1′", 0, 1, 0.01, "pct"),
+    ] },
+    { key: "perc", label: "Percussion & click", params: [
+      P("percLevel", "Percussion", 0, 0.3, 0.005, "pct"),
+      P("percRatio", "Perc harmonic", 1, 8, 1, "x"),
+      P("percDecay", "Perc decay", 0.01, 1, 0.01, "s"),
+      P("clickLevel", "Key click", 0, 0.2, 0.005, "pct"),
+      P("vibRate", "Vibrato rate", 0, 10, 0.1, "hz"),
+      P("vibCents", "Vibrato depth", 0, 30, 0.5, "ct"),
+    ] },
+    { key: "amp", label: "Amplitude envelope", params: AMP_PARAMS },
+    { key: "out", label: "Output", params: [P("chorus", "Chorus", 0, 1, 0.01, "pct")] },
+  ],
+  pluck: [
+    { key: "string", label: "String", params: [
+      P("ring", "Sustain", 0.97, 0.9995, 0.0005, "x"),
+      P("brightness", "Brightness", 0, 1, 0.01, "pct"),
+      P("brightVel", "Vel → brightness", 0, 1, 0.01, "pct"),
+      P("tone", "Damping", 400, 8000, 50, "hz"),
+      P("toneVel", "Vel → damping", 0, 4000, 50, "hz"),
+      P("pick", "Pick attack", 0, 0.4, 0.01, "pct"),
+      P("thump", "Body thump", 0, 0.3, 0.005, "pct"),
+    ] },
+    { key: "artic", label: "Articulation", params: [
+      P("strum", "Strum spread", 0, 0.08, 0.002, "s"),
+      P("panSpread", "Pan spread", 0, 0.6, 0.01, "pct"),
+      P("durAdd", "Ring past note", 0, 2, 0.05, "s"),
+      P("durMax", "Max length", 0.5, 5, 0.1, "s"),
+    ] },
+    { key: "out", label: "Output", params: [
+      P("level", "Level", 0.02, 1.2, 0.01, "amp"),
+      P("chorus", "Chorus", 0, 1, 0.01, "pct"),
+    ] },
+  ],
+};
+
+// Keys the editor may override, per engine (anything else stays factory-fixed).
+const SCHEMA_KEYS = Object.fromEntries(
+  Object.entries(ENGINE_SCHEMA).map(([eng, secs]) => [eng, new Set(secs.flatMap((s) => s.params.map((p) => p.key)))])
+);
+
+const SUB = (params) => ({ engine: "subtractive", params });
+const FM = (params) => ({ engine: "fm", params });
+const ORG = (params) => ({ engine: "organ", params });
+const PLK = (params) => ({ engine: "pluck", params });
+
+/* Factory parameter sets — these reproduce the S1 voices exactly. */
+export const FACTORY_PATCHES = {
+  chord: {
+    pad: SUB({
+      wave1: 2, level1: 1, wave2: 0, level2: 0, detune2: 0, sub: 0.5, noise: 0, noiseTone: 1900, drive: 1,
+      voices: 4, detune: 11, spread: 0.65,
+      type: 0, cutoff: 620, keyTrack: 0.5, q: 0.9, envAmount: -1500, envTime: 0.3, velToCutoff: 1500, envVel: 1,
+      lfoRate: 0.13, lfoDepth: 170,
+      attack: 0.05, attackKey: 0, decay: 0.4, sustain: 0.8, release: 0.55, level: 0.1,
+      vibRate: 0, vibCents: 0, vibDelay: 0.2,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.4,
+    }),
+    strings: SUB({
+      wave1: 2, level1: 1, wave2: 0, level2: 0, detune2: 0, sub: 0, noise: 0, noiseTone: 1900, drive: 1,
+      voices: 5, detune: 16, spread: 0.85,
+      type: 0, cutoff: 2900, keyTrack: 0.6, q: 0.6, envAmount: -700, envTime: 0.25, velToCutoff: 700, envVel: 1,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.11, attackKey: 0.3, decay: 0.3, sustain: 0.85, release: 0.6, level: 0.085,
+      vibRate: 5.1, vibCents: 5, vibDelay: 0.25,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.5,
+    }),
+    epiano: FM({
+      ratio: 14, index: 6.5, indexDecay: 0.045, indexVel: 1.4,
+      otRatio: 2, otLevel: 0.11, otDecay: 0.4,
+      attack: 0.0025, decay: 1.6, decayAdd: 0.4, sustain: 0.22, release: 0.35, level: 0.17, velCurve: 1.2,
+      panSpread: 0.13, chorus: 0.3,
+    }),
+    organ: ORG({
+      d1: 0.65, d2: 0.28, d3: 0.9, d4: 0.45, d5: 0.2, d6: 0.14, d7: 0, d8: 0, d9: 0.16,
+      percLevel: 0.06, percRatio: 3, percDecay: 0.09, clickLevel: 0.05, vibRate: 6.9, vibCents: 4,
+      attack: 0.004, decay: 0.04, sustain: 1, release: 0.085, level: 0.16,
+      chorus: 0.35,
+    }),
+    guitar: PLK({
+      ring: 0.9962, brightness: 0.35, brightVel: 0.45, tone: 3400, toneVel: 1600, pick: 0.12, thump: 0,
+      strum: 0.016, panSpread: 0.22, durAdd: 0.7, durMax: 2.8,
+      level: 0.5, body: 1, seed: 1, chorus: 0,
+    }),
+  },
+  bass: {
+    electric: SUB({
+      wave1: 1, level1: 1, wave2: 2, level2: 0.24, detune2: 0, sub: 0, noise: 0, noiseTone: 1900, drive: 2.2,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 330, keyTrack: 0, q: 1.1, envAmount: 1070, envTime: 0.09, velToCutoff: 0, envVel: 0.85,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.004, attackKey: 0, decay: 0.18, sustain: 0.62, release: 0.14, level: 0.34,
+      vibRate: 0, vibCents: 0, vibDelay: 0.2,
+      trLevel: 0.06, trHp: 700, trLp: 3000, trDecay: 0.002,
+      chorus: 0,
+    }),
+    synth: SUB({
+      wave1: 2, level1: 1, wave2: 3, level2: 0.35, detune2: -1200, sub: 0, noise: 0, noiseTone: 1900, drive: 1.6,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 255, keyTrack: 0, q: 5, envAmount: 2045, envTime: 0.13, velToCutoff: 0, envVel: 0.78,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.003, attackKey: 0, decay: 0.2, sustain: 0.5, release: 0.12, level: 0.32,
+      vibRate: 0, vibCents: 0, vibDelay: 0.2,
+      trLevel: 0, trHp: 700, trLp: 3000, trDecay: 0.002,
+      chorus: 0,
+    }),
+    upright: PLK({
+      ring: 0.9915, brightness: 0.22, brightVel: 0.2, tone: 720, toneVel: 0, pick: 0.05, thump: 0.12,
+      strum: 0, panSpread: 0, durAdd: 0, durMax: 3.5,
+      level: 0.62, body: 1, seed: 3, chorus: 0,
+    }),
+    sub: SUB({
+      wave1: 0, level1: 1, wave2: 0, level2: 0, detune2: 0, sub: 0, noise: 0, noiseTone: 1900, drive: 1.35,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 8000, keyTrack: 0, q: 0.7, envAmount: 0, envTime: 0.1, velToCutoff: 0, envVel: 0,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.006, attackKey: 0, decay: 0.12, sustain: 0.85, release: 0.16, level: 0.34,
+      vibRate: 0, vibCents: 0, vibDelay: 0.2,
+      trLevel: 0.03, trHp: 900, trLp: 2400, trDecay: 0.0015,
+      chorus: 0,
+    }),
+  },
+  lead: {
+    synth: SUB({
+      wave1: 2, level1: 1, wave2: 0, level2: 0, detune2: 0, sub: 0, noise: 0, noiseTone: 1900, drive: 1,
+      voices: 3, detune: 9, spread: 0.5,
+      type: 0, cutoff: 2300, keyTrack: 0.8, q: 1.4, envAmount: -2800, envTime: 0.06, velToCutoff: 1600, envVel: 0.57,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.006, attackKey: 0, decay: 0.15, sustain: 0.72, release: 0.18, level: 0.15,
+      vibRate: 5.4, vibCents: 7, vibDelay: 0.18,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.22,
+    }),
+    square: SUB({
+      wave1: 3, level1: 1, wave2: 0, level2: 0, detune2: 0, sub: 0, noise: 0, noiseTone: 1900, drive: 1,
+      voices: 2, detune: 7, spread: 0.4,
+      type: 0, cutoff: 3600, keyTrack: 0, q: 0.8, envAmount: 0, envTime: 0.1, velToCutoff: 0, envVel: 0,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.004, attackKey: 0, decay: 0.1, sustain: 0.8, release: 0.12, level: 0.13,
+      vibRate: 5.8, vibCents: 4, vibDelay: 0.22,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0,
+    }),
+    flute: SUB({
+      wave1: 0, level1: 1, wave2: 1, level2: 0.3, detune2: 0, sub: 0, noise: 0.028, noiseTone: 1900, drive: 1,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 8000, keyTrack: 0, q: 0.7, envAmount: 0, envTime: 0.1, velToCutoff: 0, envVel: 0,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.055, attackKey: 0, decay: 0.1, sustain: 0.88, release: 0.2, level: 0.13,
+      vibRate: 5.3, vibCents: 8, vibDelay: 0.3,
+      trLevel: 0.05, trHp: 2800, trLp: 0, trDecay: 0.012,
+      chorus: 0,
+    }),
+    bell: FM({
+      ratio: 3.5307, index: 3.4, indexDecay: 0.35, indexVel: 1,
+      otRatio: 2.76, otLevel: 0.05, otDecay: 0.5,
+      attack: 0.002, decay: 2.2, decayAdd: 0.8, sustain: 0.12, release: 1.1, level: 0.15, velCurve: 1,
+      panSpread: 0, chorus: 0.2,
+    }),
+    guitar: PLK({
+      ring: 0.9935, brightness: 0.45, brightVel: 0.4, tone: 4200, toneVel: 0, pick: 0.14, thump: 0,
+      strum: 0, panSpread: 0, durAdd: 0.4, durMax: 3.6,
+      level: 0.42, body: 1, seed: 5, chorus: 0,
+    }),
+  },
+};
+
+/**
+ * Merge a factory patch with a song's sparse overrides and clamp every value
+ * to its schema range. Unknown keys, non-numbers and NaN are ignored, so a
+ * corrupted or hand-edited song JSON can never produce a broken voice.
+ */
+export function resolvePatch(family, sound, overrides) {
+  const fam = FACTORY_PATCHES[family] || FACTORY_PATCHES.chord;
+  const fac = fam[sound] || fam[Object.keys(fam)[0]];
+  const params = { ...fac.params };
+  const allowed = SCHEMA_KEYS[fac.engine];
+  if (overrides && allowed) {
+    for (const k of Object.keys(overrides)) {
+      const v = overrides[k];
+      if (allowed.has(k) && typeof v === "number" && Number.isFinite(v)) params[k] = v;
+    }
+  }
+  for (const sec of ENGINE_SCHEMA[fac.engine] || []) {
+    for (const pr of sec.params) {
+      const v = params[pr.key];
+      params[pr.key] = pr.unit === "wave" || pr.unit === "filtertype" || pr.unit === "int"
+        ? clamp(Math.round(v), pr.min, pr.max)
+        : clamp(v, pr.min, pr.max);
+    }
+  }
+  return { engine: fac.engine, params };
+}
+
+/** The default (unedited) value of one parameter — used by the editor's reset. */
+export function factoryValue(family, sound, key) {
+  const fam = FACTORY_PATCHES[family] || {};
+  const fac = fam[sound];
+  return fac ? fac.params[key] : undefined;
+}
+
+/* ------------------------------- engines --------------------------------- */
+
+function renderSubtractive(ctx, dest, midi, at, dur, vel, p, o = {}) {
+  const f = mtof(midi);
+  const voices = Math.max(1, Math.round(p.voices));
+
+  // Filter: settles at cutoff (+key follow, +velocity), starting envAmount away.
+  const settled = clamp(p.cutoff + p.keyTrack * f + p.velToCutoff * vel, 30, 20000);
+  const start = clamp(settled + p.envAmount * (1 - p.envVel + p.envVel * vel), 30, 20000);
+  const filt = bq(ctx, FILTER_TYPES[p.type] || "lowpass", start, Math.max(0.05, p.q));
+  if (Math.abs(settled - start) > 1) filt.frequency.setTargetAtTime(settled, at + 0.02, Math.max(0.01, p.envTime));
+
+  // Low notes bow in slower when attackKey > 0 (string/pad realism).
+  const atk = p.attackKey > 0
+    ? clamp(p.attack * Math.pow(220 / f, p.attackKey), p.attack * 0.55, p.attack * 1.55)
+    : p.attack;
+  const env = ctx.createGain();
+  const stop = adsr(env.gain, at, dur, {
+    a: atk, d: p.decay, s: p.sustain, r: p.release,
+    peak: Math.max(0.0005, p.level * vel * vnorm(voices)),
+  });
+
+  let node = filt;
+  if (p.drive > 1.01) { const ws = ctx.createWaveShaper(); ws.curve = driveCurve(p.drive); node.connect(ws); node = ws; }
+  node.connect(env).connect(dest);
+
+  const oscs = [];
+  if (p.level1 > 0.001) {
+    const g1 = ctx.createGain(); g1.gain.value = p.level1; g1.connect(filt);
+    const u = unison(ctx, g1, { f, type: WAVES[p.wave1], voices, detune: p.detune, spread: p.spread });
+    u.start(at); u.stop(stop);
+    oscs.push(...u.oscs);
+  }
+  if (p.level2 > 0.001) {
+    const o2 = ctx.createOscillator();
+    o2.type = WAVES[p.wave2]; o2.frequency.value = f; o2.detune.value = p.detune2;
+    const g2 = ctx.createGain(); g2.gain.value = p.level2;
+    o2.connect(g2).connect(filt);
+    o2.start(at); o2.stop(stop);
+    oscs.push(o2);
+  }
+  if (p.sub > 0.001) {
+    const sb = ctx.createOscillator(); sb.type = "sine"; sb.frequency.value = f / 2;
+    const sg = ctx.createGain(); sg.gain.value = p.sub;
+    sb.connect(sg).connect(filt);
+    sb.start(at); sb.stop(stop);
+  }
+  if (p.noise > 0.0005 && o.noise) { // breath / air bed, riding the amp envelope
+    const ns = ctx.createBufferSource(); ns.buffer = o.noise; ns.loop = true;
+    const bp = bq(ctx, "bandpass", clamp(p.noiseTone || 1900, 100, 12000), 0.8);
+    const ng = ctx.createGain();
+    adsr(ng.gain, at, dur, { a: atk, d: p.decay, s: p.sustain, r: Math.min(p.release, 0.4), peak: p.noise * vel });
+    ns.connect(bp).connect(ng).connect(dest);
+    ns.start(at, (at * 3.7) % 0.5);
+    ns.stop(stop);
+  }
+  if (p.vibCents > 0.1 && p.vibRate > 0.01 && oscs.length) {
+    vibrato(ctx, oscs, { rate: p.vibRate, cents: p.vibCents, delay: p.vibDelay, at, stop });
+  }
+  if (p.lfoDepth > 0.5 && p.lfoRate > 0.001) {
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = p.lfoRate + (midi % 5) * 0.011; // per-note offset: pads never phase in lockstep
+    const lg = ctx.createGain(); lg.gain.value = p.lfoDepth;
+    lfo.connect(lg).connect(filt.frequency);
+    lfo.start(at); lfo.stop(stop);
+  }
+  if (p.trLevel > 0.0005) {
+    noiseBurst(ctx, dest, o.noise, { at, peak: p.trLevel * vel, hp: p.trHp, lp: p.trLp || 0, decay: p.trDecay });
+  }
+}
+
+function renderFM(ctx, dest, midi, at, dur, vel, p, o = {}) {
+  const f = mtof(midi);
+  const car = ctx.createOscillator(); car.type = "sine"; car.frequency.value = f;
+  const mod = ctx.createOscillator(); mod.type = "sine"; mod.frequency.value = f * p.ratio;
+  const mg = ctx.createGain();
+  mg.gain.setValueAtTime(f * p.index * Math.pow(vel, p.indexVel), at);
+  mg.gain.setTargetAtTime(0.0001, at + 0.001, Math.max(0.005, p.indexDecay)); // strike brightness softens fast
+  mod.connect(mg).connect(car.frequency);
+
+  const env = ctx.createGain();
+  const stop = adsr(env.gain, at, dur, {
+    a: p.attack, d: Math.min(p.decay, dur + (p.decayAdd || 0)), s: p.sustain, r: p.release,
+    peak: Math.max(0.0005, p.level * Math.pow(vel, p.velCurve)),
+  });
+  car.connect(env);
+
+  if (p.otLevel > 0.001) {
+    const ov = ctx.createOscillator(); ov.type = "sine"; ov.frequency.value = f * p.otRatio;
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(p.otLevel * vel, at);
+    og.gain.setTargetAtTime(0.0001, at + 0.01, Math.max(0.01, p.otDecay));
+    ov.connect(og).connect(env);
+    ov.start(at); ov.stop(stop);
+  }
+  if (p.panSpread > 0.001 && ctx.createStereoPanner) {
+    const pan = ctx.createStereoPanner();
+    pan.pan.value = clampPan(((o.ndx || 0) % 2 ? -1 : 1) * p.panSpread);
+    env.connect(pan).connect(dest);
+  } else env.connect(dest);
+
+  car.start(at); car.stop(stop);
+  mod.start(at); mod.stop(stop);
+}
+
+const ORGAN_RATIOS = [0.5, 1.5, 1, 2, 3, 4, 5, 6, 8]; // 16′ 5⅓′ 8′ 4′ 2⅔′ 2′ 1⅗′ 1⅓′ 1′
+
+function renderOrgan(ctx, dest, midi, at, dur, vel, p, o = {}) {
+  const f = mtof(midi);
+  const levels = [p.d1, p.d2, p.d3, p.d4, p.d5, p.d6, p.d7, p.d8, p.d9];
+  const total = levels.reduce((a, b) => a + b, 0) || 1;
+  const env = ctx.createGain();
+  const stop = adsr(env.gain, at, dur, {
+    a: p.attack, d: p.decay, s: p.sustain, r: p.release, peak: Math.max(0.0005, p.level * vel),
+  });
+  const oscs = [];
+  ORGAN_RATIOS.forEach((r, i) => {
+    if (levels[i] <= 0.01) return;
+    const osc = ctx.createOscillator(); osc.type = "sine"; osc.frequency.value = f * r;
+    const g = ctx.createGain(); g.gain.value = levels[i] / total;
+    osc.connect(g).connect(env);
+    osc.start(at); osc.stop(stop);
+    oscs.push(osc);
+  });
+  if (p.vibCents > 0.1 && p.vibRate > 0.01 && oscs.length) {
+    vibrato(ctx, oscs, { rate: p.vibRate, cents: p.vibCents, delay: 0.03, at, stop });
+  }
+  env.connect(dest);
+  // Percussion + key click are POST-envelope: the note envelope would scale
+  // these fast transients a second time and bury them.
+  if (p.percLevel > 0.0005) {
+    const perc = ctx.createOscillator(); perc.type = "sine"; perc.frequency.value = f * p.percRatio;
+    const pg = ctx.createGain();
+    pg.gain.setValueAtTime(p.percLevel * vel, at);
+    pg.gain.setTargetAtTime(0.0001, at + 0.002, Math.max(0.01, p.percDecay));
+    perc.connect(pg).connect(dest);
+    perc.start(at); perc.stop(at + 0.5);
+  }
+  if (p.clickLevel > 0.0005) {
+    noiseBurst(ctx, dest, o.noise, { at, peak: p.clickLevel * vel, hp: 1800, decay: 0.0011 });
+  }
+}
+
+function renderPluck(ctx, dest, midi, at, dur, vel, p, o = {}) {
+  const f = mtof(midi);
+  const ndx = o.ndx || 0;
+  playKS(ctx, dest, f, at + ndx * p.strum, Math.min(dur + p.durAdd, p.durMax), {
+    decay: p.ring,
+    brightness: clamp(p.brightness + p.brightVel * vel, 0, 1),
+    gain: p.level * vel,
+    tone: p.tone + p.toneVel * vel,
+    body: (p.body ?? 1) > 0.5,
+    pan: p.panSpread ? (ndx % 2 ? -1 : 1) * p.panSpread : 0,
+    noise: o.noise,
+    pick: p.pick,
+    seed: midi * (p.seed || 1),
+  });
+  if (p.thump > 0.0005) { // felt/finger thump on the front of an upright note
+    const th = ctx.createOscillator(); th.type = "sine"; th.frequency.value = Math.max(45, f * 0.5);
+    const tg = ctx.createGain();
+    tg.gain.setValueAtTime(p.thump * vel, at);
+    tg.gain.setTargetAtTime(0.0001, at + 0.002, 0.03);
+    th.connect(tg).connect(dest);
+    th.start(at); th.stop(at + 0.2);
+  }
+}
+
+const ENGINE_RENDER = { subtractive: renderSubtractive, fm: renderFM, organ: renderOrgan, pluck: renderPluck };
+
+/**
+ * Play one note. `o.patch` is a resolved patch ({engine, params}) — when
+ * omitted the factory patch for family/sound is used, so callers that don't
+ * know about the editor keep working.
+ */
+export function playInstrument(family, sound, ctx, dest, midi, at, dur, vel = 1, o = {}) {
+  const patch = o.patch && o.patch.params ? o.patch : resolvePatch(family, sound);
+  const render = ENGINE_RENDER[patch.engine] || renderSubtractive;
+  render(ctx, dest, midi, at, Math.max(0.03, dur), clamp(vel, 0.05, 1.25), patch.params, o);
+}
+
+/* ============================== wave shaping =============================== */
+
+const driveCurves = new Map();
+/** Cached tanh drive curve, normalized so full-scale stays full-scale. */
+export function driveCurve(amount = 2) {
+  const key = Math.round(amount * 100);
+  let c = driveCurves.get(key);
+  if (!c) {
+    const n = 2048;
+    c = new Float32Array(n);
+    const norm = Math.tanh(amount);
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * 2 - 1;
+      c[i] = Math.tanh(x * amount) / norm;
+    }
+    driveCurves.set(key, c);
+  }
+  return c;
+}
+
+/* ============================= drum synthesis ============================== */
+/* Drum hits are synthesized ONCE per (kit, key, sample-rate) into an
+ * AudioBuffer with pure JS math — deterministic, testable, and each hit is a
+ * single BufferSource + gain instead of a pile of oscillator/filter nodes.  */
+
+/** In-place RBJ biquad (lowpass | highpass | bandpass) over a Float32Array. */
+export function biquadApply(x, sr, type, f0, Q = 0.707) {
+  const w = 2 * Math.PI * Math.min(f0, sr * 0.49) / sr;
+  const cw = Math.cos(w), sw = Math.sin(w), alpha = sw / (2 * Q);
+  let b0, b1, b2;
+  if (type === "lowpass") { b0 = (1 - cw) / 2; b1 = 1 - cw; b2 = b0; }
+  else if (type === "highpass") { b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = b0; }
+  else { b0 = alpha; b1 = 0; b2 = -alpha; } // bandpass
+  const a0 = 1 + alpha, a1 = -2 * cw, a2 = 1 - alpha;
+  const c0 = b0 / a0, c1 = b1 / a0, c2 = b2 / a0, d1 = a1 / a0, d2 = a2 / a0;
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (let i = 0; i < x.length; i++) {
+    const y = c0 * x[i] + c1 * x1 + c2 * x2 - d1 * y1 - d2 * y2;
+    x2 = x1; x1 = x[i]; y2 = y1; y1 = y;
+    x[i] = y;
+  }
+  return x;
+}
+
+function normalizeTo(x, peak) {
+  let m = 0;
+  for (let i = 0; i < x.length; i++) { const a = Math.abs(x[i]); if (a > m) m = a; }
+  if (m > 1e-9) { const g = peak / m; for (let i = 0; i < x.length; i++) x[i] *= g; }
+  return x;
+}
+
+function applyDrive(x, amount) {
+  const norm = Math.tanh(amount);
+  for (let i = 0; i < x.length; i++) x[i] = Math.tanh(x[i] * amount) / norm;
+}
+
+function bitcrush(x, bits) {
+  const L = Math.pow(2, bits - 1);
+  for (let i = 0; i < x.length; i++) x[i] = Math.round(x[i] * L) / L;
+}
+
+function fadeIn(x, sr, ms = 1.2) {
+  const n = Math.min(x.length, Math.max(2, Math.round(sr * ms / 1000)));
+  for (let i = 0; i < n; i++) x[i] *= i / n;
+}
+
+function synthKick(sr, p, rand) {
+  const n = Math.ceil((p.dec * 2.2 + 0.1) * sr);
+  const out = new Float32Array(n);
+  let phase = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    const f = p.f1 + (p.f0 - p.f1) * Math.exp(-t / p.pt);
+    phase += (2 * Math.PI * f) / sr;
+    out[i] = Math.sin(phase) * Math.exp(-t / p.dec);
+  }
+  if (p.click) { // beater / click transient
+    const cn = Math.floor(0.005 * sr);
+    for (let i = 0; i < cn && i < n; i++) out[i] += (rand() * 2 - 1) * Math.exp(-i / (0.0011 * sr)) * p.click;
+  }
+  if (p.drive) applyDrive(out, p.drive);
+  if (p.lp) biquadApply(out, sr, "lowpass", p.lp, 0.7);
+  if (p.bits) bitcrush(out, p.bits);
+  fadeIn(out, sr);
+  return normalizeTo(out, p.peak);
+}
+
+function synthSnare(sr, p, rand) {
+  const n = Math.ceil((Math.max((p.ndec || 0.12) * 3, 0.25) + 0.06) * sr);
+  const out = new Float32Array(n);
+  if (p.rim) { // bossa cross-stick: woody ping + a whisper of wires
+    let ph1 = 0, ph2 = 0;
+    for (let i = 0; i < n; i++) {
+      const t = i / sr;
+      ph1 += (2 * Math.PI * 1750) / sr; ph2 += (2 * Math.PI * 420) / sr;
+      out[i] = Math.sin(ph1) * Math.exp(-t / 0.009) * 0.8 + Math.sin(ph2) * Math.exp(-t / 0.05) * 0.55;
+    }
+    const wires = new Float32Array(n);
+    for (let i = 0; i < n; i++) wires[i] = (rand() * 2 - 1) * Math.exp(-(i / sr) / 0.025);
+    biquadApply(wires, sr, "highpass", 2600, 0.8);
+    for (let i = 0; i < n; i++) out[i] += wires[i] * 0.4;
+    fadeIn(out, sr, 0.6);
+    return normalizeTo(out, p.peak);
+  }
+  // shell: two detuned partials with a fast pitch settle
+  let ph1 = 0, ph2 = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    const bend = 1 + 0.06 * Math.exp(-t / 0.03);
+    ph1 += (2 * Math.PI * p.tone * bend) / sr;
+    ph2 += (2 * Math.PI * p.tone * 1.78 * bend) / sr;
+    out[i] = (Math.sin(ph1) * 0.6 + Math.sin(ph2) * 0.35) * Math.exp(-t / 0.055) * p.toneAmt;
+  }
+  // wires: snappy dual-stage noise
+  const noiz = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    noiz[i] = (rand() * 2 - 1) * (Math.exp(-t / 0.012) * 0.7 + Math.exp(-t / p.ndec) * 0.55);
+  }
+  biquadApply(noiz, sr, "bandpass", 1800, 0.6);
+  biquadApply(noiz, sr, "highpass", p.hp, 0.75);
+  for (let i = 0; i < n; i++) out[i] += noiz[i] * p.noiseAmt * 2.2;
+  applyDrive(out, 1.35);
+  if (p.lp) biquadApply(out, sr, "lowpass", p.lp, 0.7);
+  if (p.bits) bitcrush(out, p.bits);
+  fadeIn(out, sr, 0.6);
+  return normalizeTo(out, p.peak);
+}
+
+const HAT_RATIOS = [2, 3, 4.16, 5.43, 6.79, 8.21]; // classic 808 metallic cluster
+
+function synthHat(sr, p, open, rand) {
+  const len = open ? 0.55 : 0.11;
+  const n = Math.ceil(len * sr);
+  const out = new Float32Array(n);
+  const incs = HAT_RATIOS.map((r) => (p.base * r) / sr);
+  const phases = HAT_RATIOS.map((_, i) => (i * 0.37) % 1);
+  for (let i = 0; i < n; i++) {
+    let v = 0;
+    for (let k = 0; k < incs.length; k++) {
+      phases[k] += incs[k]; if (phases[k] >= 1) phases[k] -= 1;
+      v += phases[k] < 0.5 ? 1 : -1;
+    }
+    if (p.noiseMix) v = v * (1 - p.noiseMix) + (rand() * 2 - 1) * 6 * p.noiseMix;
+    out[i] = v / 6;
+  }
+  biquadApply(out, sr, "bandpass", p.bp, 1.1);
+  biquadApply(out, sr, "highpass", p.hp, 0.8);
+  const t1 = open ? 0.11 : 0.02, t2 = open ? 0.3 : 0.05;
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    out[i] *= Math.exp(-t / t1) * 0.85 + Math.exp(-t / t2) * 0.25;
+  }
+  if (p.lp) biquadApply(out, sr, "lowpass", p.lp, 0.7);
+  if (p.bits) bitcrush(out, p.bits);
+  fadeIn(out, sr, 0.5);
+  return normalizeTo(out, open ? p.peakOpen : p.peak);
+}
+
+const CRASH_RATIOS = [2, 2.89, 3.41, 4.16, 5.43, 6.79, 8.21, 9.7];
+
+function synthCrash(sr, p, rand) {
+  const n = Math.ceil((p.len + 0.2) * sr);
+  const out = new Float32Array(n);
+  const incs = CRASH_RATIOS.map((r) => (p.base * r) / sr);
+  const phases = CRASH_RATIOS.map((_, i) => (i * 0.61) % 1);
+  for (let i = 0; i < n; i++) {
+    let v = 0;
+    for (let k = 0; k < incs.length; k++) {
+      phases[k] += incs[k]; if (phases[k] >= 1) phases[k] -= 1;
+      v += phases[k] < 0.5 ? 1 : -1;
+    }
+    out[i] = (v / 8) * 0.55 + (rand() * 2 - 1) * 0.45;
+  }
+  biquadApply(out, sr, "highpass", p.hp, 0.7);
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    out[i] *= Math.exp(-t / (p.len * 0.3)) * 0.5 + Math.exp(-t / p.len) * 0.55;
+  }
+  if (p.lp) biquadApply(out, sr, "lowpass", p.lp, 0.7);
+  fadeIn(out, sr, 0.6);
+  return normalizeTo(out, p.peak);
+}
+
+function synthTom(sr, p, base, rand) {
+  const n = Math.ceil((p.dec * 2.4 + 0.08) * sr);
+  const out = new Float32Array(n);
+  let phase = 0, ph2 = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    const f = base + base * 0.35 * Math.exp(-t / 0.08);
+    phase += (2 * Math.PI * f) / sr;
+    ph2 += (2 * Math.PI * f * 1.5) / sr;
+    out[i] = (Math.sin(phase) + Math.sin(ph2) * 0.28) * Math.exp(-t / p.dec);
+  }
+  const skin = new Float32Array(Math.min(n, Math.ceil(0.02 * sr)));
+  for (let i = 0; i < skin.length; i++) skin[i] = (rand() * 2 - 1) * Math.exp(-(i / sr) / 0.006);
+  biquadApply(skin, sr, "bandpass", base * 3.2, 1);
+  for (let i = 0; i < skin.length; i++) out[i] += skin[i] * 0.4;
+  applyDrive(out, 1.25);
+  if (p.lp) biquadApply(out, sr, "lowpass", p.lp, 0.7);
+  fadeIn(out, sr);
+  return normalizeTo(out, p.peak);
+}
+
+const DRUM_PARAMS = {
+  acoustic: {
+    kick: { f0: 165, f1: 54, pt: 0.035, dec: 0.17, click: 0.5, drive: 1.5, peak: 0.85 },
+    snare: { tone: 196, hp: 1000, ndec: 0.14, toneAmt: 0.7, noiseAmt: 1, peak: 0.78 },
+    hat: { base: 40, bp: 10000, hp: 7200, noiseMix: 0.3, peak: 0.42, peakOpen: 0.4 },
+    crash: { base: 62, hp: 4200, len: 1.5, peak: 0.5 },
+    tom: { dec: 0.3, peak: 0.66 },
+  },
+  "808": {
+    kick: { f0: 120, f1: 41, pt: 0.05, dec: 0.55, click: 0.16, drive: 2.4, peak: 0.9 },
+    snare: { tone: 180, hp: 1600, ndec: 0.1, toneAmt: 0.5, noiseAmt: 1, peak: 0.74 },
+    hat: { base: 40, bp: 10500, hp: 8200, noiseMix: 0, peak: 0.38, peakOpen: 0.36 },
+    crash: { base: 58, hp: 5200, len: 1.9, peak: 0.46 },
+    tom: { dec: 0.48, peak: 0.68 },
+  },
+  electronic: {
+    kick: { f0: 210, f1: 48, pt: 0.02, dec: 0.15, click: 0.8, drive: 1.9, peak: 0.9 },
+    snare: { tone: 220, hp: 1400, ndec: 0.19, toneAmt: 0.62, noiseAmt: 1.05, peak: 0.8 },
+    hat: { base: 44, bp: 9800, hp: 7800, noiseMix: 0.15, peak: 0.42, peakOpen: 0.4 },
+    crash: { base: 66, hp: 4600, len: 1.35, peak: 0.5 },
+    tom: { dec: 0.24, peak: 0.66 },
+  },
+  bossa: {
+    kick: { f0: 110, f1: 48, pt: 0.03, dec: 0.13, click: 0.1, drive: 1.2, peak: 0.6 },
+    snare: { rim: true, peak: 0.55 },
+    hat: { base: 38, bp: 8200, hp: 5600, noiseMix: 0.45, peak: 0.3, peakOpen: 0.3 },
+    crash: { base: 55, hp: 3800, len: 1.05, peak: 0.36 },
+    tom: { dec: 0.26, peak: 0.5 },
+  },
+  lofi: {
+    kick: { f0: 130, f1: 44, pt: 0.04, dec: 0.2, click: 0.3, drive: 2.8, lp: 1500, bits: 10, peak: 0.82 },
+    snare: { tone: 175, hp: 900, ndec: 0.13, toneAmt: 0.7, noiseAmt: 0.9, lp: 3800, bits: 9, peak: 0.7 },
+    hat: { base: 40, bp: 8600, hp: 6100, noiseMix: 0.25, lp: 7600, bits: 9, peak: 0.34, peakOpen: 0.32 },
+    crash: { base: 60, hp: 4000, len: 1.2, lp: 6800, peak: 0.4 },
+    tom: { dec: 0.26, lp: 3200, peak: 0.58 },
+  },
+};
+
+const TOM_FREQS = { tomH: 240, tomM: 170, tomL: 115 };
+
+/** Pure sample math for one drum hit — Node-testable, deterministic. */
+export function drumSampleData(sr, kit, key) {
+  const kp = DRUM_PARAMS[kit] || DRUM_PARAMS.acoustic;
+  const rand = mulberry32((kit + "|" + key).split("").reduce((a, c) => (a * 33 + c.charCodeAt(0)) >>> 0, 5381));
+  if (key === "kick") return synthKick(sr, kp.kick, rand);
+  if (key === "snare") return synthSnare(sr, kp.snare, rand);
+  if (key === "hat") return synthHat(sr, kp.hat, false, rand);
+  if (key === "open") return synthHat(sr, kp.hat, true, rand);
+  if (key === "crash") return synthCrash(sr, kp.crash, rand);
+  return synthTom(sr, kp.tom, TOM_FREQS[key] || 170, rand);
+}
+
+const drumBufferCache = new Map(); // `${sr}|${kit}|${key}` -> AudioBuffer
+
+/** Cached AudioBuffer for a drum hit (AudioBuffers are context-independent). */
+export function getDrumBuffer(ctx, kit, key) {
+  const sr = ctx.sampleRate;
+  const ck = sr + "|" + kit + "|" + key;
+  let buf = drumBufferCache.get(ck);
+  if (!buf) {
+    const data = drumSampleData(sr, kit, key);
+    buf = ctx.createBuffer(1, data.length, sr);
+    buf.getChannelData(0).set(data);
+    drumBufferCache.set(ck, buf);
+  }
+  return buf;
+}
+
+/** Trigger one drum hit: a BufferSource + velocity gain. */
+export function playDrumHit(ctx, dest, kit, key, at, vel = 1) {
+  const buf = getDrumBuffer(ctx, kit, key);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const g = ctx.createGain();
+  g.gain.value = Math.max(0.02, vel);
+  src.connect(g).connect(dest);
+  src.start(at);
+  src.stop(at + buf.duration + 0.02);
+}
+
+/* ================================= FX ===================================== */
+
+/**
+ * Reverb impulse data: pre-delay silence, sparse alternating early
+ * reflections, then a noise tail whose high end dies faster than its low end
+ * (progressive one-pole damping) — the "room" the old white-noise burst lacked.
+ */
+export function reverbIRData(sr, { seconds = 1.8, decay = 3.0, predelay = 0.018, damp = 0.5, er = 0.6, seed = 20260718 } = {}) {
+  const rand = mulberry32(seed);
+  const pre = Math.floor(predelay * sr);
+  const len = Math.max(pre + 8, Math.floor(sr * (seconds + predelay)));
+  const chans = [new Float32Array(len), new Float32Array(len)];
+  const taps = [0.011, 0.017, 0.023, 0.031, 0.041, 0.053, 0.067, 0.079];
+  taps.forEach((tsec, i) => {
+    const idx = pre + Math.floor(tsec * sr);
+    if (idx >= len) return;
+    const g = er * Math.pow(0.76, i) * (i % 2 ? -0.6 : 0.6);
+    chans[i % 2][idx] += g;
+    const bleed = idx + Math.floor(0.0013 * sr);
+    if (bleed < len) chans[(i + 1) % 2][bleed] += g * 0.5;
+  });
+  for (let c = 0; c < 2; c++) {
+    let lp = 0;
+    const tail = len - pre;
+    for (let i = pre; i < len; i++) {
+      const p = (i - pre) / tail;
+      const alpha = Math.max(0.02, 0.55 * (1 - damp * p)); // darker as it decays
+      lp += alpha * ((rand() * 2 - 1) - lp);
+      chans[c][i] += lp * Math.pow(1 - p, decay) * 0.7;
+    }
+  }
+  return chans;
+}
+
+const irCache = new Map();
+const IR_CACHE_MAX = 16;
+const q = (v, step) => Math.round((v || 0) / step) * step; // quantize for the cache key
+
+/**
+ * Cached stereo reverb IR as an AudioBuffer. The reverb amount comes from a
+ * continuous 0.01-step slider, so the cache key is quantized (audibly
+ * identical IRs collapse to one entry) and LRU-capped — otherwise sweeping a
+ * reverb slider across renders would retain ~1 MB per distinct value forever.
+ */
+export function makeReverbIR(ctx, opts = {}) {
+  const sr = ctx.sampleRate;
+  const o = {
+    seconds: q(opts.seconds ?? 1.8, 0.15),
+    decay: q(opts.decay ?? 3.0, 0.2),
+    predelay: q(opts.predelay ?? 0.018, 0.005),
+    damp: q(opts.damp ?? 0.5, 0.1),
+    er: q(opts.er ?? 0.6, 0.1),
+    seed: opts.seed ?? 20260718,
+  };
+  const key = sr + "|" + o.seconds + "|" + o.decay + "|" + o.predelay + "|" + o.damp + "|" + o.er + "|" + o.seed;
+  let buf = irCache.get(key);
+  if (buf) { irCache.delete(key); irCache.set(key, buf); return buf; } // refresh LRU
+  const [l, rt] = reverbIRData(sr, o);
+  buf = ctx.createBuffer(2, l.length, sr);
+  buf.getChannelData(0).set(l);
+  buf.getChannelData(1).set(rt);
+  irCache.set(key, buf);
+  while (irCache.size > IR_CACHE_MAX) irCache.delete(irCache.keys().next().value);
+  return buf;
+}
+
+/** Wet-only convolution reverb send. */
+export function makeReverbSend(ctx, opts = {}) {
+  const input = ctx.createGain();
+  const conv = ctx.createConvolver();
+  conv.buffer = makeReverbIR(ctx, opts);
+  const out = ctx.createGain();
+  input.connect(conv);
+  conv.connect(out);
+  return { in: input, out };
+}
+
+/**
+ * Wet-only echo send: ping-pong across the stereo field with low/high-pass
+ * filtering in the loop so repeats darken like an analog delay.
+ */
+export function makeEchoSend(ctx, { time = 0.375, fb = 0.35, tone = 2600, hp = 160, pingpong = true } = {}) {
+  const input = ctx.createGain();
+  const out = ctx.createGain();
+  const hpF = bq(ctx, "highpass", hp, 0.7);
+  input.connect(hpF);
+  const clampT = Math.max(0.02, Math.min(2.4, time));
+  const fbAmt = Math.min(0.72, Math.max(0, fb));
+  if (pingpong && ctx.createStereoPanner) {
+    const dL = ctx.createDelay(2.5), dR = ctx.createDelay(2.5);
+    dL.delayTime.value = clampT; dR.delayTime.value = clampT;
+    const pL = ctx.createStereoPanner(); pL.pan.value = -0.65;
+    const pR = ctx.createStereoPanner(); pR.pan.value = 0.65;
+    const lp1 = bq(ctx, "lowpass", tone, 0.6), lp2 = bq(ctx, "lowpass", tone, 0.6);
+    const g1 = ctx.createGain(), g2 = ctx.createGain();
+    g1.gain.value = fbAmt; g2.gain.value = fbAmt;
+    hpF.connect(dL);
+    dL.connect(pL).connect(out);
+    dR.connect(pR).connect(out);
+    dL.connect(lp1).connect(g1).connect(dR);
+    dR.connect(lp2).connect(g2).connect(dL);
+    return { in: input, out, delays: [dL, dR], fbGains: [g1, g2], tone: [lp1, lp2] };
+  }
+  const d = ctx.createDelay(2.5);
+  d.delayTime.value = clampT;
+  const lp = bq(ctx, "lowpass", tone, 0.6);
+  const g = ctx.createGain(); g.gain.value = fbAmt;
+  hpF.connect(d);
+  d.connect(out);
+  d.connect(lp).connect(g).connect(d);
+  return { in: input, out, delays: [d], fbGains: [g], tone: [lp] };
+}
+
+/** Stereo ensemble chorus insert (in → out carries dry + modulated wet). */
+export function makeChorus(ctx, { mix = 0.4, rate = 0.55, depth = 0.0038, base = 0.017 } = {}) {
+  const input = ctx.createGain();
+  const out = ctx.createGain();
+  const dry = ctx.createGain();
+  dry.gain.value = 1 - mix * 0.4;
+  input.connect(dry).connect(out);
+  const wet = ctx.createGain();
+  wet.gain.value = mix * 0.75;
+  const lfo = ctx.createOscillator();
+  lfo.frequency.value = rate;
+  [[-0.6, 1], [0.6, -1]].forEach(([pan, sign]) => {
+    const d = ctx.createDelay(0.08);
+    d.delayTime.value = base;
+    const dg = ctx.createGain();
+    dg.gain.value = depth * sign;
+    lfo.connect(dg).connect(d.delayTime);
+    input.connect(d);
+    if (ctx.createStereoPanner) {
+      const p = ctx.createStereoPanner();
+      p.pan.value = pan;
+      d.connect(p).connect(wet);
+    } else d.connect(wet);
+  });
+  wet.connect(out);
+  lfo.start();
+  return { in: input, out, lfo };
+}
+
+/* =============================== mastering ================================ */
+
+/** Gentle 2.5:1 bus glue — replaces the default DynamicsCompressor squash. */
+export function glueCompressor(ctx) {
+  const c = ctx.createDynamicsCompressor();
+  c.threshold.value = -12;
+  c.knee.value = 8;
+  c.ratio.value = 2.5;
+  c.attack.value = 0.012;
+  c.release.value = 0.2;
+  return c;
+}
+
+/**
+ * Post-render mastering on raw channel data (pure JS, in place):
+ *  1. loudness-normalize toward targetRms (measured over the loudest half of
+ *     50 ms windows so silence and intros don't skew it),
+ *  2. look-ahead brickwall limit (linked channels — same algorithm as the
+ *     live limiter worklet), 3. hard safety clip at the ceiling.
+ * Returns { gain, rms } for diagnostics.
+ */
+export function masterFinalize(channels, sr, {
+  targetRms = 0.14, ceiling = 0.965, lookaheadMs = 3, releaseMs = 120,
+  maxBoost = 3, maxCut = 0.3,
+} = {}) {
+  if (!channels.length || !channels[0].length) return { gain: 1, rms: 0 };
+  const n = channels[0].length;
+  // Loudness measure: 50 ms windows, gated at ≈ −50 dBFS so empty bars in a
+  // sparse arrangement don't dilute the estimate (and section previews match
+  // the same material inside a full-song render), then mean of the loudest
+  // half. maxBoost stays modest so near-silent content is lifted, not slammed.
+  const win = Math.max(1, Math.floor(sr * 0.05));
+  const rmsList = [];
+  for (let start = 0; start + win <= n; start += win) {
+    let acc = 0;
+    for (const ch of channels) for (let i = start; i < start + win; i++) acc += ch[i] * ch[i];
+    const w = Math.sqrt(acc / (win * channels.length));
+    if (w > 0.003) rmsList.push(w);
+  }
+  rmsList.sort((a, b) => b - a);
+  const top = rmsList.slice(0, Math.max(1, Math.ceil(rmsList.length / 2)));
+  const rms = top.length ? top.reduce((a, b) => a + b, 0) / top.length : 0;
+  let gain = rms > 1e-6 ? targetRms / rms : 1;
+  gain = Math.min(maxBoost, Math.max(maxCut, gain));
+
+  // Look-ahead brickwall: the gain target is the MINIMUM gain needed anywhere
+  // in the look-ahead window (sliding-window minimum via a monotonic deque),
+  // so the reduction is fully ramped in BEFORE a transient exits the delay
+  // line — peaks are attenuated smoothly instead of flat-top clipped.
+  const la = Math.max(1, Math.round((sr * lookaheadMs) / 1000));
+  const atk = 1 - Math.exp(-6 / la);       // converges to ~0.25% within the window
+  const rel = 1 - Math.exp(-1 / ((sr * releaseMs) / 1000));
+  const delayBufs = channels.map(() => new Float32Array(la));
+  const ringSize = la + 2;                 // > window span (la+1) so arriving/leaving indices never alias
+  const dval = new Float32Array(ringSize); // desired gain per sample, ring-indexed
+  const cap = la + 3;
+  const dqIdx = new Int32Array(cap);       // monotonic deque of sample indices
+  let qh = 0, qlen = 0;
+  let g = 1, dpos = 0;
+  for (let i = 0; i < n; i++) {
+    let peak = 0;
+    for (const ch of channels) { const v = Math.abs(ch[i] * gain); if (v > peak) peak = v; }
+    const d = peak > ceiling ? ceiling / peak : 1;
+    dval[i % ringSize] = d;
+    while (qlen > 0 && dval[dqIdx[(qh + qlen - 1) % cap] % ringSize] >= d) qlen--;
+    dqIdx[(qh + qlen) % cap] = i; qlen++;
+    if (dqIdx[qh] < i - la) { qh = (qh + 1) % cap; qlen--; }
+    const target = dval[dqIdx[qh] % ringSize];
+    g += (target - g) * (target < g ? atk : rel);
+    for (let c = 0; c < channels.length; c++) {
+      const dl = delayBufs[c];
+      const delayed = dl[dpos];
+      dl[dpos] = channels[c][i] * gain;
+      let v = delayed * g;
+      if (v > ceiling) v = ceiling; else if (v < -ceiling) v = -ceiling;
+      channels[c][i] = v;
+    }
+    if (++dpos >= la) dpos = 0;
+  }
+  return { gain, rms };
+}

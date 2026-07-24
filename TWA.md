@@ -41,8 +41,8 @@ Web Audio + AudioWorklet and runs identically in Android Chrome.
 ```bash
 npm i -g @bubblewrap/cli
 
-# Edit twa-manifest.json: set host, packageId, iconUrl, webManifestUrl.
-bubblewrap init --manifest "https://your-domain.com/manifest.webmanifest"
+# twa-manifest.json is already set to host sxratchpad.com (set your packageId if desired).
+bubblewrap init --manifest "https://sxratchpad.com/manifest.webmanifest"
 bubblewrap build          # produces app-release-signed.aab  (+ app-release-signed.apk)
 ```
 
@@ -59,7 +59,7 @@ Release → Setup → App signing → "App signing key certificate".)
 
 1. Put that SHA-256 fingerprint into `.well-known/assetlinks.json`
    (`sha256_cert_fingerprints`) and into `twa-manifest.json` `fingerprints`.
-2. Redeploy so `https://your-domain.com/.well-known/assetlinks.json` is live.
+2. Redeploy so `https://sxratchpad.com/.well-known/assetlinks.json` is live.
 3. Verify: https://developers.google.com/digital-asset-links/tools/generator
 4. Install the APK and confirm the address bar is gone (verification succeeded).
 

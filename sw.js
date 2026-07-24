@@ -5,12 +5,19 @@
 // is cached so the app still boots fully offline. Cross-origin requests (e.g.
 // user-supplied direct audio URLs) are left untouched.
 
-const CACHE = "sxratch-v3";
+// Note: samples/FluidR3_GM/*.js are NOT pre-cached (≈32 MB) — the fetch
+// handler below caches them on demand the first time the Sampled·GM engine
+// loads one, after which that instrument works offline. They live in their
+// own UNVERSIONED cache: the files are immutable, so a shell version bump
+// must not throw away megabytes of downloaded instruments.
+const CACHE = "sxratch-v13"; // bump when the shell changes so clients refresh
+const SAMPLE_CACHE = "sxratch-samples-v1";
 const SHELL = [
   "/",
   "/index.html",
   "/css/styles.css",
   "/css/studio.css",
+  "/css/decks.css",
   "/js/app.js",
   "/js/audio-engine.js",
   "/js/scratch-processor.js",
@@ -22,11 +29,14 @@ const SHELL = [
   "/js/input.js",
   "/js/practice.js",
   "/js/songbuilder.js",
+  "/js/synth.js",
   "/js/instruments.js",
   "/js/theory.js",
   "/js/midi.js",
   "/js/haptics.js",
   "/js/presets.js",
+  "/js/bpm.js",
+  "/js/midiexport.js",
   "/manifest.webmanifest",
   "/icon.svg",
   "/icon-192.png",
@@ -47,7 +57,7 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== SAMPLE_CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -55,16 +65,27 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
-  if (new URL(req.url).origin !== self.location.origin) return; // don't touch cross-origin audio
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return; // don't touch cross-origin audio
+  const bucket = url.pathname.includes("/samples/") ? SAMPLE_CACHE : CACHE;
   e.respondWith(
     fetch(req)
       .then((res) => {
         if (res && res.ok) {
           const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, copy));
+          // put() can reject (storage quota — sample files are MBs); a failed
+          // cache write must never surface as a failed request.
+          caches.open(bucket).then((c) => c.put(req, copy)).catch(() => {});
         }
         return res;
       })
-      .catch(() => caches.match(req).then((hit) => hit || caches.match("/index.html")))
+      .catch(() => caches.match(req).then((hit) => {
+        if (hit) return hit;
+        // App-shell fallback is for NAVIGATIONS only. Handing index.html to a
+        // code path that asked for a script/sample (e.g. the soundfont loader
+        // offline) would feed HTML to a JS parser instead of failing cleanly.
+        if (req.mode === "navigate") return caches.match("/index.html");
+        return Response.error();
+      }))
   );
 });

@@ -50,15 +50,22 @@ await esbuild.build({
 
 // Stylesheets.
 await esbuild.build({
-  entryPoints: [join(root, "css/styles.css"), join(root, "css/studio.css")],
+  entryPoints: [join(root, "css/styles.css"), join(root, "css/studio.css"), join(root, "css/decks.css")],
   minify: true,
   outdir: join(dist, "css"),
   logLevel: "info",
 });
 
-// Static assets that ship unchanged (file or directory).
+// Static assets that ship unchanged (file or directory). samples/ is the
+// self-hosted FluidR3_GM instrument set (npm run samples) — optional: skipped
+// with a note if it hasn't been fetched, and the app falls back to the CDN.
 for (const f of ["index.html", "manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png", ".well-known"]) {
   await cp(join(root, f), join(dist, f), { recursive: true });
+}
+try {
+  await cp(join(root, "samples"), join(dist, "samples"), { recursive: true });
+} catch {
+  console.warn("  (no samples/ directory — run `npm run samples` to self-host the GM instruments)");
 }
 
 console.log("\n  Built → dist/   (serve with: npm run start:dist)\n");
