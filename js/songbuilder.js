@@ -6,13 +6,13 @@ import { createMetronome } from './metronome.js';
 import { saveSample, loadAllSamples } from './idb-store.js';
 import { encodeMidi } from './midiexport.js';
 import { themeColors, onThemeChange } from './theme.js';
-import { playCol } from './pad-geometry.js';
+import { playCol, fitPage } from './pad-geometry.js';
 import { buildGroove, GROOVE_FOR_TYPE } from './pad-grooves.js';
 import {
   playInstrument, playDrumHit, makeReverbSend, makeEchoSend, makeChorus,
   glueCompressor, masterFinalize, stepRand,
   resolvePatch, factoryValue, ENGINE_SCHEMA, FACTORY_PATCHES, WAVES, FILTER_TYPES,
-  noiseData, mulberry32, chokeSchedule,
+  noiseData, mulberry32, chokeSchedule, duckEnvelope,
 } from './synth.js';
 
 /* SongBuilder — a multi-track backing-track composer for the Vocal Studio.
@@ -119,12 +119,18 @@ export const SongBuilder = (() => {
   let sampleBank = null;     // sampled-instrument engine (lazy; opt-in)
   let useSamples = false;    // false = synth voices (default), true = sampled GM
   const renderCache = new Map(); // memoized offline renders, keyed by a song hash
+  // `hp` is a per-track high-pass corner and `duck` a kick-sidechain depth.
+  // Before these, the ONLY filter on a track was a low-pass, so five
+  // full-range buses stacked their sub-100 Hz skirts into the same octave the
+  // kick and bass live in — the textbook reason a mix reads as amateur however
+  // good the individual voices are. ensureMix() fills missing props from these
+  // defaults, so songs saved before today pick them up with no migration.
   const TRACK_MIX_DEFAULTS = {
-    chords: { volume: 0.82, pan: 0, tone: 0.68, echo: 0.08, reverb: 0.18, mute: false, solo: false },
-    bass: { volume: 0.88, pan: -0.04, tone: 0.54, echo: 0.02, reverb: 0.04, mute: false, solo: false },
-    lead: { volume: 0.78, pan: 0.08, tone: 0.72, echo: 0.16, reverb: 0.20, mute: false, solo: false },
-    drums: { volume: 0.90, pan: 0, tone: 0.74, echo: 0.03, reverb: 0.08, mute: false, solo: false },
-    sampler: { volume: 0.82, pan: 0, tone: 0.70, echo: 0.08, reverb: 0.10, mute: false, solo: false },
+    chords: { volume: 0.82, pan: 0, tone: 0.68, echo: 0.08, reverb: 0.18, hp: 110, duck: 0.22, mute: false, solo: false },
+    bass: { volume: 0.88, pan: -0.04, tone: 0.54, echo: 0.02, reverb: 0.04, hp: 28, duck: 0.30, mute: false, solo: false },
+    lead: { volume: 0.78, pan: 0.08, tone: 0.72, echo: 0.16, reverb: 0.20, hp: 180, duck: 0, mute: false, solo: false },
+    drums: { volume: 0.90, pan: 0, tone: 0.74, echo: 0.03, reverb: 0.08, hp: 30, duck: 0, mute: false, solo: false },
+    sampler: { volume: 0.82, pan: 0, tone: 0.70, echo: 0.08, reverb: 0.10, hp: 60, duck: 0.18, mute: false, solo: false },
   };
   const TRACK_KEYS = Object.keys(TRACK_MIX_DEFAULTS);
 
@@ -325,6 +331,53 @@ export const SongBuilder = (() => {
   let chordQual = 'auto';        // palette quality: 'auto' = diatonic for the degree
   let chordRes = 1;              // default placement length, in bars-worth of steps
   let previewedOnce = false;     // has the user heard the whole song yet?
+  let dragActive = false;        // a grid gesture is in progress
+  let page0 = 0;                 // first VISIBLE step (absolute index)
+  let pagePref = 'auto';         // 'auto' | 1 | 2 | 4 | 'fit'  (bars per page)
+  let followPlayhead = true;     // auto-page during playback
+  let benchWidth = 676;          // px available to the grid; kept by a ResizeObserver
+
+  /**
+   * How much of the section fits on screen at a hittable cell size.
+   *
+   * A 4-bar 16th-note section is 64 steps. At 1280 wide that is 14.8px per
+   * cell — the old layout's answer, and the reason the grid was unusable.
+   * We page instead of shrinking, and never return a cell below the floor.
+   */
+  function pageGeom(s) {
+    const cols = totalSteps(s);
+    const cs = getComputedStyle(document.getElementById('studio') || document.documentElement);
+    const lblw = parseFloat(cs.getPropertyValue('--lblw')) || 62;
+    const gap = parseFloat(cs.getPropertyValue('--gap')) || 4;
+    const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    const minCell = coarse ? 40 : 28;
+    if (pagePref === 'fit') {
+      // No hit-size floor here on purpose — Fit exists for READING the
+      // whole section, not for editing it, so it may go below thumb size.
+      const w = Math.max(3, Math.floor((benchWidth - lblw - gap * (cols + 1)) / cols));
+      return { page0: 0, pageSteps: cols, cellW: w, pages: 1, cols, lblw, gap };
+    }
+    const r = fitPage({
+      availW: benchWidth, lblw, gap,
+      stepsPerBar: stepsPerBar(s), bars: s.bars, minCell,
+      maxBars: pagePref === 'auto' ? 4 : pagePref,
+    });
+    return { ...r, cols, lblw, gap };
+  }
+
+  /** Clamp the page origin to a page boundary inside the section. */
+  function clampPage(s, g) {
+    const maxStart = Math.max(0, Math.ceil(g.cols / g.pageSteps) - 1) * g.pageSteps;
+    page0 = Math.max(0, Math.min(Math.round(page0 / g.pageSteps) * g.pageSteps, maxStart));
+    return page0;
+  }
+
+  function setPage(sec, next) {
+    const g = pageGeom(sec);
+    page0 = next;
+    clampPage(sec, g);
+    renderEditor();
+  }
   let openSynthAdvanced = false; // the inspector's Advanced disclosure, remembered
   let noteCursor = { bass: { row: 0, col: 0 }, lead: { row: 0, col: 0 } };
   let drumCursor = { key: 'kick', col: 0 };
@@ -593,6 +646,40 @@ export const SongBuilder = (() => {
     refreshSharedKeyboard(s);
     renderInspector(s);
     renderNextStep();
+    applyBenchGeometry(s);
+    observeBench();
+  }
+
+  /** Write the fitted cell width so CSS lays the grid out at hit size. */
+  function applyBenchGeometry(sec) {
+    const bench = document.querySelector('.bench');
+    if (!bench) return;
+    const g = pageGeom(sec);
+    bench.style.setProperty('--cell', g.cellW + 'px');
+  }
+
+  let _benchRO = null, _benchReflowTimer = null;
+  /**
+   * Keep the page size honest as the window changes. Debounced, and it never
+   * re-renders mid-drag or for a small change mid-playback \u2014 a refit under
+   * the pointer would move the cells you are drawing on.
+   */
+  function observeBench() {
+    const bench = document.querySelector('.bench');
+    if (!bench) return;
+    const measure = () => {
+      const w = Math.max(120, bench.clientWidth - 16);
+      if (Math.abs(w - benchWidth) < 2) return;
+      const big = Math.abs(w - benchWidth) / Math.max(1, benchWidth) > 0.2;
+      benchWidth = w;
+      if (dragActive) return;
+      if (sectionPlay && !big) return;
+      clearTimeout(_benchReflowTimer);
+      _benchReflowTimer = setTimeout(() => renderEditor(), 120);
+    };
+    if (!_benchRO && typeof ResizeObserver !== 'undefined') _benchRO = new ResizeObserver(measure);
+    if (_benchRO) { try { _benchRO.disconnect(); _benchRO.observe(bench); } catch (e) {} }
+    measure();   // first mount: adopt the real width instead of the guess
   }
 
   /* ---- 1. section strip: the per-section settings you touch while writing --- */
@@ -826,8 +913,40 @@ export const SongBuilder = (() => {
   function buildBenchRuler(s) {
     const ruler = el('div', 'bench-ruler');
     const left = el('div', 'ruler-left');
-    left.append(el('span', 'ruler-stat', `${s.bars} bars`), el('span', 'ruler-stat', `${totalSteps(s)} steps`),
-      el('span', 'ruler-stat', `${NOTE_NAMES[s.key]} major`));
+    const g = pageGeom(s); clampPage(s, g);
+
+    // How much of the section is on screen. Fit shows all of it for reading
+    // and arranging; the numbered options are a CEILING, and the fitter
+    // steps down whenever the cells would fall below hit size.
+    const seg = el('div', 'page-seg');
+    [['auto', 'Auto'], [1, '1'], [2, '2'], [4, '4'], ['fit', 'Fit']].forEach(([v, label]) => {
+      const b = el('button', 'page-btn' + (pagePref === v ? ' active' : ''), label);
+      b.type = 'button';
+      b.title = v === 'fit' ? 'Show the whole section' : v === 'auto' ? 'As much as fits at a comfortable size' : v + ' bar' + (v > 1 ? 's' : '') + ' at a time';
+      b.addEventListener('click', () => { pagePref = v; page0 = 0; renderEditor(); });
+      seg.appendChild(b);
+    });
+
+    const nav = el('div', 'page-nav');
+    const prev = el('button', 'page-arrow', '\u2039'); prev.type = 'button'; prev.title = 'Previous page';
+    prev.disabled = page0 <= 0;
+    prev.addEventListener('click', () => setPage(s, page0 - g.pageSteps));
+    const next = el('button', 'page-arrow', '\u203a'); next.type = 'button'; next.title = 'Next page';
+    next.disabled = page0 + g.pageSteps >= g.cols;
+    next.addEventListener('click', () => setPage(s, page0 + g.pageSteps));
+    const spb = stepsPerBar(s);
+    const barFrom = Math.floor(page0 / spb) + 1;
+    const barTo = Math.min(s.bars, Math.ceil(Math.min(g.cols, page0 + g.pageSteps) / spb));
+    const where = el('span', 'page-where', g.pages > 1 ? 'bars ' + barFrom + '\u2013' + barTo + ' of ' + s.bars : 'all ' + s.bars + ' bars');
+    nav.append(prev, where, next);
+
+    const follow = el('button', 'page-btn' + (followPlayhead ? ' active' : ''), '\u27f3');
+    follow.type = 'button';
+    follow.title = 'Follow the playhead \u2014 turn off to page manually while it plays';
+    follow.setAttribute('aria-pressed', followPlayhead ? 'true' : 'false');
+    follow.addEventListener('click', () => { followPlayhead = !followPlayhead; renderEditor(); });
+
+    left.append(seg, nav, follow, el('span', 'ruler-stat', NOTE_NAMES[s.key] + ' major'));
     // The playing chord name now lives on the ruler, so it is visible on EVERY
     // lane — it used to sit inside the chord grid, i.e. invisible four times
     // out of five once only one lane is mounted.
@@ -1650,18 +1769,20 @@ export const SongBuilder = (() => {
     const cols = totalSteps(s), spb = stepsPerBar(s);
     if (chordSelStep != null && (chordSelStep >= cols || !s.chords[chordSelStep])) chordSelStep = null;
     const grid = el('div', 'seq-grid chord-grid');
-    grid.style.setProperty('--cols', cols);
+    const g = pageGeom(s); clampPage(s, g);
+    const from = page0, to = Math.min(cols, page0 + g.pageSteps);
+    grid.style.setProperty('--cols', to - from);
     grid.appendChild(el('div', 'chord-now')); // playing-chord name during playback
     const cov = chordCoverage(s, cols);
     const strip = el('div', 'chord-name-strip');
-    for (let c = 0; c < cols; c++) {
+    for (let c = from; c < to; c++) {
       const ch = s.chords[c];
-      if (ch) { const lbl = el('div', 'chord-name-cell', ch.name); lbl.style.gridColumn = (c + 2) + ' / span ' + ch.len; strip.appendChild(lbl); }
+      if (ch) { const lbl = el('div', 'chord-name-cell', ch.name); lbl.style.gridColumn = (c - from + 2) + ' / span ' + Math.min(ch.len, to - c); strip.appendChild(lbl); }
     }
     grid.appendChild(strip);
     const row = el('div', 'seq-row');
     row.appendChild(el('span', 'seq-row-label', 'Chords'));
-    for (let c = 0; c < cols; c++) {
+    for (let c = from; c < to; c++) {
       const cv = cov[c];
       let cls = 'seq-cell' + cellMarks(c, s.subdiv, spb);
       if (cv) cls += cv.start ? ' on' : ' on tied';
@@ -1711,6 +1832,7 @@ export const SongBuilder = (() => {
       if (activePadMode !== 'chords') setActivePadMode('chords');
       e.preventDefault();
       beginGesture();
+      dragActive = true;
       drag = { startCol: c, curCol: c };
       try { grid.setPointerCapture(e.pointerId); } catch (x) {}
       paint(c, c);
@@ -1723,6 +1845,7 @@ export const SongBuilder = (() => {
     });
     grid.addEventListener('pointerup', () => {
       if (!drag) return;
+      dragActive = false;
       clearPaint();
       const a = Math.min(drag.startCol, drag.curCol), b = Math.max(drag.startCol, drag.curCol);
       drag = null;
@@ -1743,7 +1866,7 @@ export const SongBuilder = (() => {
     });
     // iOS fires pointercancel on a long-press; without dropping the snapshot
     // the gesture leaves a phantom undo entry that reverts nothing.
-    grid.addEventListener('pointercancel', () => { clearPaint(); if (drag) { drag = null; dropState(); } });
+    grid.addEventListener('pointercancel', () => { clearPaint(); dragActive = false; if (drag) { drag = null; dropState(); } });
   }
 
   // Rebuild the chord keyboard + timeline in place, preserving both scroll positions.
@@ -1779,12 +1902,14 @@ export const SongBuilder = (() => {
     const arr = s[kind];
     const grid = el('div', 'seq-grid ' + (kind === 'bass' ? 'bass-grid' : 'lead-grid'));
     const cols = totalSteps(s), spb = stepsPerBar(s);
-    grid.style.setProperty('--cols', cols);
+    const g = pageGeom(s); clampPage(s, g);
+    const from = page0, to = Math.min(cols, page0 + g.pageSteps);
+    grid.style.setProperty('--cols', to - from);
     const cov = noteCoverage(arr, cols);
     for (let r = MAJOR.length - 1; r >= 0; r--) {
       const rowEl = el('div', 'seq-row');
       rowEl.appendChild(el('span', 'seq-row-label', bassRowName(r, s.key)));
-      for (let c = 0; c < cols; c++) {
+      for (let c = from; c < to; c++) {
         let cls = 'seq-cell' + cellMarks(c, s.subdiv, spb);
         const cv = cov[c];
         if (cv && cv.r === r) cls += cv.start ? ' on' : ' on tied';
@@ -1818,6 +1943,7 @@ export const SongBuilder = (() => {
       refreshSharedKeyboard(s);
       e.preventDefault();
       beginGesture();
+      dragActive = true;
       drag = { row: c.row, startCol: c.col, curCol: c.col };
       try { grid.setPointerCapture(e.pointerId); } catch (x) {}
       paint(c.row, c.col, c.col);
@@ -1830,6 +1956,7 @@ export const SongBuilder = (() => {
     });
     grid.addEventListener('pointerup', () => {
       if (!drag) return;
+      dragActive = false;
       clearPaint();
       const a = Math.min(drag.startCol, drag.curCol), b = Math.max(drag.startCol, drag.curCol), len = b - a + 1, row = drag.row;
       drag = null;
@@ -1841,7 +1968,7 @@ export const SongBuilder = (() => {
       refreshSharedKeyboard(s);
       saveSong();
     });
-    grid.addEventListener('pointercancel', () => { clearPaint(); if (drag) { drag = null; dropState(); } });
+    grid.addEventListener('pointercancel', () => { clearPaint(); dragActive = false; if (drag) { drag = null; dropState(); } });
   }
   function buildBassGrid(s) { return buildNoteGrid(s, 'bass'); }
   function buildLeadGrid(s) { return buildNoteGrid(s, 'lead'); }
@@ -1849,11 +1976,13 @@ export const SongBuilder = (() => {
   function buildDrumGrid(s) {
     const grid = el('div', 'seq-grid drum-grid');
     const cols = totalSteps(s), spb = stepsPerBar(s);
-    grid.style.setProperty('--cols', cols);
+    const g = pageGeom(s); clampPage(s, g);
+    const from = page0, to = Math.min(cols, page0 + g.pageSteps);
+    grid.style.setProperty('--cols', to - from);
     DRUM_ROWS.forEach(r => {
       const rowEl = el('div', 'seq-row');
       rowEl.appendChild(el('span', 'seq-row-label', r.label));
-      for (let c = 0; c < cols; c++) {
+      for (let c = from; c < to; c++) {
         const v0 = drumVal(s.drums[r.key][c]);
         let cls = 'seq-cell' + cellMarks(c, s.subdiv, spb)
           + (v0 ? ' on' : '') + (v0 === 2 ? ' accent' : v0 === 3 ? ' ghost' : '');
@@ -2098,7 +2227,9 @@ export const SongBuilder = (() => {
     if (!s.samplerRows.length) return el('div', 'samp-empty hint', 'No sample rows yet — import from pads, import an audio file, or load the starter kit, then add a row.');
     const grid = el('div', 'seq-grid sampler-grid');
     const cols = totalSteps(s), spb = stepsPerBar(s);
-    grid.style.setProperty('--cols', cols);
+    const g = pageGeom(s); clampPage(s, g);
+    const from = page0, to = Math.min(cols, page0 + g.pageSteps);
+    grid.style.setProperty('--cols', to - from);
     s.samplerRows.forEach(row => {
       const rowEl = el('div', 'seq-row');
       const label = el('span', 'seq-row-label samp-row-label');
@@ -2109,7 +2240,7 @@ export const SongBuilder = (() => {
       label.appendChild(rm);
       rowEl.appendChild(label);
       const cov = samplerCoverage(row.placements, cols);
-      for (let c = 0; c < cols; c++) {
+      for (let c = from; c < to; c++) {
         let cls = 'seq-cell' + cellMarks(c, s.subdiv, spb);
         const cv = cov[c]; if (cv) cls += cv.start ? ' on' : ' on tied';
         const cell = el('button', cls); cell.dataset.rowid = row.id; cell.dataset.col = c;
@@ -2139,6 +2270,7 @@ export const SongBuilder = (() => {
       // repaints the keyboard dock, so no manual refresh here.)
       if (activePadMode !== 'sampler') setActivePadMode('sampler');
       beginGesture();
+      dragActive = true;
       drag = { rowid: c.rowid, startCol: c.col, curCol: c.col };
       try { grid.setPointerCapture(e.pointerId); } catch (x) {}
       paint(c.rowid, c.col, c.col);
@@ -2150,7 +2282,7 @@ export const SongBuilder = (() => {
       paint(drag.rowid, Math.min(drag.startCol, drag.curCol), Math.max(drag.startCol, drag.curCol));
     });
     grid.addEventListener('pointerup', () => {
-      if (!drag) return; clearPaint();
+      if (!drag) return; dragActive = false; clearPaint();
       const a = Math.min(drag.startCol, drag.curCol), b = Math.max(drag.startCol, drag.curCol), len = b - a + 1;
       const row = s.samplerRows.find(r => r.id === drag.rowid); drag = null;
       if (!row) { endGesture(); return; }
@@ -2160,7 +2292,7 @@ export const SongBuilder = (() => {
       const fresh = buildSamplerGrid(s); const sl = grid.scrollLeft; grid.replaceWith(fresh); fresh.scrollLeft = sl;
       saveSong();
     });
-    grid.addEventListener('pointercancel', () => { clearPaint(); if (drag) { drag = null; dropState(); } });
+    grid.addEventListener('pointercancel', () => { clearPaint(); dragActive = false; if (drag) { drag = null; dropState(); } });
   }
 
   /* ---------------- structure ops ---------------- */
@@ -2311,6 +2443,15 @@ export const SongBuilder = (() => {
   function createTrackBus(oc, master, s, track, soloActive) {
     const mix = mixFor(s, track);
     const input = oc.createGain();
+    // Two cascaded Butterworth sections = a real 12 dB/oct corner. One
+    // section leaves too much of the skirt behind to be worth the node.
+    const hpHz = Math.max(20, Math.min(400, mix.hp ?? 20));
+    let head = input;
+    if (hpHz > 22) {
+      const hp1 = oc.createBiquadFilter(); hp1.type = 'highpass'; hp1.frequency.value = hpHz; hp1.Q.value = 0.707;
+      const hp2 = oc.createBiquadFilter(); hp2.type = 'highpass'; hp2.frequency.value = hpHz; hp2.Q.value = 0.707;
+      head.connect(hp1); hp1.connect(hp2); head = hp2;
+    }
     const tone = oc.createBiquadFilter();
     tone.type = 'lowpass';
     // Brighter curve than before: 0.5 ≈ 9 kHz, defaults (~0.7) ≈ 14 kHz, 1 = open.
@@ -2339,8 +2480,12 @@ export const SongBuilder = (() => {
     const gain = oc.createGain();
     const silent = !!mix.mute || (soloActive && !mix.solo);
     gain.gain.value = silent ? 0 : Math.max(0, Math.min(1.2, mix.volume));
-    input.connect(tone);
-    post.connect(gain);
+    head.connect(tone);
+    // A dedicated node for the sidechain, so the volume fader stays a fader.
+    const duck = oc.createGain();
+    duck.gain.value = 1;
+    post.connect(duck);
+    duck.connect(gain);
     gain.connect(master);
 
     if (!silent && mix.echo > 0.005) {
@@ -2372,13 +2517,15 @@ export const SongBuilder = (() => {
       wet.connect(master);
     }
 
-    return { input };
+    return { input, duck, duckAmount: silent ? 0 : Math.max(0, Math.min(0.8, mix.duck || 0)) };
   }
 
   function createSectionBuses(oc, master, s) {
     ensureMix(s);
     const soloActive = TRACK_KEYS.some(k => mixFor(s, k).solo);
-    return Object.fromEntries(TRACK_KEYS.map(k => [k, createTrackBus(oc, master, s, k, soloActive)]));
+    const buses = Object.fromEntries(TRACK_KEYS.map(k => [k, createTrackBus(oc, master, s, k, soloActive)]));
+    buses.soloActive = soloActive;   // the sidechain needs to know
+    return buses;
   }
 
   // Humanized per-step velocity: downbeats lean in, offbeats sit back, plus a
@@ -2409,6 +2556,34 @@ export const SongBuilder = (() => {
     const hAt = (laneSeed, c, scale = 1) => Math.max(0, tAt(c) + hOff(laneSeed, c) * scale);
     // Resolve each lane's patch once per section, not per note.
     const pChords = patchFor(s, 'chords'), pBass = patchFor(s, 'bass'), pLead = patchFor(s, 'lead');
+
+    // --- sidechain: draw the duck BEFORE scheduling anything ---
+    // The times must be the humanised ones the kick actually plays at, not
+    // the nominal grid, and a muted (or solo-excluded) drum lane must not
+    // duck anything — otherwise muting the drums leaves the bass stuttering
+    // for no visible reason.
+    const kickRowIndex = DRUM_ROWS.findIndex(r => r.key === 'kick');
+    const drumsAudible = !mixFor(s, 'drums').mute && !(bus.soloActive && !mixFor(s, 'drums').solo);
+    const kickTimes = [];
+    if (drumsAudible && kickRowIndex >= 0) {
+      (s.drums.kick || []).forEach((on, c) => {
+        if (drumVal(on)) kickTimes.push(hAt(4 + kickRowIndex, c, 0.5) - t);
+      });
+    }
+    if (kickTimes.length) {
+      const secs = sectionSec(s) + 0.6;
+      // Control rate, not audio rate: setValueCurveAtTime interpolates across
+      // the duration, so a 2 kHz curve is inaudibly identical to a 44.1 kHz
+      // one and ~22x cheaper — the full-rate version allocated ~380k floats
+      // per track per section.
+      const CURVE_HZ = 2000;
+      for (const key of ['chords', 'bass', 'lead', 'sampler']) {
+        const b = bus[key];
+        if (!b || !b.duck || !b.duckAmount) continue;
+        const curve = duckEnvelope(kickTimes, secs, CURVE_HZ, { depth: b.duckAmount });
+        try { b.duck.gain.setValueCurveAtTime(curve, t, secs); } catch (e) { /* overlapping curve: leave it flat */ }
+      }
+    }
     s.chords.forEach((ch, c) => { if (ch) voiceChord(oc, bus.chords.input, ch.notes, hAt(1, c), ss * ch.len, s.chordSound, stepVel(s, 1, c), noise, pChords, c); });
     s.bass.forEach((n, c) => { if (n) voiceBass(oc, bus.bass.input, 36 + s.key + MAJOR[n.r], hAt(2, c), ss * n.len, s.bassSound, stepVel(s, 2, c), noise, pBass, c); });
     (s.lead || []).forEach((n, c) => { if (n) voiceLead(oc, bus.lead.input, 72 + s.key + MAJOR[n.r], hAt(3, c), ss * n.len, s.leadSound, stepVel(s, 3, c), noise, pLead, c); });
@@ -2518,29 +2693,24 @@ export const SongBuilder = (() => {
   function runPlayhead() {
     const ac = _getCtx();
     const grids = [...$('#song-editor').querySelectorAll('.seq-grid')].map(g => ({ g, h: g.querySelector('.seq-playhead') }));
-    // Follow by SCROLLING the grid the cursor is in, keeping it comfortably
-    // inside the viewport. Uses the grid's own resolved cell pitch rather
-    // than a JS constant, so it tracks any CSS/breakpoint change for free.
-    function follow(grid, col) {
-      const cs = getComputedStyle(grid);
-      const cell = parseFloat(cs.getPropertyValue('--cell')) || 18;
-      const gap = parseFloat(cs.getPropertyValue('--gap')) || 3;
-      const lbl = parseFloat(cs.getPropertyValue('--lblw')) || 54;
-      const x = lbl + gap + col * (cell + gap);
-      const sl = grid.scrollLeft, w = grid.clientWidth;
-      if (x < sl + 40) grid.scrollLeft = Math.max(0, x - 40);
-      else if (x > sl + w - 40) grid.scrollLeft = x - w + 40;
-    }
+    const geom = pageGeom(song.sections[song.selected]);
     (function loop() {
       const sp = sectionPlay; if (!sp) return;
       let elapsed = ac.currentTime - sp.startAt;
       if (elapsed >= 0) {
         if (sp.loop) elapsed = elapsed % sp.dur;
         else if (elapsed >= sp.dur) { stopSectionPlay(); return; }
-        const { col } = playCol(elapsed, stepSec(sp.s), 0, totalSteps(sp.s));
+        // The playhead is a column index within the VISIBLE page; CSS turns
+        // it into pixels with the same --cell/--gap the cells use.
+        const { col, onPage } = playCol(elapsed, stepSec(sp.s), page0, geom.pageSteps);
+        if (!onPage && followPlayhead && geom.pages > 1) {
+          const want = Math.floor((elapsed / stepSec(sp.s)) / geom.pageSteps) * geom.pageSteps;
+          if (want !== page0) { page0 = want; renderEditor(); return; }
+        }
         grids.forEach(({ g, h }) => {
-          if (h) { g.style.setProperty('--play-col', col.toFixed(3)); h.style.display = 'block'; }
-          follow(g, col);
+          if (!h) return;
+          g.style.setProperty('--play-col', col.toFixed(3));
+          h.style.display = onPage ? 'block' : 'none';
         });
         const step = Math.min(totalSteps(sp.s) - 1, Math.floor(elapsed / stepSec(sp.s)));
         const start = chordStartCovering(sp.s, step);

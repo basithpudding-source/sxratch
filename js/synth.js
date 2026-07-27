@@ -1284,6 +1284,56 @@ export function chokeSchedule(openTimes, closedTimes) {
   });
 }
 
+
+/**
+ * A kick-triggered ducking envelope, as a plain sample array.
+ *
+ * Nothing in the render interacts dynamically: pads, bass and the sampler all
+ * play straight through whatever the kick is doing, which is why the mix reads
+ * as a stack of stems rather than a record. Web Audio's DynamicsCompressor has
+ * no sidechain input, but this is an OFFLINE render — every kick time is known
+ * before a single note is scheduled, so the duck can simply be drawn.
+ *
+ * Shape: an immediate dip at each kick, then an exponential recovery. Returned
+ * as data so its shape is testable without Web Audio; the render feeds it to a
+ * GainNode via setValueCurveAtTime.
+ *
+ * depth 0 returns exactly ones, which is the back-compatibility guarantee —
+ * an untouched song renders bit-identically.
+ */
+export function duckEnvelope(kickTimes, seconds, sr, { depth = 0.3, attack = 0.008, release = 0.13 } = {}) {
+  const n = Math.max(1, Math.ceil(seconds * sr));
+  const out = new Float32Array(n);
+  out.fill(1);
+  if (!(depth > 0) || !kickTimes || !kickTimes.length) return out;
+  const d = Math.max(0, Math.min(0.95, depth));
+  const atk = Math.max(1, Math.round(attack * sr));
+  const rel = Math.max(1e-4, release);
+  const times = [...kickTimes].sort((a, b) => a - b);
+  for (const t of times) {
+    const i0 = Math.round(t * sr);
+    if (i0 >= n) continue;
+    // Dip in over the attack, from wherever the curve currently sits, so
+    // kicks close together do not step back up between them.
+    const start = i0 < 0 ? 1 : out[Math.max(0, i0)];
+    const floor = 1 - d;
+    for (let i = 0; i < atk; i++) {
+      const k = i0 + i;
+      if (k < 0 || k >= n) continue;
+      const v = start + (floor - start) * (i / atk);
+      if (v < out[k]) out[k] = v;
+    }
+    // Exponential recovery toward unity.
+    const from = Math.max(0, i0 + atk);
+    for (let k = from; k < n; k++) {
+      const v = 1 - d * Math.exp(-((k - from) / sr) / rel);
+      if (v >= 0.9995) { if (out[k] > v) break; }
+      if (v < out[k]) out[k] = v; else break;
+    }
+  }
+  return out;
+}
+
 /* ================================= FX ===================================== */
 
 /**

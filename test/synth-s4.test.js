@@ -375,3 +375,86 @@ test("no drum hit exceeds the clipping guard", () => {
     }
   }
 });
+
+/* --------------------- sidechain duck + per-track HP --------------------- */
+
+import { duckEnvelope, biquadApply } from "../js/synth.js";
+
+test("duckEnvelope: depth 0 is exactly inert (the back-compat guarantee)", () => {
+  const e = duckEnvelope([0.1, 0.6, 1.1], 2, SR, { depth: 0 });
+  for (let i = 0; i < e.length; i++) assert.equal(e[i], 1, `sample ${i}`);
+});
+
+test("duckEnvelope: hits the intended floor at each kick and recovers", () => {
+  const depth = 0.35, attack = 0.008, release = 0.13;
+  const kicks = [0.25, 0.75, 1.25];
+  const e = duckEnvelope(kicks, 2, SR, { depth, attack, release });
+  for (const t of kicks) {
+    const at = e[Math.round((t + attack) * SR)];
+    assert.ok(Math.abs(at - (1 - depth)) < 0.02, `floor at ${t}s was ${at.toFixed(3)}`);
+  }
+  // Recovered well before the next kick 0.5s later.
+  const justBefore = e[Math.round((0.75 - 0.01) * SR)];
+  assert.ok(justBefore > 0.95, `did not recover before the next kick (${justBefore.toFixed(3)})`);
+  // And fully by the end.
+  assert.ok(e[e.length - 1] > 0.99);
+});
+
+test("duckEnvelope: no zipper — the curve is smooth sample to sample", () => {
+  const e = duckEnvelope([0.2, 0.4, 0.6], 1.5, SR, { depth: 0.4 });
+  let maxStep = 0;
+  for (let i = 1; i < e.length; i++) maxStep = Math.max(maxStep, Math.abs(e[i] - e[i - 1]));
+  assert.ok(maxStep < 0.02, `max per-sample step ${maxStep}`);
+  for (let i = 0; i < e.length; i++) assert.ok(e[i] > 0 && e[i] <= 1, `out of range at ${i}: ${e[i]}`);
+});
+
+test("duckEnvelope: fast kicks stay ducked instead of stepping back up", () => {
+  // 174 BPM four-on-the-floor = a kick every ~0.345s; at 16ths it is tighter.
+  const kicks = [];
+  for (let i = 0; i < 12; i++) kicks.push(i * 0.086);
+  const e = duckEnvelope(kicks, 2, SR, { depth: 0.4, release: 0.13 });
+  // The run ends at ~0.95s; recovery is asserted well AFTER it, not during.
+  const after = e[Math.round(1.6 * SR)];
+  assert.ok(after > 0.99, `must recover once the kicks stop (${after.toFixed(3)})`);
+  // Between two very close kicks it should not climb back to unity.
+  const between = e[Math.round(0.13 * SR)];
+  assert.ok(between < 0.95, `climbed back to ${between.toFixed(3)} between kicks`);
+});
+
+test("duckEnvelope: is deterministic and order-independent", () => {
+  const a = duckEnvelope([0.5, 0.1, 0.9], 1.2, SR, { depth: 0.3 });
+  const b = duckEnvelope([0.1, 0.5, 0.9], 1.2, SR, { depth: 0.3 });
+  for (let i = 0; i < a.length; i += 97) assert.equal(a[i], b[i], `differs at ${i}`);
+});
+
+test("per-track high-pass removes sub energy without touching the midrange", () => {
+  // Five full-range tracks summed, as the mix bus sees them.
+  const n = SR;
+  const mk = (seed) => { const r = []; let x = seed; for (let i = 0; i < n; i++) { x = (x * 1103515245 + 12345) & 0x7fffffff; r.push((x / 0x3fffffff) - 1); } return Float32Array.from(r); };
+  const tracks = [1, 2, 3, 4, 5].map(mk);
+  const sum = (arr) => { const o = new Float32Array(n); for (const t of arr) for (let i = 0; i < n; i++) o[i] += t[i]; return o; };
+
+  const band = (x, lo, hi) => {
+    let e = 0;
+    for (let f = lo; f <= hi; f += Math.max(1, (hi - lo) / 24)) {
+      const w = (2 * Math.PI * f) / SR;
+      let re = 0, im = 0;
+      for (let i = 0; i < 8192; i++) { re += x[i] * Math.cos(w * i); im -= x[i] * Math.sin(w * i); }
+      e += (re * re + im * im) / (8192 * 8192);
+    }
+    return e;
+  };
+
+  const raw = sum(tracks);
+  const filtered = sum(tracks.map((t) => {
+    const c = Float32Array.from(t);
+    biquadApply(c, SR, "highpass", 110, 0.707);
+    biquadApply(c, SR, "highpass", 110, 0.707);
+    return c;
+  }));
+
+  const subDrop = 10 * Math.log10(band(raw, 20, 100) / band(filtered, 20, 100));
+  const midDelta = Math.abs(10 * Math.log10(band(raw, 800, 6000) / band(filtered, 800, 6000)));
+  assert.ok(subDrop >= 6, `sub band only dropped ${subDrop.toFixed(1)} dB`);
+  assert.ok(midDelta < 0.8, `midrange moved ${midDelta.toFixed(2)} dB`);
+});

@@ -96,6 +96,9 @@ body.view-studio .studio-head { display: none; }
   --ruler-h: 26px;
   --dock-h: 156px;
   --pad-gap: 8px;
+  --lblw: 62px;
+  --gap: 4px;
+  --cell: 26px;
 }
 
 .pad-workstation {
@@ -643,7 +646,30 @@ body.view-studio .studio-head { display: none; }
   padding: 0 8px;
   border-bottom: 1px solid var(--sx-line-soft);
 }
-.ruler-left { display: flex; gap: 10px; min-width: 0; }
+.ruler-left { display: flex; gap: 10px; min-width: 0; align-items: center; }
+.page-seg { display: flex; gap: 2px; }
+.page-btn {
+  min-width: 26px;
+  min-height: 20px;
+  padding: 0 0.3rem;
+  border: 1px solid var(--sx-line);
+  border-radius: 4px;
+  background-color: var(--sx-surface-2);
+  color: var(--sx-text-3);
+  font-size: 0.6rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.page-btn.active { border-color: var(--sx-brand-b); color: var(--sx-brand-b-ink); background-color: color-mix(in srgb, var(--sx-brand-b) 18%, var(--sx-surface-2)); }
+.page-nav { display: flex; align-items: center; gap: 4px; }
+.page-where { color: var(--sx-text-3); font-size: 0.62rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.page-arrow {
+  min-width: 24px; min-height: 20px; padding: 0;
+  border: 1px solid var(--sx-line); border-radius: 4px;
+  background-color: var(--sx-surface-2); color: var(--sx-text-2);
+  cursor: pointer; font-size: 0.66rem;
+}
+.page-arrow:disabled { opacity: 0.35; cursor: default; }
 .ruler-stat {
   color: var(--sx-text-3);
   font-size: 0.62rem;
@@ -732,30 +758,30 @@ body.view-studio .studio-head { display: none; }
 .pad-dock { min-height: 0; }
 
 .seq-grid {
-  /* --cell, --lblw and --gap are the ONLY description of the grid's pitch.
-     js/songbuilder.js used to carry a second copy (LABEL_W 52 / CELL_W 20 /
-     GAP 3) to place the playhead; they disagreed with these values and the
-     cursor drifted ~2px per step, about 126px by step 63. The playhead is now
-     positioned from a column index resolved against these same variables, so
-     the two can no longer diverge. */
-  --cell: 26px;
-  --lblw: 62px;
-  --gap: 4px;
+  /* --cell, --lblw and --gap live on #studio and are the ONLY description of
+     the grid's pitch. js/songbuilder.js used to carry a second copy
+     (LABEL_W 52 / CELL_W 20 / GAP 3) to place the playhead; they disagreed
+     and the cursor drifted ~2px per step, ~126px by step 63. Both the
+     playhead and the pager now resolve against these same variables.
+
+     No overflow-x: the grid PAGES instead of scrolling sideways. A 4-bar
+     16th-note section is 64 steps, which at a hittable cell size cannot fit
+     any laptop — the old answer was 18px cells in an 84px stack. */
   --play-col: 0;
   position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--gap);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding-bottom: 5px;
-  touch-action: pan-x pan-y;
+  touch-action: pan-y;
 }
 .seq-row {
   display: grid;
   grid-template-columns: var(--lblw) repeat(var(--cols), var(--cell));
   gap: var(--gap);
   align-items: center;
-  min-width: max-content;
 }
 .seq-row-label {
   font-size: 0.65rem;
@@ -768,6 +794,7 @@ body.view-studio .studio-head { display: none; }
   -webkit-touch-callout: none;
   user-select: none;
   width: var(--cell);
+  min-width: 0;
   height: var(--cell);
   border-radius: 4px;
   cursor: pointer;
