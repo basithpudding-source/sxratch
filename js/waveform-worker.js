@@ -6,9 +6,10 @@ import { drawWaveform } from "./waveform-draw.js";
 
 let ctx = null;
 const s = {
-  w: 1, h: 1, bg: "transparent", color: "#48ddd3", dim: "rgba(255,255,255,0.18)",
+  w: 1, h: 1, bg: "transparent", color: "#48ddd3",
   levels: null, baseCount: 0, duration: 0, grid: null,
   position: 0, pixelsPerPeak: 1, cues: [], loop: null,
+  ink: null,   // theme colours; null = drawWaveform's dark defaults
 };
 
 self.onmessage = (e) => {
@@ -17,10 +18,19 @@ self.onmessage = (e) => {
     case "init": {
       const canvas = m.canvas;
       ctx = canvas.getContext("2d");
-      s.color = m.color; s.dim = m.dim; s.bg = m.bg;
+      s.color = m.color; s.bg = m.bg;
+      if (m.ink) s.ink = m.ink;
       resize(canvas, m.w, m.h, m.dpr);
       break;
     }
+    // The canvas is transferred, so the main thread can never repaint it
+    // directly — a theme change HAS to arrive as a message.
+    case "theme":
+      if (m.color) s.color = m.color;
+      if (m.bg != null) s.bg = m.bg;
+      s.ink = m.ink || null;
+      draw();
+      break;
     case "resize":
       if (ctx) resize(ctx.canvas, m.w, m.h, m.dpr);
       break;

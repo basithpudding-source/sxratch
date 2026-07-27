@@ -16,20 +16,32 @@
  */
 export function detectBPM(buffer) {
   if (!buffer || !buffer.length) return null;
-  const sr = buffer.sampleRate;
   const ch0 = buffer.getChannelData(0);
   const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : ch0;
+  return detectBPMFromChannels(ch0, ch1, buffer.sampleRate, buffer.length);
+}
+
+/**
+ * Pure-array tempo estimator (all the logic; node-testable without Web Audio).
+ * @param {Float32Array} ch0
+ * @param {Float32Array} ch1  pass ch0 again for mono
+ * @param {number} sr         sample rate
+ * @param {number} length     samples to analyze
+ * @returns {number|null}
+ */
+export function detectBPMFromChannels(ch0, ch1, sr, length) {
+  if (!ch0 || !length) return null;
 
   // 1) RMS envelope at ~172 Hz (hop 256 @ 44.1k) — fine enough lag resolution
   //    that quantization error stays well under ±1 BPM after refinement.
   const hop = 256;
-  const n = Math.floor(buffer.length / hop);
+  const n = Math.floor(length / hop);
   if (n < 128) return null; // < ~0.75 s of audio
   const env = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     let s = 0;
     const o = i * hop;
-    const end = Math.min(buffer.length, o + hop);
+    const end = Math.min(length, o + hop);
     for (let j = o; j < end; j++) {
       const v = (ch0[j] + ch1[j]) * 0.5;
       s += v * v;

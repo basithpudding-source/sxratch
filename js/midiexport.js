@@ -38,18 +38,22 @@ function trackChunk(events) {
 /**
  * @param {object} data
  *   ticksPerQuarter — SMF division (default 480)
- *   tempoBpm        — single fixed tempo
+ *   tempoBpm        — single fixed tempo (used when `tempos` is absent)
+ *   tempos          — [{tick, bpm}] tempo-change list (per-section BPM)
  *   timeSigs        — [{tick, num, den}] (den must be a power of two)
  *   tracks          — [{name, channel (0-15, 9 = drums), notes:[{tick,dur,note,vel}]}]
  * @returns {Uint8Array} the .mid file bytes
  */
-export function encodeMidi({ ticksPerQuarter = 480, tempoBpm = 120, timeSigs = [], tracks = [] }) {
+export function encodeMidi({ ticksPerQuarter = 480, tempoBpm = 120, tempos = null, timeSigs = [], tracks = [] }) {
   const chunks = [];
 
-  // Track 0 — conductor: tempo + time signatures.
+  // Track 0 — conductor: tempo(s) + time signatures.
   const meta = [];
-  const mpq = Math.max(1, Math.round(60e6 / (tempoBpm || 120)));
-  meta.push({ tick: 0, bytes: [0xff, 0x51, 0x03, (mpq >> 16) & 255, (mpq >> 8) & 255, mpq & 255] });
+  const tempoList = tempos && tempos.length ? tempos : [{ tick: 0, bpm: tempoBpm }];
+  for (const t of tempoList) {
+    const mpq = Math.max(1, Math.round(60e6 / (t.bpm || 120)));
+    meta.push({ tick: Math.max(0, Math.round(t.tick)), bytes: [0xff, 0x51, 0x03, (mpq >> 16) & 255, (mpq >> 8) & 255, mpq & 255] });
+  }
   for (const ts of timeSigs) {
     const dd = Math.max(0, Math.round(Math.log2(ts.den || 4)));
     meta.push({ tick: Math.max(0, Math.round(ts.tick)), bytes: [0xff, 0x58, 0x04, ts.num & 255, dd, 24, 8] });

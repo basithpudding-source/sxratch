@@ -267,9 +267,12 @@ export class AudioEngine {
       this.limiter.release.value = 0.12;
     }
 
-    this.masterBus.connect(this.master);
-    this.master.connect(this.limiter);
-    this.limiter.connect(this.ctx.destination);
+    // Order matters: limiter BEFORE the master volume. Limiting depth is then
+    // independent of the monitor volume, and the recorder can tap the limiter
+    // for a full-scale mix regardless of how quiet the user is monitoring.
+    this.masterBus.connect(this.limiter);
+    this.limiter.connect(this.master);
+    this.master.connect(this.ctx.destination);
 
     this.decks.A = new Deck(this, "A");
     this.decks.B = new Deck(this, "B");
@@ -479,14 +482,21 @@ export class Sampler {
     this.slots[i] = { buffer, name };
   }
 
-  /** Fire a pad. Returns true if a sample played. Restarts cleanly on re-hit. */
-  trigger(i) {
+  /** Fire a pad (velocity-sensitive). Returns true if a sample played. */
+  trigger(i, vel = 1) {
     const slot = this.slots[i];
     if (!slot) return false;
     this.stop(i);
     const src = this.engine.ctx.createBufferSource();
     src.buffer = slot.buffer;
-    src.connect(this.gain);
+    if (vel !== 1) { // per-shot velocity gain (MIDI pads)
+      const g = this.engine.ctx.createGain();
+      g.gain.value = Math.max(0.05, Math.min(1.25, vel));
+      src.connect(g);
+      g.connect(this.gain);
+    } else {
+      src.connect(this.gain);
+    }
     src.onended = () => { if (this.active[i] === src) { this.active[i] = null; this.onChange?.(i); } };
     src.start();
     this.active[i] = src;

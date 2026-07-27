@@ -21,7 +21,6 @@ export function attachScratchPad(el, deck, opts = {}) {
   const sensitivity = opts.sensitivity ?? 0.0024; // s of audio per pixel
   let active = false;
   let lastX = 0;
-  let lastY = 0;
   let lastT = 0;
   let pointerId = null;
 
@@ -29,7 +28,6 @@ export function attachScratchPad(el, deck, opts = {}) {
     active = true;
     pointerId = e.pointerId;
     lastX = e.clientX;
-    lastY = e.clientY;
     lastT = e.timeStamp;
     capture(el, pointerId);
     el.classList.add("touching");
@@ -50,7 +48,6 @@ export function attachScratchPad(el, deck, opts = {}) {
       let dt = (ev.timeStamp - lastT) / 1000;
       if (dt <= 0) dt = 1 / 240;
       lastX = ev.clientX;
-      lastY = ev.clientY;
       lastT = ev.timeStamp;
 
       // rate (in normal-speed units) = pixels/sec * seconds-of-audio/pixel
@@ -164,11 +161,9 @@ export function attachKnob(el, opts = {}) {
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
-/** Move the crossfader and keep engine + UI in sync (single source of truth). */
+/** Move the crossfader (UI sync fans out from engine.onCrossfade). */
 function nudgeCrossfade(engine, ui, value) {
-  const v = clamp(value, 0, 1);
-  engine.setCrossfade(v);
-  ui.syncCrossfade(v);
+  engine.setCrossfade(clamp(value, 0, 1));
 }
 
 /**
@@ -412,12 +407,11 @@ export function attachTrackpadGestures(engine, ui, config) {
  * @param {object} cb { onSeek(pos), onSetCue(pos), onClearCue(slotIndex) }
  */
 export function attachWaveformScrub(canvas, deck, wave, cb = {}) {
-  let active = false, moved = false, pointerId = null, lastX = 0, lastY = 0, lastT = 0, downX = 0, downY = 0;
+  let active = false, moved = false, pointerId = null, lastX = 0, lastT = 0, downX = 0;
 
   canvas.addEventListener("pointerdown", (e) => {
     active = true; moved = false; pointerId = e.pointerId;
     lastX = downX = e.clientX;
-    lastY = downY = e.clientY;
     lastT = e.timeStamp;
     capture(canvas, pointerId);
     canvas.classList.add("grabbing");
@@ -437,7 +431,6 @@ export function attachWaveformScrub(canvas, deck, wave, cb = {}) {
       let dt = (ev.timeStamp - lastT) / 1000;
       if (dt <= 0) dt = 1 / 240;
       lastX = ev.clientX;
-      lastY = ev.clientY;
       lastT = ev.timeStamp;
       // Grab the "tape": dragging right rewinds, dragging left fast-forwards,
       // 1:1 with the pixels on screen so it feels physical.

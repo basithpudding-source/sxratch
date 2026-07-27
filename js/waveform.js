@@ -17,9 +17,9 @@ export class Waveform {
    */
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
-    this.color = opts.color || "#37e6c8";
-    this.dim = opts.dim || "rgba(255,255,255,0.18)";
+    this.color = opts.color || "#48ddd3";
     this.bg = opts.bg || "transparent";
+    this.ink = opts.ink || null;   // theme colours (see waveform-draw THEME_INK)
     this.peaks = null;       // level-0 full-range peaks (kept for geometry + thumbnails)
     this.peakCount = 0;      // level-0 count — all geometry is expressed against this
     this.levels = null;      // [{count, total, low}] coarse→fine, for zoomable two-band drawing
@@ -47,7 +47,7 @@ export class Waveform {
         this.h = Math.max(1, Math.floor(rect.height));
         const off = canvas.transferControlToOffscreen();
         this.worker.postMessage(
-          { type: "init", canvas: off, color: this.color, dim: this.dim, bg: this.bg, w: this.w, h: this.h, dpr },
+          { type: "init", canvas: off, color: this.color, bg: this.bg, ink: this.ink, w: this.w, h: this.h, dpr },
           [off]
         );
       } catch (e) {
@@ -61,9 +61,21 @@ export class Waveform {
     }
   }
 
+  /**
+   * Re-colour for a theme change. The OffscreenCanvas is transferred to the
+   * worker, so this has to go over postMessage — there is no back door.
+   */
+  setColors({ color, bg, ink } = {}) {
+    if (color) this.color = color;
+    if (bg != null) this.bg = bg;
+    if (ink !== undefined) this.ink = ink;
+    if (this.worker) this.worker.postMessage({ type: "theme", color: this.color, bg: this.bg, ink: this.ink });
+    this.dirty = true;
+  }
+
   _state() {
     return {
-      w: this.w, h: this.h, bg: this.bg, color: this.color, dim: this.dim,
+      w: this.w, h: this.h, bg: this.bg, color: this.color, ink: this.ink,
       levels: this.levels, baseCount: this.peakCount, position: this.position,
       pixelsPerPeak: this.pixelsPerPeak, cues: this.cues, loop: this.loop,
       grid: this.grid, duration: this.duration,

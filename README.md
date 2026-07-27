@@ -17,7 +17,7 @@ duplicate or delete them; each chip's width is proportional to its duration.
 * **Persistent Auto-Save & File Transfer:** The builder automatically serializes the entire song structure to browser `localStorage` on every note toggle, drum edit, and parameter change. Use the **Export JSON** and **Import JSON** buttons to backup projects to local files and reload them instantly.
 * **Named project slots:** the **Projects** button saves/loads named snapshots in the browser (separate from the working autosave), so starting a new idea never destroys the last one. Loading a project is one `Ctrl+Z` away from your previous song.
 * **Swing & drum dynamics:** each section has a **Swing** slider (MPC-style — delays every 2nd step; ~33% ≈ triplet feel), and drum cells cycle **hit → accent → ghost → off** so grooves breathe instead of marching.
-* **MIDI both ways:** with a Web MIDI controller enabled (⚙ in SXRATCH), playing keys while PAD is open writes through the shared keyboard into the focused lane. The **MIDI** button exports the arrangement as a standard `.mid` file (chords / bass / lead / drums on channel 10, swing and accents included) for any DAW.
+* **MIDI both ways:** with a Web MIDI controller enabled (⚙ in SXRATCH), playing keys while PAD is open writes through the shared keyboard into the focused lane. The **MIDI** button exports the arrangement as a standard `.mid` file (chords, bass and lead on channels 1–3, drums on the GM drum channel 10; swing and accents included) for any DAW.
 * **Synth or Sampled Engine:** The **Sound** selector defaults to the offline synth engine, or can load General MIDI-style sampled instruments for richer playback when the network is available.
 
 Each section has its own **key**, **time signature** (4/4, 3/4, 6/8, 5/4, 7/8, 12/8…),
@@ -153,7 +153,9 @@ URL-loaded worklets and workers at stable paths (`js/scratch-processor.js`,
 
 **Split Deck Visualizers:** Inside the central crossfader section, Sxratch displays two independent frequency visualizers (`#viz-A` and `#viz-B`). They tap the pre-crossfader, post-volume, and post-FX audio signal of their respective decks. They render symmetrical, center-out frequency bars colored after each deck's theme (Cyan for Deck A, Pink for Deck B).
 
-**Global Mix Recorder:** Capture your entire master performance by clicking the **🔴 REC** button in the header. The button label displays a live timer of the recording (e.g. `🔴 REC [1:42]`). Click it again to stop and automatically download your session as a high-quality WebM/WAV audio file.
+**Global Mix Recorder:** Capture your entire master performance by clicking the **🔴 REC** button in the header. The button label displays a live timer of the recording (e.g. `🔴 REC [1:42]`). Click it again to stop and automatically download your session as a compressed audio file (WebM/Opus in Chrome and Firefox, M4A in Safari).
+
+**A note on tempo & pitch:** the tempo fader behaves like vinyl — speeding a track up raises its pitch, slowing it lowers it. This is a deliberate design choice (Sxratch is a scratch instrument first); there is currently no keylock/master-tempo mode.
 
 **Preloaded Synthetic Presets:** Get scratching immediately without loading files using the **Presets** dropdown on either deck. Choose from:
 * **Scratch Tool** — a synthesized classic vocal scratch sample.

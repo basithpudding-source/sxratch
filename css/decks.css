@@ -1,32 +1,17 @@
 /* SXRATCH deck console
    Screenshot-matched, live-control DJ surface for desktop and rotated mobile. */
 
+/* Colour lives in tokens.css. What survives here is the one non-colour
+   custom property js/app.js writes at runtime. */
 :root {
-  --deck-bg: #050a0f;
-  --deck-panel: #0b151d;
-  --deck-panel-hi: #14222c;
-  --deck-panel-lo: #071017;
-  --deck-well: #03070b;
-  --deck-line: #263843;
-  --deck-line-strong: #3a4e5a;
-  --deck-line-soft: rgba(127, 159, 179, 0.2);
-  --deck-text: #edf2f6;
-  --deck-muted: #9aa8b2;
-  --deck-dim: #6c7b86;
-  --deck-a: #48ddd3;
-  --deck-b: #ff6175;
-  --deck-button: #121f29;
-  --deck-button-hi: #1d2e39;
-  --deck-button-lo: #0b151d;
-  --deck-shadow: 0 18px 48px rgba(0, 0, 0, 0.48);
   --deck-platter-size: clamp(180px, min(24vw, 50vh), 500px);
 }
 
 body:not(.view-studio) {
   background:
-    radial-gradient(110% 90% at 50% 0%, rgba(42, 82, 103, 0.28), transparent 56%),
-    linear-gradient(180deg, #081521 0%, #050b12 100%);
-  color: var(--deck-text);
+    radial-gradient(110% 90% at 50% 0%, var(--sx-bg-vignette), transparent 56%),
+    linear-gradient(180deg, var(--sx-surface-1) 0%, var(--sx-bg) 100%);
+  color: var(--sx-text-1);
 }
 
 body:not(.view-studio) #topbar {
@@ -38,10 +23,10 @@ body:not(.view-studio) #topbar {
   gap: 0;
   padding: 0 14px 0 64px;
   border: 0;
-  border-bottom: 1px solid #1c2635;
-  background: #0c1220;
+  border-bottom: 1px solid var(--sx-line);
+  background-color: var(--sx-surface-1);
   box-shadow: none;
-  color: var(--deck-text);
+  color: var(--sx-text-1);
 }
 
 /* Inline line icons (injected by app.js) */
@@ -55,8 +40,8 @@ body:not(.view-studio) #topbar .ic { width: 15px; height: 15px; opacity: 0.9; }
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: #ff3b4f;
-  box-shadow: 0 0 8px rgba(255, 59, 79, 0.55);
+  background-color: var(--sx-danger);
+  box-shadow: var(--sx-glow-danger);
   flex: none;
 }
 #record-btn.recording .rec-dot { animation: recPulse 1.5s infinite; }
@@ -70,9 +55,9 @@ body:not(.view-studio) #topbar::before {
   height: 15px;
   transform: translateY(-50%);
   background:
-    linear-gradient(#c7d2de, #c7d2de) 0 0 / 100% 2px no-repeat,
-    linear-gradient(#c7d2de, #c7d2de) 0 50% / 100% 2px no-repeat,
-    linear-gradient(#c7d2de, #c7d2de) 0 100% / 100% 2px no-repeat;
+    linear-gradient(var(--sx-chrome), var(--sx-chrome)) 0 0 / 100% 2px no-repeat,
+    linear-gradient(var(--sx-chrome), var(--sx-chrome)) 0 50% / 100% 2px no-repeat,
+    linear-gradient(var(--sx-chrome), var(--sx-chrome)) 0 100% / 100% 2px no-repeat;
   opacity: 0.9;
 }
 
@@ -91,13 +76,13 @@ body:not(.view-studio) .brand-seg {
   padding: 0;
   border: 0;
   background: none;
-  color: #6d7c8e;
+  color: var(--sx-text-4);
   font: 800 0.78rem/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   letter-spacing: 0.18em;
 }
 
 body:not(.view-studio) #nav-decks {
-  color: #f2f6fa;
+  color: var(--sx-text-1);
   font-size: 1.05rem;
   letter-spacing: 0.14em;
 }
@@ -116,7 +101,7 @@ body:not(.view-studio) #topbar .master {
   align-items: center;
   gap: 14px;
   padding: 0;
-  color: var(--deck-text);
+  color: var(--sx-text-1);
 }
 body:not(.view-studio) #topbar #settings-btn { order: 5; }
 body:not(.view-studio) #topbar #help-btn { order: 6; }
@@ -141,7 +126,7 @@ body:not(.view-studio) #topbar #help-btn { order: 6; }
 }
 
 body:not(.view-studio) #topbar .master label {
-  color: var(--deck-text);
+  color: var(--sx-text-1);
   font-size: 0.67rem;
   font-weight: 800;
   letter-spacing: 0.15em;
@@ -162,8 +147,8 @@ body:not(.view-studio) #topbar .master input {
   border: 0;
   border-radius: 3px;
   background:
-    repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0 10px, transparent 10px 13px),
-    #0a1019;
+    repeating-linear-gradient(90deg, var(--sx-wash-1) 0 10px, transparent 10px 13px),
+    var(--sx-well);
   overflow: hidden;
 }
 .master-vu i {
@@ -172,20 +157,24 @@ body:not(.view-studio) #topbar .master input {
   width: var(--level, 0%);
   background:
     /* row gap */
-    linear-gradient(180deg, transparent 0 44%, #0a1019 44% 56%, transparent 56%),
+    linear-gradient(180deg, transparent 0 44%, var(--sx-well) 44% 56%, transparent 56%),
     /* segment gaps */
-    repeating-linear-gradient(90deg, transparent 0 10px, #0a1019 10px 13px),
-    /* green → yellow → orange */
-    linear-gradient(90deg, #55c95e 0 55%, #cfd44e 55% 80%, #f5923c 80% 100%);
+    repeating-linear-gradient(90deg, transparent 0 10px, var(--sx-well) 10px 13px),
+    /* green → yellow → orange. The top stop is --sx-hot, not --sx-meter-high:
+       the master keeps its own amber "hot" band rather than reading as the
+       channel meters' red clip band. */
+    linear-gradient(90deg, var(--sx-meter-low) 0 55%, var(--sx-meter-mid) 55% 80%, var(--sx-hot) 80% 100%);
   transition: width 0.05s linear;
 }
+/* Peak-hold cap — the brightest single mark on the meter, so it takes
+   --sx-marker and darkens on paper instead of going white-on-white. */
 .master-vu::after {
   content: "";
   position: absolute;
   top: 0; bottom: 0;
   left: var(--peak, 0%);
   width: 2px;
-  background: #e8f2f8;
+  background-color: var(--sx-marker);
   opacity: 0.8;
 }
 
@@ -195,13 +184,15 @@ body:not(.view-studio) #topbar .master input {
   position: relative;
   width: 38px;
   height: 38px;
-  border: 2px solid #35414f;
+  border: 2px solid var(--sx-line-strong);
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 38%, #232c38, #0d131d 80%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 3px 10px rgba(0, 0, 0, 0.5);
+  background: radial-gradient(circle at 50% 38%, var(--sx-surface-3), var(--sx-surface-1) 80%);
+  box-shadow: inset 0 1px 0 var(--sx-hilite), var(--sx-shadow-1);
   cursor: ns-resize;
   touch-action: none;
 }
+/* The dot is a read-out, not trim: --sx-chrome inverts with the theme so it
+   stays legible on a pale knob instead of going white-on-white. */
 .master-knob .knob-dot {
   position: absolute;
   top: 2px;
@@ -210,8 +201,8 @@ body:not(.view-studio) #topbar .master input {
   height: 8px;
   transform: translateX(-50%);
   border-radius: 2px;
-  background: #e8f0f7;
-  box-shadow: 0 0 4px rgba(0, 0, 0, 0.45);
+  background-color: var(--sx-chrome);
+  box-shadow: var(--sx-shadow-1);
 }
 
 body:not(.view-studio) #topbar > .deck-only,
@@ -225,10 +216,10 @@ body:not(.view-studio) #topbar > #help-btn {
   margin: 0;
   padding: 0 20px;
   border: 0;
-  border-left: 1px solid rgba(127, 159, 179, 0.14);
+  border-left: 1px solid var(--sx-line-soft);
   border-radius: 0;
   background: transparent;
-  color: #c3cdd8;
+  color: var(--sx-text-2);
   font: 700 0.72rem/1 system-ui, sans-serif;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -236,27 +227,27 @@ body:not(.view-studio) #topbar > #help-btn {
 
 body:not(.view-studio) #topbar > .deck-only:hover,
 body:not(.view-studio) #topbar > #help-btn:hover {
-  background: rgba(255, 255, 255, 0.045);
-  color: var(--deck-text);
+  background-color: var(--sx-wash-1);
+  color: var(--sx-text-1);
 }
 
 body:not(.view-studio) #drawer-btn { margin-left: auto; }
 body:not(.view-studio) #drawer-btn.active {
-  background: rgba(255, 255, 255, 0.07);
-  color: var(--deck-text);
-  box-shadow: inset 0 -2px 0 var(--deck-a);
+  background-color: var(--sx-wash-2);
+  color: var(--sx-text-1);
+  box-shadow: inset 0 -2px 0 var(--sx-deck-a-ink);
 }
 
 /* Recording: a steady red inner frame around the whole rig (the REC button
    itself already pulses — restraint here reads more professional). */
 body.recording:not(.view-studio) .controller-shell {
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    inset 0 -22px 42px rgba(0, 0, 0, 0.22),
-    var(--deck-shadow),
-    inset 0 0 0 2px rgba(255, 45, 85, 0.55);
+    inset 0 1px 0 var(--sx-hilite),
+    inset 0 -22px 42px var(--sx-shade),
+    var(--sx-shadow-3),
+    inset 0 0 0 2px color-mix(in srgb, var(--sx-danger) 55%, transparent);
 }
-body:not(.view-studio) #record-btn { color: #d9e1e8; }
+body:not(.view-studio) #record-btn { color: var(--sx-text-2); }
 body:not(.view-studio) #record-btn .rec-label { font-variant-numeric: tabular-nums; }
 
 body:not(.view-studio) #console,
@@ -266,7 +257,7 @@ body.use-landscape-layout:not(.view-studio) #console {
   height: calc(100dvh - 64px);
   padding: 10px;
   overflow: hidden;
-  background: #090e18;
+  background-color: var(--sx-bg);
 }
 
 /* Reference layout: three separate rounded cards on a dark page. */
@@ -288,10 +279,10 @@ body.use-landscape-layout:not(.view-studio) #console {
 .deck-side,
 .wave-console,
 .controller-center .mixer {
-  border: 1px solid #1d2838;
+  border: 1px solid var(--sx-line);
   border-radius: 12px;
-  background: linear-gradient(180deg, #101826 0%, #0c1220 100%);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  background: linear-gradient(180deg, var(--sx-surface-2) 0%, var(--sx-surface-1) 100%);
+  box-shadow: var(--sx-shadow-2), inset 0 1px 0 var(--sx-hilite);
 }
 
 .deck-side,
@@ -310,13 +301,17 @@ body.use-landscape-layout:not(.view-studio) #console {
 /* The shared centre toolbar & loop strip follow the "active" deck — make that
    state unmistakable (the old 2.5%-alpha shadow was invisible). */
 .deck-side.deck-a.active {
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--deck-a) 32%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--sx-deck-a-ink) 32%, transparent);
 }
 .deck-side.deck-b.active {
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--deck-b) 32%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--sx-deck-b-ink) 32%, transparent);
 }
+/* Dark only: on paper currentColor is already dark, so a 14px halo of it
+   smears the letterforms instead of lighting them. light-dark() sits in the
+   COLOUR slot rather than wrapping the whole shadow — it is specified as a
+   <color> function, and a transparent shadow renders exactly like none. */
 .deck-side.active .deck-heading span {
-  text-shadow: 0 0 14px currentColor;
+  text-shadow: 0 0 14px light-dark(transparent, currentColor);
 }
 
 .deck-side .deck-meta,
@@ -340,12 +335,12 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
   justify-content: flex-start;
   min-width: 0;
   border-bottom: 0;
-  color: var(--deck-a);
+  color: var(--sx-deck-a-ink);
   font: 800 1rem/1 system-ui, sans-serif;
   letter-spacing: 0.14em;
 }
 
-.deck-b .deck-heading { color: var(--deck-b); }
+.deck-b .deck-heading { color: var(--sx-deck-b-ink); }
 
 .track-card {
   display: grid;
@@ -361,12 +356,12 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
   position: relative;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid #26334a;
+  border: 1px solid var(--sx-line);
   border-radius: 8px;
   background:
-    radial-gradient(circle at 50% 50%, #0a141d 0 18%, #16242f 19% 21%, #0a141d 22% 46%, #131f29 47% 49%, #081119 50% 100%),
-    linear-gradient(180deg, #14232e, #061019);
-  box-shadow: inset 0 0 22px rgba(0, 0, 0, 0.5);
+    radial-gradient(circle at 50% 50%, var(--sx-surface-1) 0 18%, var(--sx-surface-2) 19% 21%, var(--sx-surface-1) 22% 46%, var(--sx-surface-2) 47% 49%, var(--sx-well) 50% 100%),
+    linear-gradient(180deg, var(--sx-surface-2), var(--sx-well));
+  box-shadow: inset 0 0 22px var(--sx-shade);
 }
 .album-art canvas {
   position: absolute;
@@ -376,7 +371,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
   display: block;
 }
 .album-art.has-art {
-  background: linear-gradient(180deg, #0a1720, #050c13);
+  background: linear-gradient(180deg, var(--sx-surface-1), var(--sx-bg));
 }
 
 .track-info {
@@ -389,7 +384,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
 .track-info .title {
   display: block;
   overflow: hidden;
-  color: #f0f5fa;
+  color: var(--sx-text-1);
   font-size: clamp(0.8rem, 1vw, 1rem);
   font-weight: 700;
   line-height: 1.25;
@@ -402,25 +397,30 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
   min-width: 0;
   align-items: center;
   gap: clamp(12px, 2.4vw, 22px);
-  color: #c5d0d8;
+  color: var(--sx-text-2);
   font-size: clamp(0.72rem, 0.85vw, 0.9rem);
   font-variant-numeric: tabular-nums;
 }
 
 /* BPM reads like the reference stats row: bright value + whisper unit. */
 .track-bpm {
-  color: #eef4f9;
+  color: var(--sx-text-1);
   font-weight: 800;
   font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
 }
+/* Mid-tap feedback: pulses while a tap sequence is being measured. */
+.track-bpm.tapping { color: var(--sx-deck-a-ink); }
+.deck-side[data-deck="B"] .track-bpm.tapping { color: var(--sx-deck-b-ink); }
 .track-bpm-unit {
   margin-left: -8px;
-  color: var(--deck-dim);
+  color: var(--sx-text-4);
   font-size: 0.68em;
   font-weight: 800;
   letter-spacing: 0.06em;
 }
-.track-stats .time { color: #93a2b1; }
+.track-stats .time { color: var(--sx-text-3); }
 
 .deck-side .load-tile {
   display: grid;
@@ -431,13 +431,13 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
   gap: 5px;
   align-content: center;
   padding: 6px 4px;
-  border: 1px solid #2b3a52;
+  border: 1px solid var(--sx-line);
   border-radius: 10px;
-  background: linear-gradient(180deg, #17202f, #101724);
-  color: #b9c5d2;
+  background: linear-gradient(180deg, var(--sx-surface-3), var(--sx-surface-2));
+  color: var(--sx-text-2);
   font: 700 0.66rem/1.2 system-ui, sans-serif;
   letter-spacing: 0.1em;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 2px 8px rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 1px 0 var(--sx-hilite), var(--sx-shadow-1);
 }
 .deck-side .load-tile .ic { width: 20px; height: 20px; opacity: 0.9; }
 
@@ -451,7 +451,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
 .section-label,
 .loop-label,
 .rail-label {
-  color: var(--deck-muted);
+  color: var(--sx-text-3);
   font: 800 0.64rem/1 system-ui, sans-serif;
   letter-spacing: 0.09em;
 }
@@ -469,26 +469,26 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
   min-width: 0;
   height: clamp(28px, 3.6vh, 36px);
   padding: 0;
-  border: 1px solid #263349;
+  border: 1px solid var(--sx-line);
   border-radius: 7px;
-  background: #121a29;
-  color: #dbe4ec;
+  background-color: var(--sx-btn-lo);
+  color: var(--sx-text-2);
   font: 700 0.82rem/1 system-ui, sans-serif;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 var(--sx-hilite);
 }
 
 .deck-a .hotcue-chip:first-child {
-  border-color: color-mix(in srgb, var(--deck-a) 75%, transparent);
-  color: var(--deck-a);
+  border-color: color-mix(in srgb, var(--sx-deck-a-ink) 75%, transparent);
+  color: var(--sx-deck-a-ink);
 }
 
 .deck-b .hotcue-chip:first-child {
-  border-color: color-mix(in srgb, var(--deck-b) 75%, transparent);
-  color: var(--deck-b);
+  border-color: color-mix(in srgb, var(--sx-deck-b-ink) 75%, transparent);
+  color: var(--sx-deck-b-ink);
 }
 
 .deck-side .hotcue-chip.set {
-  color: #071019;
+  color: var(--sx-ink-on-accent);
 }
 
 .deck-body {
@@ -529,12 +529,12 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-rail {
 .rail-read {
   border: 0;
   background: none;
-  color: var(--deck-a);
+  color: var(--sx-deck-a-ink);
   font: 900 0.72rem/1 system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
 }
 
-.deck-b .rail-read { color: var(--deck-b); }
+.deck-b .rail-read { color: var(--sx-deck-b-ink); }
 
 .deck-side .deck-rail .fader.v {
   width: 58px;
@@ -563,14 +563,16 @@ body.use-landscape-layout:not(.view-studio) .deck-side .platter {
   height: var(--deck-platter-size);
   max-width: min(100%, var(--deck-platter-size));
   max-height: min(100%, var(--deck-platter-size));
-  border: 1px solid #1f2a3a;
+  border: 1px solid var(--sx-line);
   border-radius: 50%;
-  /* Matte face with a soft top light — the ribbed grip ring is ::after. */
-  background: radial-gradient(circle at 50% 40%, #1b2431 0%, #131b28 46%, #0b111c 78%, #070c15 100%);
+  /* Matte face with a soft top light — the ribbed grip ring is ::after.
+     The surface ramp keeps the dark disc; on paper it reads as a shallow
+     matte dish, which is the honest light-theme reading of the same object. */
+  background: radial-gradient(circle at 50% 40%, var(--sx-surface-3) 0%, var(--sx-surface-2) 46%, var(--sx-surface-1) 78%, var(--sx-bg) 100%);
   box-shadow:
-    0 18px 44px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    inset 0 -14px 34px rgba(0, 0, 0, 0.45);
+    var(--sx-shadow-3),
+    inset 0 1px 0 var(--sx-hilite),
+    inset 0 -14px 34px var(--sx-shade);
 }
 
 /* Inner face plate — slightly recessed smooth disc inside the teeth ring. */
@@ -579,10 +581,10 @@ body.use-landscape-layout:not(.view-studio) .deck-side .platter {
   position: absolute;
   inset: 8.5%;
   z-index: 0;
-  border: 1px solid rgba(160, 185, 205, 0.08);
+  border: 1px solid var(--sx-line);
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 40%, #18202d, #0c121d 70%, #080d16 100%);
-  box-shadow: inset 0 0 26px rgba(0, 0, 0, 0.6);
+  background: radial-gradient(circle at 50% 40%, var(--sx-surface-2), var(--sx-surface-1) 70%, var(--sx-bg) 100%);
+  box-shadow: inset 0 0 26px var(--sx-shade);
 }
 
 /* Dense radial teeth around the rim (the grip edge in the reference). */
@@ -591,7 +593,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .platter {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: repeating-conic-gradient(from 0deg, rgba(214, 228, 240, 0.16) 0deg 0.5deg, transparent 0.5deg 2deg);
+  background: repeating-conic-gradient(from 0deg, color-mix(in srgb, var(--sx-chrome) 16%, transparent) 0deg 0.5deg, transparent 0.5deg 2deg);
   mask: radial-gradient(circle, transparent 0 82.5%, #000 83.5% 99%, transparent 100%);
   -webkit-mask: radial-gradient(circle, transparent 0 82.5%, #000 83.5% 99%, transparent 100%);
   opacity: 0.75;
@@ -603,27 +605,29 @@ body.use-landscape-layout:not(.view-studio) .deck-side .platter {
   inset: 9%;
   z-index: 1;
   border-radius: 50%;
+  /* The outer ring is the disc's physical rim, so it takes --sx-rim and stays
+     visible on a light chassis; --sx-hilite remains the inset top sheen. */
   box-shadow:
-    inset 0 2px 10px rgba(255, 255, 255, 0.025),
-    inset 0 -16px 38px rgba(0, 0, 0, 0.42),
-    0 0 0 1px rgba(255, 255, 255, 0.03);
+    inset 0 2px 10px var(--sx-hilite),
+    inset 0 -16px 38px var(--sx-shade),
+    0 0 0 1px var(--sx-rim);
   transition: box-shadow 0.15s ease;
 }
 
 /* Hand on the record: the disc glows in the deck colour while touched. */
 .deck-side.deck-a .jog-pad.touching .platter-disc {
   box-shadow:
-    inset 0 2px 8px rgba(255,255,255,0.03),
-    inset 0 -24px 54px rgba(0,0,0,0.62),
-    0 0 0 1px color-mix(in srgb, var(--deck-a) 55%, transparent),
-    0 0 34px color-mix(in srgb, var(--deck-a) 38%, transparent);
+    inset 0 2px 8px var(--sx-hilite),
+    inset 0 -24px 54px var(--sx-shade),
+    0 0 0 1px color-mix(in srgb, var(--sx-deck-a-ink) 55%, transparent),
+    0 0 34px color-mix(in srgb, var(--sx-deck-a) 38%, transparent);
 }
 .deck-side.deck-b .jog-pad.touching .platter-disc {
   box-shadow:
-    inset 0 2px 8px rgba(255,255,255,0.03),
-    inset 0 -24px 54px rgba(0,0,0,0.62),
-    0 0 0 1px color-mix(in srgb, var(--deck-b) 55%, transparent),
-    0 0 34px color-mix(in srgb, var(--deck-b) 38%, transparent);
+    inset 0 2px 8px var(--sx-hilite),
+    inset 0 -24px 54px var(--sx-shade),
+    0 0 0 1px color-mix(in srgb, var(--sx-deck-b-ink) 55%, transparent),
+    0 0 34px color-mix(in srgb, var(--sx-deck-b) 38%, transparent);
 }
 
 /* The spinning disc carries only what the reference shows: a smooth face
@@ -631,15 +635,15 @@ body.use-landscape-layout:not(.view-studio) .deck-side .platter {
 body.use-landscape-layout:not(.view-studio) .deck-side.deck-a .platter-disc,
 .deck-side.deck-a .platter-disc {
   background:
-    radial-gradient(circle, transparent 0 22%, color-mix(in srgb, var(--deck-a) 90%, #eafffb) 22.6% 24%, transparent 24.8%),
-    radial-gradient(circle at 50% 42%, #161e2b, #0a101a 76%);
+    radial-gradient(circle, transparent 0 22%, color-mix(in srgb, var(--sx-deck-a) 90%, var(--sx-lighten)) 22.6% 24%, transparent 24.8%),
+    radial-gradient(circle at 50% 42%, var(--sx-surface-2), var(--sx-surface-1) 76%);
 }
 
 body.use-landscape-layout:not(.view-studio) .deck-side.deck-b .platter-disc,
 .deck-side.deck-b .platter-disc {
   background:
-    radial-gradient(circle, transparent 0 22%, color-mix(in srgb, var(--deck-b) 90%, #fff2f3) 22.6% 24%, transparent 24.8%),
-    radial-gradient(circle at 50% 42%, #161e2b, #0a101a 76%);
+    radial-gradient(circle, transparent 0 22%, color-mix(in srgb, var(--sx-deck-b) 90%, var(--sx-lighten)) 22.6% 24%, transparent 24.8%),
+    radial-gradient(circle at 50% 42%, var(--sx-surface-2), var(--sx-surface-1) 76%);
 }
 
 /* Fixed 12-o'clock notch on the rim (silver, small — like the reference). */
@@ -650,18 +654,20 @@ body.use-landscape-layout:not(.view-studio) .deck-side.deck-b .platter-disc,
   width: 4px;
   height: 5.5%;
   border-radius: 3px;
-  background: #cfdae4;
-  box-shadow: 0 0 5px rgba(0, 0, 0, 0.55);
+  background-color: var(--sx-chrome);
+  box-shadow: var(--sx-shadow-1);
   opacity: 0.95;
 }
 
-/* Rotating position mark: a thin light line riding the teeth band. */
+/* Rotating position mark: a thin light line riding the teeth band. It is a
+   read-out, so it takes --sx-chrome and darkens on paper rather than staying
+   white on a pale platter. */
 .deck-side .platter-mark {
   top: 0;
   width: 2px;
   height: 8.5%;
   border-radius: 2px;
-  background: rgba(233, 243, 248, 0.85);
+  background: color-mix(in srgb, var(--sx-chrome) 85%, transparent);
   box-shadow: none;
 }
 
@@ -697,13 +703,13 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   min-width: 0;
   height: 100%;
   padding: 0 8px;
-  border: 1px solid #26334a;
+  border: 1px solid var(--sx-line);
   border-radius: 9px;
-  background: #121a29;
-  color: #c9d3dd;
+  background-color: var(--sx-btn-lo);
+  color: var(--sx-text-2);
   font: 700 0.8rem/1 system-ui, sans-serif;
   letter-spacing: 0.05em;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 var(--sx-hilite);
 }
 
 .deck-side .transport .btn:hover,
@@ -720,24 +726,24 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
 .center-loop-strip .btn:active,
 .controller-center .both-btn:active {
   transform: translateY(1px);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.25);
+  box-shadow: inset 0 1px 0 var(--sx-hilite), var(--sx-shadow-1);
   filter: brightness(0.95);
 }
 
 .deck-a .transport .cue-btn,
 .deck-a .transport .play-btn,
 .deck-a .transport .sync-btn {
-  border-color: color-mix(in srgb, var(--deck-a) 60%, #1a2436);
-  color: var(--deck-a);
-  background: color-mix(in srgb, var(--deck-a) 6%, #121a29);
+  border-color: color-mix(in srgb, var(--sx-deck-a-ink) 60%, var(--sx-line));
+  color: var(--sx-deck-a-ink);
+  background: color-mix(in srgb, var(--sx-deck-a) 6%, var(--sx-btn-lo));
 }
 
 .deck-b .transport .cue-btn,
 .deck-b .transport .play-btn,
 .deck-b .transport .sync-btn {
-  border-color: color-mix(in srgb, var(--deck-b) 60%, #1a2436);
-  color: var(--deck-b);
-  background: color-mix(in srgb, var(--deck-b) 6%, #121a29);
+  border-color: color-mix(in srgb, var(--sx-deck-b-ink) 60%, var(--sx-line));
+  color: var(--sx-deck-b-ink);
+  background: color-mix(in srgb, var(--sx-deck-b) 6%, var(--sx-btn-lo));
 }
 
 .deck-side .transport .play-btn {
@@ -764,8 +770,8 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
 .deck-side .transport[data-deck="A"] .sync-btn,
 .deck-side .transport[data-deck="B"] .sync-btn { grid-column: 4; grid-row: 2; }
 
-.deck-a .tp-start { color: #9be77d !important; }
-.deck-b .tp-start { color: var(--deck-b) !important; }
+.deck-a .tp-start { color: var(--sx-ok-ink) !important; }
+.deck-b .tp-start { color: var(--sx-deck-b-ink) !important; }
 
 .controller-center {
   display: grid;
@@ -800,26 +806,31 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
 }
 .deck-pick {
   min-width: 0;
-  border: 1px solid #26334a;
+  border: 1px solid var(--sx-line);
   border-radius: 8px;
-  background: #121a29;
-  color: #8b99a9;
+  background-color: var(--sx-btn-lo);
+  color: var(--sx-text-3);
   font: 800 0.86rem/1 system-ui, sans-serif;
   cursor: pointer;
 }
 .deck-pick[data-deck="A"].active {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--deck-a) 88%, #fff), color-mix(in srgb, var(--deck-a) 70%, #000));
-  border-color: var(--deck-a);
-  color: #051016;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--sx-deck-a) 88%, var(--sx-lighten)), color-mix(in srgb, var(--sx-deck-a) 70%, var(--sx-darken)));
+  border-color: var(--sx-deck-a);
+  color: var(--sx-ink-on-accent);
 }
 .deck-pick[data-deck="B"].active {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--deck-b) 88%, #fff), color-mix(in srgb, var(--deck-b) 70%, #000));
-  border-color: var(--deck-b);
-  color: #051016;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--sx-deck-b) 88%, var(--sx-lighten)), color-mix(in srgb, var(--sx-deck-b) 70%, var(--sx-darken)));
+  border-color: var(--sx-deck-b);
+  color: var(--sx-ink-on-accent);
 }
+/* The flash is the DECK's colour, not currentColor: on an active pick
+   currentColor is --sx-ink-on-accent (white on paper, so an invisible flash)
+   and on an inactive one it is the grey label tier. */
+.deck-pick[data-deck="A"] { --pick-flash: var(--sx-deck-a-ink); }
+.deck-pick[data-deck="B"] { --pick-flash: var(--sx-deck-b-ink); }
 .deck-pick.flash { animation: deckPickFlash 0.45s ease-out; }
 @keyframes deckPickFlash {
-  0% { box-shadow: 0 0 0 3px currentColor, 0 0 18px currentColor; }
+  0% { box-shadow: 0 0 0 3px var(--pick-flash), 0 0 18px var(--pick-flash); }
   100% { box-shadow: 0 0 0 0 transparent; }
 }
 
@@ -840,10 +851,10 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   gap: 14px;
   min-width: 0;
   padding-left: 15px;
-  border: 1px solid #26334a;
+  border: 1px solid var(--sx-line);
   border-radius: 9px;
-  background: #121a29;
-  color: #8b99a9;
+  background-color: var(--sx-btn-lo);
+  color: var(--sx-text-3);
   font: 700 0.7rem/1 system-ui, sans-serif;
   letter-spacing: 0.1em;
 }
@@ -854,7 +865,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   min-width: 0;
   border: 0;
   background: transparent;
-  color: #e2eaf1;
+  color: var(--sx-text-1);
   font: 700 0.8rem/1 system-ui, sans-serif;
 }
 
@@ -878,10 +889,10 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   min-height: 0;
   margin: 6px 12px 0;
   overflow: hidden;
-  border: 1px solid #1b2534;
+  border: 1px solid var(--sx-line-soft);
   border-radius: 8px;
-  background: #070b13;
-  box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.55);
+  background-color: var(--sx-well);
+  box-shadow: inset 0 0 24px var(--sx-shade);
 }
 
 .wave-caption {
@@ -889,7 +900,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   top: 7px;
   left: 10px;
   z-index: 5;
-  color: #8b99a9;
+  color: var(--sx-text-3);
   font: 700 0.66rem/1 system-ui, sans-serif;
   letter-spacing: 0.04em;
   pointer-events: none;
@@ -904,8 +915,8 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   z-index: 4;
   width: 2px;
   margin-left: -1px;
-  background: #ff2d55;
-  box-shadow: 0 0 8px rgba(255, 45, 85, 0.4);
+  background-color: var(--sx-danger);
+  box-shadow: var(--sx-glow-danger);
   pointer-events: none;
 }
 
@@ -914,8 +925,8 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border-bottom: 1px solid #1b2534;
-  background: #070b13;
+  border-bottom: 1px solid var(--sx-line-soft);
+  background-color: var(--sx-well);
 }
 
 /* Empty-deck demo chip — one tap to sound. */
@@ -927,19 +938,20 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   transform: translate(-50%, -50%);
   padding: 0.55rem 1.05rem;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--deck-a) 55%, transparent);
-  background: rgba(5, 12, 18, 0.85);
-  color: var(--deck-a);
+  border: 1px solid color-mix(in srgb, var(--sx-deck-a-ink) 55%, transparent);
+  background-color: var(--sx-overlay);
+  color: var(--sx-deck-a-ink);
   font: 800 0.68rem/1 system-ui, sans-serif;
   letter-spacing: 0.08em;
   cursor: pointer;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--sx-shadow-2);
 }
 .wave-lane[data-deck="B"] .demo-chip {
-  color: var(--deck-b);
-  border-color: color-mix(in srgb, var(--deck-b) 55%, transparent);
+  color: var(--sx-deck-b-ink);
+  border-color: color-mix(in srgb, var(--sx-deck-b-ink) 55%, transparent);
 }
-.demo-chip:hover { background: rgba(11, 24, 33, 0.95); filter: brightness(1.1); }
+/* Hover goes opaque: on dark that lifts the chip, on paper it settles it. */
+.demo-chip:hover { background-color: var(--sx-surface-2); filter: brightness(1.1); }
 .demo-chip[hidden] { display: none; }
 
 .wave-lane:last-child { border-bottom: 0; }
@@ -955,13 +967,13 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   margin-top: -12px;
   place-items: center;
   border-radius: 5px;
-  background: var(--deck-a);
-  color: #051016;
+  background-color: var(--sx-deck-a);
+  color: var(--sx-ink-on-accent);
   font: 900 0.9rem/1 system-ui, sans-serif;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--sx-shadow-1);
 }
 
-.wave-lane[data-deck="B"] .wave-lane-label { background: var(--deck-b); }
+.wave-lane[data-deck="B"] .wave-lane-label { background-color: var(--sx-deck-b); }
 
 .wave-stage .waveform,
 body.use-landscape-layout:not(.view-studio) .wave-stage .waveform {
@@ -1006,24 +1018,24 @@ body.use-landscape-layout:not(.view-studio) .wave-stage .waveform {
 
 /* Active auto-loop: outlined in the deck colour like the reference "4". */
 .center-loop-strip[data-deck="A"] .loop-auto.active {
-  background: color-mix(in srgb, var(--deck-a) 10%, #121a29);
-  border-color: var(--deck-a);
-  color: var(--deck-a);
+  background: color-mix(in srgb, var(--sx-deck-a) 10%, var(--sx-btn-lo));
+  border-color: var(--sx-deck-a-ink);
+  color: var(--sx-deck-a-ink);
 }
 .center-loop-strip[data-deck="B"] .loop-auto.active {
-  background: color-mix(in srgb, var(--deck-b) 10%, #121a29);
-  border-color: var(--deck-b);
-  color: var(--deck-b);
+  background: color-mix(in srgb, var(--sx-deck-b) 10%, var(--sx-btn-lo));
+  border-color: var(--sx-deck-b-ink);
+  color: var(--sx-deck-b-ink);
 }
 
 .center-loop-strip[data-deck="A"] .loop-auto,
 .center-loop-strip[data-deck="A"] .loop-label {
-  color: var(--deck-a);
+  color: var(--sx-deck-a-ink);
 }
 
 .center-loop-strip[data-deck="B"] .loop-auto,
 .center-loop-strip[data-deck="B"] .loop-label {
-  color: var(--deck-b);
+  color: var(--sx-deck-b-ink);
 }
 
 .controller-center .mixer,
@@ -1083,23 +1095,23 @@ body.use-landscape-layout:not(.view-studio) .controller-center .eq .knob {
   left: 7px;
   width: 42px;
   height: 42px;
-  border: 2px solid #313d4d;
-  background: radial-gradient(circle at 50% 38%, #222b38, #0d131d 82%);
+  border: 2px solid var(--sx-line-strong);
+  background: radial-gradient(circle at 50% 38%, var(--sx-surface-3), var(--sx-surface-1) 82%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 4px 10px rgba(0, 0, 0, 0.45);
+    inset 0 1px 0 var(--sx-hilite),
+    var(--sx-shadow-1);
 }
 .controller-center .eq .knob .knob-dot {
   top: 3px;
   width: 3px;
   height: 11px;
-  background: #e8f0f7;
+  background-color: var(--sx-chrome);
 }
 
 .controller-center .eq .knob-group label,
 body.use-landscape-layout:not(.view-studio) .controller-center .eq .knob-group label {
   width: auto;
-  color: #97a5b4;
+  color: var(--sx-text-3);
   font: 700 0.72rem/1 system-ui, sans-serif;
   letter-spacing: 0.08em;
 }
@@ -1130,7 +1142,7 @@ body.use-landscape-layout:not(.view-studio) .controller-center .crossfade-col {
   justify-content: space-between;
   align-items: flex-end;
   padding: 1px 0;
-  color: #6d7c8e;
+  color: var(--sx-text-4);
   font: 600 0.58rem/1 system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
 }
@@ -1151,10 +1163,10 @@ body.use-landscape-layout:not(.view-studio) .controller-center .crossfade-col {
 .controller-center .both-btn {
   min-width: 96px;
   min-height: 36px;
-  border: 1px solid #26334a;
+  border: 1px solid var(--sx-line);
   border-radius: 9px;
-  background: #121a29;
-  color: #d7dfe8;
+  background-color: var(--sx-btn-lo);
+  color: var(--sx-text-2);
   font: 700 0.74rem/1 system-ui, sans-serif;
   letter-spacing: 0.1em;
 }
@@ -1197,16 +1209,16 @@ body.use-landscape-layout:not(.view-studio) .controller-center .vfader .vol-row 
   border: 0;
   border-radius: 3px;
   background:
-    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.045) 0 5px, transparent 5px 8px),
-    #0a1019;
+    repeating-linear-gradient(0deg, var(--sx-wash-1) 0 5px, transparent 5px 8px),
+    var(--sx-well);
   box-shadow: none;
 }
 
 .controller-center .vu::after,
 .meter-bridge .vu::after {
   background:
-    repeating-linear-gradient(0deg, transparent 0 5px, #0a1019 5px 8px),
-    linear-gradient(0deg, #55c95e 0 58%, #cfd44e 58% 80%, #f5563c 80% 100%);
+    repeating-linear-gradient(0deg, transparent 0 5px, var(--sx-well) 5px 8px),
+    linear-gradient(0deg, var(--sx-meter-low) 0 58%, var(--sx-meter-mid) 58% 80%, var(--sx-meter-high) 80% 100%);
   transition: height 0.06s linear;
 }
 
@@ -1216,8 +1228,10 @@ body.use-landscape-layout:not(.view-studio) .controller-center .vfader .vol-row 
 }
 
 /* Channel fader handles carry a deck-coloured centre line (reference). */
-.center-faders .vfader:first-child .fader-handle::after { background: var(--deck-a); }
-.center-faders .vfader:last-child .fader-handle::after { background: var(--deck-b); }
+/* The line rides a bright metal handle in both themes, so it takes the ink
+   variant — the fill would wash out against the light-theme handle. */
+.center-faders .vfader:first-child .fader-handle::after { background-color: var(--sx-deck-a-ink); }
+.center-faders .vfader:last-child .fader-handle::after { background-color: var(--sx-deck-b-ink); }
 
 .controller-center .crossfader-wrap {
   width: 100%;
@@ -1226,15 +1240,17 @@ body.use-landscape-layout:not(.view-studio) .controller-center .vfader .vol-row 
 }
 
 .controller-center .xf-end {
-  color: #8b99a9;
+  color: var(--sx-text-3);
   font: 800 0.8rem/1 system-ui, sans-serif;
 }
 
+/* The track's outline is a physical edge, not a highlight: --sx-hilite is
+   white-ish in both themes and vanished against the light chassis. */
 .fader-track {
-  background: linear-gradient(90deg, #050a10, #0c141d);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(90deg, var(--sx-well), var(--sx-surface-1));
+  border: 1px solid var(--sx-rim);
   border-radius: 2px;
-  box-shadow: inset 0 1px 6px rgba(0,0,0,0.82);
+  box-shadow: inset 0 1px 6px var(--sx-shade);
 }
 
 .fader.v .fader-track {
@@ -1257,32 +1273,35 @@ body.use-landscape-layout:not(.view-studio) .controller-center .vfader .vol-row 
   left: 50%;
   width: 30px;
   height: 1px;
-  background: rgba(198, 214, 222, 0.33);
+  background: color-mix(in srgb, var(--sx-chrome) 33%, transparent);
 }
 
 .fader.v .tick.major {
   width: 42px;
   height: 2px;
-  background: rgba(219, 230, 236, 0.55);
+  background: color-mix(in srgb, var(--sx-chrome) 55%, transparent);
 }
 
 .fader.h .tick {
   height: 24px;
-  background: rgba(198, 214, 222, 0.32);
+  background: color-mix(in srgb, var(--sx-chrome) 32%, transparent);
 }
 
 .fader.h .tick.major {
   height: 34px;
-  background: rgba(219, 230, 236, 0.55);
+  background: color-mix(in srgb, var(--sx-chrome) 55%, transparent);
 }
 
+/* A milled metal cap: the outline and the top rim belong to the material, not
+   to the dark-theme depth idiom, so they take the metal/darken tokens and
+   stay a real edge on paper. */
 .fader-handle {
-  border: 1px solid rgba(0,0,0,0.58);
+  border: 1px solid color-mix(in srgb, var(--sx-darken) 58%, transparent);
   border-radius: 3px;
-  background: linear-gradient(180deg, #f4f7fb 0%, #aab6c0 48%, #596a77 52%, #dce4eb 100%);
+  background: linear-gradient(180deg, var(--sx-metal-hi) 0%, var(--sx-metal-mid) 48%, var(--sx-metal-lo) 52%, color-mix(in srgb, var(--sx-metal-hi) 70%, var(--sx-metal-mid)) 100%);
   box-shadow:
-    0 3px 8px rgba(0,0,0,0.6),
-    inset 0 1px 0 rgba(255,255,255,0.9);
+    var(--sx-shadow-1),
+    inset 0 1px 0 var(--sx-metal-hi);
 }
 
 .fader.v .fader-handle {
@@ -1299,7 +1318,7 @@ body.use-landscape-layout:not(.view-studio) .controller-center .vfader .vol-row 
 .controller-shell select:focus-visible,
 body:not(.view-studio) #topbar button:focus-visible,
 body:not(.view-studio) #topbar input:focus-visible {
-  outline: 2px solid #f1f8fb;
+  outline: 2px solid var(--sx-focus);
   outline-offset: 2px;
 }
 
@@ -1354,8 +1373,8 @@ body.drawer-open:not(.view-studio) .controller-center .deck-fx-panel {
   min-width: 0;
   padding: 8px 10px;
   border: 0;
-  border-top: 1px solid var(--deck-line-soft);
-  background: rgba(2, 8, 13, 0.5);
+  border-top: 1px solid var(--sx-line-soft);
+  background-color: var(--sx-well);
 }
 body.drawer-open:not(.view-studio) .deck-fx-panel .fx-panel-row { width: auto; flex: 0 0 auto; }
 body.drawer-open:not(.view-studio) .deck-fx-panel .fx-select {
@@ -1383,8 +1402,8 @@ body.drawer-open:not(.view-studio) .controller-center .sampler-inline {
   flex-direction: column;
   gap: 5px;
   padding: 8px 10px;
-  border-top: 1px solid var(--deck-line-soft);
-  background: rgba(2, 8, 13, 0.5);
+  border-top: 1px solid var(--sx-line-soft);
+  background-color: var(--sx-well);
 }
 body.drawer-open:not(.view-studio) .controller-center .sampler-pads {
   grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
@@ -1416,8 +1435,8 @@ body.drawer-open:not(.view-studio) .controller-center .mixer {
     "fxb fxb  fxb"
     "samp samp samp";
 }
-body.drawer-open:not(.view-studio) .controller-center .channel[data-deck="A"] > .deck-fx-panel { border-left: 3px solid var(--deck-a); padding-left: 12px; }
-body.drawer-open:not(.view-studio) .controller-center .channel[data-deck="B"] > .deck-fx-panel { border-left: 3px solid var(--deck-b); padding-left: 12px; }
+body.drawer-open:not(.view-studio) .controller-center .channel[data-deck="A"] > .deck-fx-panel { border-left: 3px solid var(--sx-deck-a-ink); padding-left: 12px; }
+body.drawer-open:not(.view-studio) .controller-center .channel[data-deck="B"] > .deck-fx-panel { border-left: 3px solid var(--sx-deck-b-ink); padding-left: 12px; }
 
 @media (max-width: 1280px) {
   .controller-shell {
@@ -1627,7 +1646,7 @@ body.portrait-mode:not(.view-studio) .controller-shell {
 body.portrait-mode:not(.view-studio) .controller-center { display: contents; }
 body.portrait-mode:not(.view-studio) .wave-console {
   grid-area: wave;
-  border-bottom: 1px solid var(--deck-line);
+  border-bottom: 1px solid var(--sx-line);
   grid-template-rows: 34px minmax(78px, 15vh) 34px;
 }
 body.portrait-mode:not(.view-studio) .deck-a { grid-area: da; }
@@ -1692,7 +1711,7 @@ body.portrait-mode:not(.view-studio) .controller-center .mixer {
   padding: 8px 10px 10px;
   max-height: 42vh;
   overflow-y: auto;
-  border-top: 1px solid var(--deck-line);
+  border-top: 1px solid var(--sx-line);
 }
 body.portrait-mode:not(.view-studio) .controller-center .channel { display: contents; }
 body.portrait-mode:not(.view-studio) .controller-center .channel > .eq {

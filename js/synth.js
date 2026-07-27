@@ -18,6 +18,8 @@
 // Pure-math helpers (masterFinalize, reverbIRData, drumSampleData, biquadApply,
 // mulberry32) never touch Web Audio, so they run under node:test.
 
+import { createLimiterKernel } from "./limiter-kernel.js";
+
 export const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
 
 /** Deterministic PRNG (mulberry32) — seeded so renders are reproducible. */
@@ -58,12 +60,97 @@ export function adsr(gp, at, dur, { a = 0.004, d = 0.12, s = 0.75, r = 0.25, pea
 
 const clampPan = (p) => Math.max(-1, Math.min(1, p));
 
+/* ---------------------- randomised-phase wave bank ------------------------
+ * OscillatorNode always starts at phase 0, and unison() only detunes, so at
+ * the instant a 4-voice pad note fires all four saws are perfectly aligned:
+ * measured peak 4.47 versus 1.70 for randomised phase — an 8.4 dB crest
+ * penalty landing exactly on the attack, where the glue compressor and the
+ * limiter grab. Musically the worse half is that every note of every pad has
+ * the SAME phasey whoosh at onset, because the beating pattern between
+ * detuned voices always starts from the same alignment.
+ *
+ * The cure is a small bank of band-limited PeriodicWaves that differ only in
+ * per-harmonic phase. Magnitudes are identical, so the timbre is identical.
+ */
+const WAVE_BANK_SIZE = 8;
+const HARMONICS = 512;
+/** RMS of the native Web Audio wave of each type, at unit amplitude. */
+const NATIVE_RMS = { sawtooth: 1 / Math.sqrt(3), square: 1, triangle: 1 / Math.sqrt(3), sine: 1 / Math.sqrt(2) };
+
+/** Ideal magnitude of harmonic n for a wave type (n >= 1). */
+function harmonicMag(type, n) {
+  switch (type) {
+    case "square": return n % 2 ? 1 / n : 0;
+    case "triangle": return n % 2 ? 1 / (n * n) : 0;
+    case "sine": return n === 1 ? 1 : 0;
+    default: return 1 / n; // sawtooth
+  }
+}
+
+/**
+ * Fourier coefficients for one bank entry: ideal magnitudes, pseudo-random
+ * phases, scaled so the RMS equals the native wave's. RMS is phase-invariant,
+ * so ONE constant per type is exact — which is what keeps every entry the
+ * same loudness. (createPeriodicWave normalises to unit PEAK by default,
+ * which would boost the low-peak randomised entries; callers must pass
+ * disableNormalization.)
+ */
+export function randomPhaseHarmonics(type, k, nHarm = HARMONICS) {
+  const real = new Float32Array(nHarm + 1);
+  const imag = new Float32Array(nHarm + 1);
+  const rand = mulberry32(((k + 1) * 2654435761) >>> 0);
+  let sumSq = 0;
+  for (let n = 1; n <= nHarm; n++) {
+    const mag = harmonicMag(type, n);
+    if (!mag) { rand(); continue; }
+    sumSq += mag * mag;
+    // k === 0 is the classic zero-phase wave, so a bank always contains the
+    // reference shape and A/B comparisons stay honest.
+    const phi = k === 0 ? -Math.PI / 2 : rand() * Math.PI * 2;
+    real[n] = mag * Math.cos(phi);
+    imag[n] = mag * Math.sin(phi);
+  }
+  const rms = Math.sqrt(sumSq / 2);
+  const scale = rms > 1e-9 ? (NATIVE_RMS[type] || NATIVE_RMS.sawtooth) / rms : 1;
+  for (let n = 1; n <= nHarm; n++) { real[n] *= scale; imag[n] *= scale; }
+  return { real, imag };
+}
+
+// Keyed on the AudioContext: an OfflineAudioContext is created per render, so
+// a plain Map would grow without bound and rebuild the bank anyway.
+const waveBanks = new WeakMap();
+function periodicWaveBank(ctx, type) {
+  let perCtx = waveBanks.get(ctx);
+  if (!perCtx) { perCtx = new Map(); waveBanks.set(ctx, perCtx); }
+  let bank = perCtx.get(type);
+  if (!bank) {
+    bank = [];
+    for (let k = 0; k < WAVE_BANK_SIZE; k++) {
+      const { real, imag } = randomPhaseHarmonics(type, k);
+      bank.push(ctx.createPeriodicWave(real, imag, { disableNormalization: true }));
+    }
+    perCtx.set(type, bank);
+  }
+  return bank;
+}
+
+/** Give an oscillator a bank wave (falling back to the native type). */
+function setWave(ctx, osc, type, phaseNdx) {
+  if (phaseNdx == null || !ctx.createPeriodicWave) { osc.type = type; return; }
+  try {
+    const bank = periodicWaveBank(ctx, type);
+    osc.setPeriodicWave(bank[((phaseNdx % WAVE_BANK_SIZE) + WAVE_BANK_SIZE) % WAVE_BANK_SIZE]);
+  } catch {
+    osc.type = type;
+  }
+}
+
 /**
  * A detuned unison oscillator bank. Voices alternate across three stereo
  * buses (centre / left / right) so wide patches cost 3 panners, not N.
  * Caller normalizes level by 1/sqrt(voices) via the env peak.
  */
-export function unison(ctx, dest, { f, type = "sawtooth", voices = 3, detune = 10, spread = 0.7, pan = 0 } = {}) {
+export function unison(ctx, dest, { f, type = "sawtooth", voices = 3, detune = 10, spread = 0.7, pan = 0, phaseNdx = null } = {}) {
   const canPan = !!ctx.createStereoPanner;
   const mkPan = (p) => { const sp = ctx.createStereoPanner(); sp.pan.value = clampPan(p); sp.connect(dest); return sp; };
   // A single centred voice connects straight through: a StereoPanner at pan 0
@@ -77,7 +164,10 @@ export function unison(ctx, dest, { f, type = "sawtooth", voices = 3, detune = 1
   const oscs = [];
   for (let i = 0; i < voices; i++) {
     const o = ctx.createOscillator();
-    o.type = type;
+    // Each voice takes a DIFFERENT bank entry, so the stack no longer sums
+    // coherently at note-on and each note starts from a different beating
+    // alignment.
+    setWave(ctx, o, type, phaseNdx == null ? null : phaseNdx + i);
     o.frequency.value = f;
     // Bus by detune position so the stereo image stays balanced for any voice
     // count: k<0 → left, k>0 → right, k==0 → centre (even counts have no
@@ -117,8 +207,34 @@ function bq(ctx, type, f, Q = 0.7, gainDb = 0) {
   return n;
 }
 
+/**
+ * A seeded white-noise bed. The render used to fill this with Math.random(),
+ * which quietly broke the reproducibility guarantee the rest of the engine
+ * works hard for: a memoised render and a fresh one were audibly different
+ * takes, and a section previewed alone did not match the same section inside
+ * the exported WAV.
+ */
+export function noiseData(sr, seconds = 1, seed = 0x5eed) {
+  const n = Math.max(1, Math.ceil(sr * seconds));
+  const out = new Float32Array(n);
+  const rand = mulberry32(seed);
+  for (let i = 0; i < n; i++) out[i] = rand() * 2 - 1;
+  return out;
+}
+
+/**
+ * Where a transient reads from in the noise bed. Derived from note IDENTITY,
+ * never from absolute render time — the old `(at * 7.13) % dur` made the same
+ * note sound different depending on where in the song it happened to sit.
+ * Golden-ratio increments so consecutive steps land far apart in the buffer.
+ */
+export function noiseSeek(ndx = 0, step = 0, dur = 1) {
+  const u = ((ndx * 0.61803399) + (step * 0.38196601)) % 1;
+  return u * Math.max(0.05, dur - 0.1);
+}
+
 /** Short filtered-noise burst (pick / key-click / breath chiff transients). */
-function noiseBurst(ctx, dest, noise, { at, len = 0.004, peak = 0.1, hp = 0, lp = 0, decay = 0.0015 }) {
+function noiseBurst(ctx, dest, noise, { at, len = 0.004, peak = 0.1, hp = 0, lp = 0, decay = 0.0015, ndx = 0, step = 0 }) {
   if (!noise) return;
   const src = ctx.createBufferSource();
   src.buffer = noise;
@@ -129,23 +245,42 @@ function noiseBurst(ctx, dest, noise, { at, len = 0.004, peak = 0.1, hp = 0, lp 
   g.gain.setValueAtTime(peak, at);
   g.gain.setTargetAtTime(0.0001, at + 0.001, decay);
   node.connect(g).connect(dest);
-  // random-ish but deterministic offset into the noise buffer
-  src.start(at, (at * 7.13) % Math.max(0.05, noise.duration - 0.1));
+  src.start(at, noiseSeek(ndx, step, noise.duration));
   src.stop(at + len + decay * 5);
 }
 
 /* ========================== Karplus-Strong strings ========================= */
 
 /**
- * Karplus-Strong pluck with a brightness-shaped excitation burst and a
- * pick-position comb — richer and less "zingy" than raw white-noise KS.
+ * The pluck kernel — pure, so its PITCH can be measured under node:test.
+ *
+ * The loop length used to be `Math.round(sr / f)`, which quantises the pitch
+ * to sr/N. Measured cent error at 44.1 kHz: −4.5 at MIDI 60, +5.8 at 72,
+ * +23.3 at 88, −29.3 at 92 — and a DIFFERENT set of errors at 48 kHz. The
+ * guitars and the upright were the only instruments in the app not tuned
+ * exactly from mtof, so a guitar chord over a pad beat audibly, and because
+ * the error is non-monotonic it read as bad intonation rather than a
+ * consistent transpose.
+ *
+ * The fix is a first-order allpass interpolator on the loop, giving a
+ * fractional delay. It is phase-only, so the existing 0.5*(cur+nxt) average
+ * stays as the damping term and the decay character is unchanged.
  */
-export function ksBuffer(ctx, f, dur, { decay = 0.996, brightness = 0.6, pickPos = 0.18, seed = 1234 } = {}) {
-  const sr = ctx.sampleRate;
-  const N = Math.max(2, Math.round(sr / f));
+export function ksData(sr, f, dur, { decay = 0.996, brightness = 0.6, pickPos = 0.18, seed = 1234 } = {}) {
+  const Ntot = Math.max(2, sr / f);
+  // The loop delay is NOT just the ring length. The damping term averages the
+  // current cell with the NEXT one — `0.5*(x[n] + x[n+1])`, a forward average
+  // — so it ADVANCES the loop by half a sample rather than delaying it. Total
+  // loop delay is therefore N - 0.5 + delta, and the fractional part has to
+  // absorb that half sample as well as the rounding. Getting this wrong is
+  // what made the old integer version run sharp, increasingly so up the neck.
+  let N = Math.floor(Ntot);
+  let delta = Ntot - N + 0.5;   // always in [0.5, 1.5) — safely off the pole
+  N = Math.max(2, N);
+  const a = (1 - delta) / (1 + delta);
+
   const total = Math.ceil(dur * sr);
-  const buf = ctx.createBuffer(1, total, sr);
-  const out = buf.getChannelData(0);
+  const out = new Float32Array(total);
   const rand = mulberry32(seed);
   const burst = new Float32Array(N);
   let lp = 0;
@@ -154,13 +289,34 @@ export function ksBuffer(ctx, f, dur, { decay = 0.996, brightness = 0.6, pickPos
   const pd = Math.max(1, Math.round(N * pickPos));
   const ring = new Float32Array(N);
   for (let i = 0; i < N; i++) ring[i] = burst[i] - 0.7 * burst[(i - pd + N) % N];
+
+  // ONE pair of allpass state variables for the whole loop — they must carry
+  // across the ring wrap. Per-cell state produces a plausible pluck that is
+  // still detuned, which is why the cent assertion exists.
+  let x1 = 0, y1 = 0;
   let idx = 0;
   for (let i = 0; i < total; i++) {
     const cur = ring[idx], nxt = ring[(idx + 1) % N];
     out[i] = cur;
-    ring[idx] = 0.5 * (cur + nxt) * decay;
+    const damped = 0.5 * (cur + nxt) * decay;
+    const y = a * damped + x1 - a * y1;
+    x1 = damped; y1 = y;
+    ring[idx] = y;
     idx = (idx + 1) % N;
   }
+  return out;
+}
+
+/**
+ * Karplus-Strong pluck with a brightness-shaped excitation burst and a
+ * pick-position comb — richer and less "zingy" than raw white-noise KS.
+ * Thin AudioBuffer wrapper around ksData().
+ */
+export function ksBuffer(ctx, f, dur, opts = {}) {
+  const sr = ctx.sampleRate;
+  const data = ksData(sr, f, dur, opts);
+  const buf = ctx.createBuffer(1, data.length, sr);
+  buf.getChannelData(0).set(data);
   return buf;
 }
 
@@ -168,7 +324,7 @@ export function ksBuffer(ctx, f, dur, { decay = 0.996, brightness = 0.6, pickPos
  * Play a KS pluck through a guitar-ish body (low-shelf warmth + top-plate
  * peak), with a pick transient and a gated release so it never clicks off.
  */
-function playKS(ctx, dest, f, at, dur, { decay = 0.996, brightness = 0.6, gain = 0.5, tone = 3800, body = true, pan = 0, noise = null, pick = 0.1, seed = 1 } = {}) {
+function playKS(ctx, dest, f, at, dur, { decay = 0.996, brightness = 0.6, gain = 0.5, tone = 3800, body = true, pan = 0, noise = null, pick = 0.1, seed = 1, ndx = 0, step = 0 } = {}) {
   const src = ctx.createBufferSource();
   src.buffer = ksBuffer(ctx, f, dur + 0.05, { decay, brightness, seed: (seed * 7919 + Math.round(f)) >>> 0 });
   let node = src;
@@ -191,7 +347,10 @@ function playKS(ctx, dest, f, at, dur, { decay = 0.996, brightness = 0.6, gain =
     outNode = sp;
   }
   outNode.connect(dest);
-  if (pick && noise) noiseBurst(ctx, dest, noise, { at, peak: pick * gain, hp: 2500, decay: 0.0012 });
+  // Through outNode, not dest: the pick used to bypass the panner, so on a
+  // spread guitar chord the string was panned but its attack sat dead centre
+  // — the ear reads that as an artificial overlaid layer, not as one note.
+  if (pick && noise) noiseBurst(ctx, pan && ctx.createStereoPanner ? outNode : dest, noise, { at, peak: pick * gain, hp: 2500, decay: 0.0012, ndx, step });
   src.start(at);
   src.stop(at + dur + 0.15);
 }
@@ -518,23 +677,32 @@ function renderSubtractive(ctx, dest, midi, at, dur, vel, p, o = {}) {
   if (p.drive > 1.01) { const ws = ctx.createWaveShaper(); ws.curve = driveCurve(p.drive); node.connect(ws); node = ws; }
   node.connect(env).connect(dest);
 
+  // Note identity — different for every note of a chord and every step of a
+  // bar, and reproducible for a given song. Drives both the wave-bank pick
+  // and the noise-bed read position.
+  const ndx = o.ndx || 0, step = o.step || 0;
+  const phaseNdx = (step * 7 + ndx * 3 + midi) | 0;
+
   const oscs = [];
   if (p.level1 > 0.001) {
     const g1 = ctx.createGain(); g1.gain.value = p.level1; g1.connect(filt);
-    const u = unison(ctx, g1, { f, type: WAVES[p.wave1], voices, detune: p.detune, spread: p.spread });
+    const u = unison(ctx, g1, { f, type: WAVES[p.wave1], voices, detune: p.detune, spread: p.spread, phaseNdx });
     u.start(at); u.stop(stop);
     oscs.push(...u.oscs);
   }
   if (p.level2 > 0.001) {
     const o2 = ctx.createOscillator();
-    o2.type = WAVES[p.wave2]; o2.frequency.value = f; o2.detune.value = p.detune2;
+    setWave(ctx, o2, WAVES[p.wave2], phaseNdx + 5);
+    o2.frequency.value = f; o2.detune.value = p.detune2;
     const g2 = ctx.createGain(); g2.gain.value = p.level2;
     o2.connect(g2).connect(filt);
     o2.start(at); o2.stop(stop);
     oscs.push(o2);
   }
   if (p.sub > 0.001) {
-    const sb = ctx.createOscillator(); sb.type = "sine"; sb.frequency.value = f / 2;
+    // The sub gets its own phase too, so it does not always add to the
+    // fundamental in the same relationship.
+    const sb = ctx.createOscillator(); setWave(ctx, sb, "sine", phaseNdx + 3); sb.frequency.value = f / 2;
     const sg = ctx.createGain(); sg.gain.value = p.sub;
     sb.connect(sg).connect(filt);
     sb.start(at); sb.stop(stop);
@@ -545,7 +713,7 @@ function renderSubtractive(ctx, dest, midi, at, dur, vel, p, o = {}) {
     const ng = ctx.createGain();
     adsr(ng.gain, at, dur, { a: atk, d: p.decay, s: p.sustain, r: Math.min(p.release, 0.4), peak: p.noise * vel });
     ns.connect(bp).connect(ng).connect(dest);
-    ns.start(at, (at * 3.7) % 0.5);
+    ns.start(at, noiseSeek(ndx, step, Math.min(0.6, o.noise.duration)));
     ns.stop(stop);
   }
   if (p.vibCents > 0.1 && p.vibRate > 0.01 && oscs.length) {
@@ -559,7 +727,7 @@ function renderSubtractive(ctx, dest, midi, at, dur, vel, p, o = {}) {
     lfo.start(at); lfo.stop(stop);
   }
   if (p.trLevel > 0.0005) {
-    noiseBurst(ctx, dest, o.noise, { at, peak: p.trLevel * vel, hp: p.trHp, lp: p.trLp || 0, decay: p.trDecay });
+    noiseBurst(ctx, dest, o.noise, { at, peak: p.trLevel * vel, hp: p.trHp, lp: p.trLp || 0, decay: p.trDecay, ndx, step });
   }
 }
 
@@ -631,7 +799,7 @@ function renderOrgan(ctx, dest, midi, at, dur, vel, p, o = {}) {
     perc.start(at); perc.stop(at + 0.5);
   }
   if (p.clickLevel > 0.0005) {
-    noiseBurst(ctx, dest, o.noise, { at, peak: p.clickLevel * vel, hp: 1800, decay: 0.0011 });
+    noiseBurst(ctx, dest, o.noise, { at, peak: p.clickLevel * vel, hp: 1800, decay: 0.0011, ndx: o.ndx || 0, step: o.step || 0 });
   }
 }
 
@@ -648,6 +816,7 @@ function renderPluck(ctx, dest, midi, at, dur, vel, p, o = {}) {
     noise: o.noise,
     pick: p.pick,
     seed: midi * (p.seed || 1),
+    ndx, step: o.step || 0,
   });
   if (p.thump > 0.0005) { // felt/finger thump on the front of an upright note
     const th = ctx.createOscillator(); th.type = "sine"; th.frequency.value = Math.max(45, f * 0.5);
@@ -723,6 +892,44 @@ function normalizeTo(x, peak) {
   return x;
 }
 
+/** Per-piece body loudness targets, in dBFS RMS over the first 200 ms. */
+const DRUM_RMS_TARGET = { kick: -7, snare: -13, hat: -25, open: -23, crash: -20, tom: -11 };
+
+/**
+ * Match a drum hit by LOUDNESS, with peak as a ceiling rather than the target.
+ *
+ * Peak normalisation sounds like it equalises level but does not: crest factor
+ * varies enormously between voices and kits, so a near-square bitcrushed lofi
+ * kick and a tiny bossa cross-stick at the same peak are nowhere near the same
+ * loudness. Measured spread across kits at equal peak: 8 dB on the kick, 11 dB
+ * on the snare — so changing kit silently rebalanced the whole arrangement,
+ * and (because each round-robin take is a different noise realisation) even
+ * two takes of the same hat differed by up to 33%.
+ *
+ * Body first, transient second: scale to hit the RMS target, then pull back
+ * only if the peak would exceed the ceiling.
+ */
+function normalizeLoudness(x, sr, key, peakCeiling) {
+  const win = Math.min(x.length, Math.floor(sr * 0.2));
+  let sum = 0;
+  for (let i = 0; i < win; i++) sum += x[i] * x[i];
+  const rms = Math.sqrt(sum / Math.max(1, win));
+  if (rms < 1e-9) return x;
+  const target = Math.pow(10, (DRUM_RMS_TARGET[key] ?? -12) / 20);
+  let g = target / rms;
+  // The ceiling is a clipping guard, not a design value. A high-crest hit
+  // (a bitcrushed lofi hat, a hard-driven 808 snare) cannot reach its body
+  // target under the patch's own decorative peak, and pulling it back is what
+  // left two takes of the same hat 33% apart. 0.9 is still safely inside the
+  // drum bus, which is limited downstream.
+  const ceil = Math.max(peakCeiling, 0.9);
+  let m = 0;
+  for (let i = 0; i < x.length; i++) { const a = Math.abs(x[i]) * g; if (a > m) m = a; }
+  if (m > ceil) g *= ceil / m;
+  for (let i = 0; i < x.length; i++) x[i] *= g;
+  return x;
+}
+
 function applyDrive(x, amount) {
   const norm = Math.tanh(amount);
   for (let i = 0; i < x.length; i++) x[i] = Math.tanh(x[i] * amount) / norm;
@@ -738,7 +945,7 @@ function fadeIn(x, sr, ms = 1.2) {
   for (let i = 0; i < n; i++) x[i] *= i / n;
 }
 
-function synthKick(sr, p, rand) {
+function synthKick(sr, p, rand, key = 'kick') {
   const n = Math.ceil((p.dec * 2.2 + 0.1) * sr);
   const out = new Float32Array(n);
   let phase = 0;
@@ -756,10 +963,10 @@ function synthKick(sr, p, rand) {
   if (p.lp) biquadApply(out, sr, "lowpass", p.lp, 0.7);
   if (p.bits) bitcrush(out, p.bits);
   fadeIn(out, sr);
-  return normalizeTo(out, p.peak);
+  return normalizeLoudness(out, sr, key, p.peak);
 }
 
-function synthSnare(sr, p, rand) {
+function synthSnare(sr, p, rand, key = 'snare') {
   const n = Math.ceil((Math.max((p.ndec || 0.12) * 3, 0.25) + 0.06) * sr);
   const out = new Float32Array(n);
   if (p.rim) { // bossa cross-stick: woody ping + a whisper of wires
@@ -774,7 +981,7 @@ function synthSnare(sr, p, rand) {
     biquadApply(wires, sr, "highpass", 2600, 0.8);
     for (let i = 0; i < n; i++) out[i] += wires[i] * 0.4;
     fadeIn(out, sr, 0.6);
-    return normalizeTo(out, p.peak);
+    return normalizeLoudness(out, sr, key, p.peak);
   }
   // shell: two detuned partials with a fast pitch settle
   let ph1 = 0, ph2 = 0;
@@ -798,24 +1005,79 @@ function synthSnare(sr, p, rand) {
   if (p.lp) biquadApply(out, sr, "lowpass", p.lp, 0.7);
   if (p.bits) bitcrush(out, p.bits);
   fadeIn(out, sr, 0.6);
-  return normalizeTo(out, p.peak);
+  return normalizeLoudness(out, sr, key, p.peak);
+}
+
+/**
+ * One band-limited square sample from a phase accumulator.
+ *
+ * The metallic hat/cymbal clusters used to be ideal squares
+ * (`phase < 0.5 ? 1 : -1`), whose infinite harmonics fold back hard at the
+ * ratios used. The dense inharmonic result happens to sound metallic, which
+ * is presumably why it survived, but it made the kit SAMPLE-RATE DEPENDENT:
+ * the 808 crash's spectral centroid measured 13.1 kHz at 44.1 kHz, 14.0 kHz
+ * at 48 kHz (+7.5%) and 26.1 kHz at 96 kHz (+99.9%). Most desktops run the
+ * AudioContext at 48 kHz while the tests and many phones run 44.1 kHz — so
+ * the drums a developer verified were not the drums a user heard.
+ *
+ * polyBLEP subtracts the band-limited step residual around each edge, which
+ * removes the fold-back while leaving the ratios (and therefore the
+ * character) alone.
+ */
+/**
+ * A fixed upper band edge, independent of the device sample rate.
+ *
+ * polyBLEP fixes the *aliasing* half of the sample-rate dependence, but the
+ * hats and crash also mix in raw white noise, whose bandwidth is whatever
+ * Nyquist happens to be — so at 88.2 kHz the cymbals gained a whole extra
+ * octave of hiss and their spectral centroid moved 42%. Capping at 19 kHz
+ * (just under Nyquist at 44.1 kHz, so the common case is barely touched)
+ * makes the kit sound the same on every device, and drops ultrasonic energy
+ * that only ever ate headroom.
+ */
+function airCeiling(x, sr) {
+  const fc = Math.min(19000, sr * 0.45);
+  if (fc < sr * 0.5) biquadApply(x, sr, "lowpass", fc, 0.7);
+}
+
+/**
+ * White noise has flat spectral DENSITY, so at a higher sample rate the same
+ * per-sample amplitude spreads the same power over a wider band and therefore
+ * puts LESS of it in the audible range. Left alone, the noise/partial balance
+ * of the cymbals — and hence their timbre — drifts with the device's sample
+ * rate. Scaling by sqrt(sr / 44100) holds the in-band density constant.
+ */
+const noiseGainFor = (sr) => Math.sqrt(sr / 44100);
+
+function blepSquare(phase, inc) {
+  let v = phase < 0.5 ? 1 : -1;
+  const poly = (t) => t - t * t / 2 - 0.5;
+  // rising edge at phase 0
+  if (phase < inc) v -= 2 * poly(phase / inc);
+  else if (phase > 1 - inc) v -= 2 * (-poly((phase - 1) / inc));
+  // falling edge at phase 0.5
+  const d = phase - 0.5;
+  if (d >= 0 && d < inc) v += 2 * poly(d / inc);
+  else if (d < 0 && d > -inc) v += 2 * (-poly(d / inc));
+  return v;
 }
 
 const HAT_RATIOS = [2, 3, 4.16, 5.43, 6.79, 8.21]; // classic 808 metallic cluster
 
-function synthHat(sr, p, open, rand) {
+function synthHat(sr, p, open, rand, key = 'hat') {
   const len = open ? 0.55 : 0.11;
   const n = Math.ceil(len * sr);
   const out = new Float32Array(n);
+  const ng = noiseGainFor(sr);
   const incs = HAT_RATIOS.map((r) => (p.base * r) / sr);
   const phases = HAT_RATIOS.map((_, i) => (i * 0.37) % 1);
   for (let i = 0; i < n; i++) {
     let v = 0;
     for (let k = 0; k < incs.length; k++) {
       phases[k] += incs[k]; if (phases[k] >= 1) phases[k] -= 1;
-      v += phases[k] < 0.5 ? 1 : -1;
+      v += blepSquare(phases[k], incs[k]);
     }
-    if (p.noiseMix) v = v * (1 - p.noiseMix) + (rand() * 2 - 1) * 6 * p.noiseMix;
+    if (p.noiseMix) v = v * (1 - p.noiseMix) + (rand() * 2 - 1) * 6 * p.noiseMix * ng;
     out[i] = v / 6;
   }
   biquadApply(out, sr, "bandpass", p.bp, 1.1);
@@ -827,24 +1089,26 @@ function synthHat(sr, p, open, rand) {
   }
   if (p.lp) biquadApply(out, sr, "lowpass", p.lp, 0.7);
   if (p.bits) bitcrush(out, p.bits);
+  airCeiling(out, sr);   // after the crusher: its quantisation noise is broadband too
   fadeIn(out, sr, 0.5);
-  return normalizeTo(out, open ? p.peakOpen : p.peak);
+  return normalizeLoudness(out, sr, open ? 'open' : 'hat', open ? p.peakOpen : p.peak);
 }
 
 const CRASH_RATIOS = [2, 2.89, 3.41, 4.16, 5.43, 6.79, 8.21, 9.7];
 
-function synthCrash(sr, p, rand) {
+function synthCrash(sr, p, rand, key = 'crash') {
   const n = Math.ceil((p.len + 0.2) * sr);
   const out = new Float32Array(n);
+  const ng = noiseGainFor(sr);
   const incs = CRASH_RATIOS.map((r) => (p.base * r) / sr);
   const phases = CRASH_RATIOS.map((_, i) => (i * 0.61) % 1);
   for (let i = 0; i < n; i++) {
     let v = 0;
     for (let k = 0; k < incs.length; k++) {
       phases[k] += incs[k]; if (phases[k] >= 1) phases[k] -= 1;
-      v += phases[k] < 0.5 ? 1 : -1;
+      v += blepSquare(phases[k], incs[k]);
     }
-    out[i] = (v / 8) * 0.55 + (rand() * 2 - 1) * 0.45;
+    out[i] = (v / 8) * 0.55 + (rand() * 2 - 1) * 0.45 * ng;
   }
   biquadApply(out, sr, "highpass", p.hp, 0.7);
   for (let i = 0; i < n; i++) {
@@ -852,11 +1116,12 @@ function synthCrash(sr, p, rand) {
     out[i] *= Math.exp(-t / (p.len * 0.3)) * 0.5 + Math.exp(-t / p.len) * 0.55;
   }
   if (p.lp) biquadApply(out, sr, "lowpass", p.lp, 0.7);
+  airCeiling(out, sr);
   fadeIn(out, sr, 0.6);
-  return normalizeTo(out, p.peak);
+  return normalizeLoudness(out, sr, key, p.peak);
 }
 
-function synthTom(sr, p, base, rand) {
+function synthTom(sr, p, base, rand, key = 'tom') {
   const n = Math.ceil((p.dec * 2.4 + 0.08) * sr);
   const out = new Float32Array(n);
   let phase = 0, ph2 = 0;
@@ -874,7 +1139,7 @@ function synthTom(sr, p, base, rand) {
   applyDrive(out, 1.25);
   if (p.lp) biquadApply(out, sr, "lowpass", p.lp, 0.7);
   fadeIn(out, sr);
-  return normalizeTo(out, p.peak);
+  return normalizeLoudness(out, sr, key, p.peak);
 }
 
 const DRUM_PARAMS = {
@@ -917,27 +1182,70 @@ const DRUM_PARAMS = {
 
 const TOM_FREQS = { tomH: 240, tomM: 170, tomL: 115 };
 
-/** Pure sample math for one drum hit — Node-testable, deterministic. */
-export function drumSampleData(sr, kit, key) {
-  const kp = DRUM_PARAMS[kit] || DRUM_PARAMS.acoustic;
-  const rand = mulberry32((kit + "|" + key).split("").reduce((a, c) => (a * 33 + c.charCodeAt(0)) >>> 0, 5381));
-  if (key === "kick") return synthKick(sr, kp.kick, rand);
-  if (key === "snare") return synthSnare(sr, kp.snare, rand);
-  if (key === "hat") return synthHat(sr, kp.hat, false, rand);
-  if (key === "open") return synthHat(sr, kp.hat, true, rand);
-  if (key === "crash") return synthCrash(sr, kp.crash, rand);
-  return synthTom(sr, kp.tom, TOM_FREQS[key] || 170, rand);
+/** How many round-robin variants each piece is worth synthesising. */
+export const DRUM_VARIANTS = { kick: 4, snare: 4, hat: 4, open: 2, crash: 1, tomH: 2, tomM: 2, tomL: 2 };
+
+/**
+ * Small deterministic perturbations that make variant N a different TAKE of
+ * the same drum rather than a different drum: ±2% tuning, ±6% decay, ±8% on
+ * the click/noise levels. Tight enough that the kit still sounds like itself.
+ */
+function varyParams(p, variant, rand) {
+  if (!variant) return p;
+  const jit = (amt) => 1 + (rand() * 2 - 1) * amt;
+  const q = { ...p };
+  for (const k of ["f0", "f1", "tone"]) if (typeof q[k] === "number") q[k] *= jit(0.02);
+  // `base` is the metallic cluster's root, and the cluster sits under a fixed
+  // bandpass — detuning it changes how much of the cluster survives the
+  // filter, so a 2% move became an 18% level swing between takes. 1% still
+  // decorrelates the partials without moving the level.
+  if (typeof q.base === "number") q.base *= jit(0.01);
+  for (const k of ["dec", "ndec"]) if (typeof q[k] === "number") q[k] *= jit(0.03);
+  for (const k of ["click", "noiseAmt"]) if (typeof q[k] === "number") q[k] *= jit(0.05);
+  // NOT noiseMix: it sets the tone/noise balance, and because each hit is
+  // peak-normalised afterwards, moving it changes the crest factor and hence
+  // the perceived loudness (measured 26% between takes) — a different drum,
+  // not a different take.
+  return q;
 }
 
-const drumBufferCache = new Map(); // `${sr}|${kit}|${key}` -> AudioBuffer
+/**
+ * Pure sample math for one drum hit — Node-testable, deterministic.
+ *
+ * `variant` selects a round-robin take. Without it every kick in a
+ * three-minute song was the same waveform sample-for-sample, which the ear
+ * detects far more readily than level uniformity — the loudest remaining
+ * "this is a drum machine" cue.
+ */
+export function drumSampleData(sr, kit, key, variant = 0) {
+  const kp = DRUM_PARAMS[kit] || DRUM_PARAMS.acoustic;
+  const base = (kit + "|" + key).split("").reduce((a, c) => (a * 33 + c.charCodeAt(0)) >>> 0, 5381);
+  const seed = variant ? (base ^ (variant * 0x9e3779b9)) >>> 0 : base;
+  const rand = mulberry32(seed);
+  // The perturbation PRNG is drawn from the same stream, so a variant is
+  // reproducible from (kit, key, variant) alone.
+  const v = (p) => varyParams(p, variant, rand);
+  if (key === "kick") return synthKick(sr, v(kp.kick), rand, "kick");
+  if (key === "snare") return synthSnare(sr, v(kp.snare), rand, "snare");
+  if (key === "hat") return synthHat(sr, v(kp.hat), false, rand);
+  if (key === "open") return synthHat(sr, v(kp.hat), true, rand);
+  if (key === "crash") return synthCrash(sr, v(kp.crash), rand, "crash");
+  return synthTom(sr, v(kp.tom), TOM_FREQS[key] || 170, rand, "tom");
+}
+
+const drumBufferCache = new Map(); // `${sr}|${kit}|${key}|${variant}` -> AudioBuffer
 
 /** Cached AudioBuffer for a drum hit (AudioBuffers are context-independent). */
-export function getDrumBuffer(ctx, kit, key) {
+export function getDrumBuffer(ctx, kit, key, variant = 0) {
   const sr = ctx.sampleRate;
-  const ck = sr + "|" + kit + "|" + key;
+  const n = DRUM_VARIANTS[key] || 1;
+  const v = ((variant % n) + n) % n;
+  const ck = sr + "|" + kit + "|" + key + "|" + v;
   let buf = drumBufferCache.get(ck);
   if (!buf) {
-    const data = drumSampleData(sr, kit, key);
+    // Lazily — a fully exercised kit is ~20 buffers, and most songs touch a
+    // handful of pieces.
+    const data = drumSampleData(sr, kit, key, v);
     buf = ctx.createBuffer(1, data.length, sr);
     buf.getChannelData(0).set(data);
     drumBufferCache.set(ck, buf);
@@ -945,9 +1253,12 @@ export function getDrumBuffer(ctx, kit, key) {
   return buf;
 }
 
-/** Trigger one drum hit: a BufferSource + velocity gain. */
-export function playDrumHit(ctx, dest, kit, key, at, vel = 1) {
-  const buf = getDrumBuffer(ctx, kit, key);
+/**
+ * Trigger one drum hit: a BufferSource + velocity gain.
+ * Returns the gain node so the caller can choke it (see chokeSchedule).
+ */
+export function playDrumHit(ctx, dest, kit, key, at, vel = 1, variant = 0) {
+  const buf = getDrumBuffer(ctx, kit, key, variant);
   const src = ctx.createBufferSource();
   src.buffer = buf;
   const g = ctx.createGain();
@@ -955,6 +1266,22 @@ export function playDrumHit(ctx, dest, kit, key, at, vel = 1) {
   src.connect(g).connect(dest);
   src.start(at);
   src.stop(at + buf.duration + 0.02);
+  return { gain: g, src, until: at + buf.duration };
+}
+
+/**
+ * A real hi-hat cannot ring open while the pedal is closed. The sequencer
+ * fired the two rows independently, so a closed hat landing under a ringing
+ * open hat left BOTH sounding — physically impossible and an immediate
+ * giveaway. For each open hat this returns the time it should be cut off
+ * (the next closed hat), or null if nothing follows it.
+ */
+export function chokeSchedule(openTimes, closedTimes) {
+  const closed = [...closedTimes].sort((a, b) => a - b);
+  return openTimes.map((t) => {
+    for (const c of closed) if (c > t + 1e-4) return c;
+    return null;
+  });
 }
 
 /* ================================= FX ===================================== */
@@ -1116,8 +1443,9 @@ export function glueCompressor(ctx) {
  * Post-render mastering on raw channel data (pure JS, in place):
  *  1. loudness-normalize toward targetRms (measured over the loudest half of
  *     50 ms windows so silence and intros don't skew it),
- *  2. look-ahead brickwall limit (linked channels — same algorithm as the
- *     live limiter worklet), 3. hard safety clip at the ceiling.
+ *  2. look-ahead brickwall limit + hard ceiling clamp via the SHARED kernel
+ *     in js/limiter-kernel.js — literally the same code as the live master
+ *     limiter worklet, so offline renders and live output limit identically.
  * Returns { gain, rms } for diagnostics.
  */
 export function masterFinalize(channels, sr, {
@@ -1144,39 +1472,10 @@ export function masterFinalize(channels, sr, {
   let gain = rms > 1e-6 ? targetRms / rms : 1;
   gain = Math.min(maxBoost, Math.max(maxCut, gain));
 
-  // Look-ahead brickwall: the gain target is the MINIMUM gain needed anywhere
-  // in the look-ahead window (sliding-window minimum via a monotonic deque),
-  // so the reduction is fully ramped in BEFORE a transient exits the delay
-  // line — peaks are attenuated smoothly instead of flat-top clipped.
-  const la = Math.max(1, Math.round((sr * lookaheadMs) / 1000));
-  const atk = 1 - Math.exp(-6 / la);       // converges to ~0.25% within the window
-  const rel = 1 - Math.exp(-1 / ((sr * releaseMs) / 1000));
-  const delayBufs = channels.map(() => new Float32Array(la));
-  const ringSize = la + 2;                 // > window span (la+1) so arriving/leaving indices never alias
-  const dval = new Float32Array(ringSize); // desired gain per sample, ring-indexed
-  const cap = la + 3;
-  const dqIdx = new Int32Array(cap);       // monotonic deque of sample indices
-  let qh = 0, qlen = 0;
-  let g = 1, dpos = 0;
-  for (let i = 0; i < n; i++) {
-    let peak = 0;
-    for (const ch of channels) { const v = Math.abs(ch[i] * gain); if (v > peak) peak = v; }
-    const d = peak > ceiling ? ceiling / peak : 1;
-    dval[i % ringSize] = d;
-    while (qlen > 0 && dval[dqIdx[(qh + qlen - 1) % cap] % ringSize] >= d) qlen--;
-    dqIdx[(qh + qlen) % cap] = i; qlen++;
-    if (dqIdx[qh] < i - la) { qh = (qh + 1) % cap; qlen--; }
-    const target = dval[dqIdx[qh] % ringSize];
-    g += (target - g) * (target < g ? atk : rel);
-    for (let c = 0; c < channels.length; c++) {
-      const dl = delayBufs[c];
-      const delayed = dl[dpos];
-      dl[dpos] = channels[c][i] * gain;
-      let v = delayed * g;
-      if (v > ceiling) v = ceiling; else if (v < -ceiling) v = -ceiling;
-      channels[c][i] = v;
-    }
-    if (++dpos >= la) dpos = 0;
+  if (gain !== 1) {
+    for (const ch of channels) for (let i = 0; i < n; i++) ch[i] *= gain;
   }
+  const kernel = createLimiterKernel(sr, { lookaheadMs, releaseMs });
+  kernel.process(channels, channels, 0, n, ceiling);
   return { gain, rms };
 }

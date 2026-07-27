@@ -1,0 +1,446 @@
+/* =====================================================================
+   SXRATCH / PAD — design tokens
+   ---------------------------------------------------------------------
+   ONE semantic colour layer for the whole product. Before this file the
+   palette lived in three unrelated namespaces (`:root` in styles.css, a
+   second `:root` in decks.css, a `#studio` block in studio.css) with ~480
+   raw hex/rgba literals outside them, so a theme switch was impossible.
+
+   Rules for anything added later:
+     • No bare hex / rgba() outside this file. Use a token.
+     • DARK is the base: declare the dark value in the block below, and its
+       light counterpart in the LIGHT THEME block at the end of the file.
+       (light-dark() was tried and abandoned — see that block for why.)
+     • Depth is a token too (--sx-hilite / --sx-shade / --sx-wash-*):
+       a white inner rim over a black shade is a *dark-theme* idiom and
+       inverts on paper.
+     • Glows are whole box-shadow values, not colours — the light theme
+       swaps a soft bloom for a tight ring, which needs the blur radius.
+     • An accent used as TEXT takes the -ink variant, which darkens on
+       light. An accent used as a FILL keeps the plain token.
+
+   JS note: `getComputedStyle(el).getPropertyValue('--x')` returns the raw
+   declaration, not a resolved colour. js/theme.js resolves tokens through a
+   probe element's `color`, which is a real property. Never parse a token.
+   ===================================================================== */
+
+:root {
+  /* The UA needs this for native scrollbars, <select> popups and form
+     control internals — and light-dark() resolves against it. */
+  color-scheme: light dark;
+
+  /* ---------- surfaces ---------- */
+  --sx-bg: #0a0f1c;
+  --sx-bg-glow-a: rgba(72, 221, 211, 0.10);
+  --sx-bg-glow-b: rgba(255, 189, 61, 0.12);
+  --sx-bg-vignette: #15233f;
+  --sx-surface-1: #131b2c;
+  --sx-surface-2: #1c2740;
+  --sx-surface-3: #232f4a;
+  --sx-well: #070b13;
+  --sx-overlay: rgba(20, 22, 31, 0.9);
+  --sx-scrim: rgba(0, 0, 0, 0.55);
+
+  /* ---------- text ----------
+     Four tiers, not three: the deck chrome genuinely uses a dim tier below
+     its muted one (control sub-labels vs. readouts), and collapsing them
+     flattened the hierarchy in both directions at once. */
+  --sx-text-1: #e8ecf6;
+  --sx-text-2: #cdd6ea;
+  --sx-text-3: #97a2b3;
+  --sx-text-4: #74838f;
+  --sx-ink-on-accent: #06070b;
+  --sx-ink-on-danger: #ffffff;
+
+  /* ---------- lines ---------- */
+  --sx-line: #2b3650;
+  --sx-line-strong: #3a4e5a;
+  --sx-line-soft: rgba(141, 176, 207, 0.20);
+
+  /* ---------- brand / decks ----------
+     Each accent has a FILL (surface behind ink-on-accent) and an INK
+     (text, 1px borders, icons directly on the page background). On dark
+     they are the same bright value; on light the ink role darkens so it
+     stays legible on paper while the fill stays saturated.
+
+     Measured, not eyeballed: every light FILL in the light block below
+     carries --sx-ink-on-accent (#ffffff) at 4.5:1 or better, because the app
+     puts bold body-size text directly on most of them. #0d8f86 read as a
+     nicer teal but only reached 3.97:1, which failed on the start button,
+     the deck badges, the A|B switch and the waveform lane tags at once. */
+  --sx-brand-a: #48ddd3;
+  --sx-brand-a-ink: #48ddd3;
+  --sx-brand-b: #ffbd3d;
+  --sx-brand-b-ink: #ffbd3d;
+  --sx-deck-a:        var(--sx-brand-a);
+  --sx-deck-a-ink:    var(--sx-brand-a-ink);
+  --sx-deck-b: #ff6175;
+  --sx-deck-b-ink: #ff6175;
+  --sx-accent: #6c7bff;
+  --sx-accent-ink: #6c7bff;
+  --sx-cyan: #48efe5;
+  --sx-cyan-ink: #48efe5;
+  --sx-purple: #a875ff;
+  --sx-purple-ink: #a875ff;
+
+  /* ---------- PAD lane identities ----------
+     Every accent that can appear as INK has an -ink companion. Without one,
+     the next person to colour a label with a lane token has no correct
+     choice — which is how five text sites ended up between 3.0 and 4.4:1. */
+  --sx-lane-chords: #46a7ff;
+  --sx-lane-chords-ink: #46a7ff;
+  --sx-lane-bass: #1fe0bd;
+  --sx-lane-bass-ink: #1fe0bd;
+  --sx-lane-lead:     var(--sx-brand-b);
+  --sx-lane-lead-ink: var(--sx-brand-b-ink);
+  --sx-lane-drums: #ff5c73;
+  --sx-lane-drums-ink: #ff8090;
+  --sx-lane-sampler:  var(--sx-purple);
+  --sx-lane-sampler-ink: var(--sx-purple-ink);
+
+  /* ---------- state ---------- */
+  --sx-ok: #2ecc71;
+  --sx-ok-ink: #9be77d;
+  --sx-warn: #f1c40f;
+  --sx-warn-ink: #f1c40f;
+  --sx-hot: #f5923c;
+  --sx-hot-ink: #f5923c;
+  --sx-danger: #ff2d55;
+  --sx-focus: #f1f8fb;
+
+  /* meters share one ramp everywhere (channel VU, master, PAD minis) */
+  --sx-meter-low: #55c95e;
+  --sx-meter-mid: #ecc63f;
+  --sx-meter-high: #ff4a44;
+
+  /* ---------- depth ----------
+     A dark UI is lit from above on black; paper is lit from above on
+     white. Same geometry, inverted materials. */
+  --sx-hilite: rgba(255, 255, 255, 0.06);
+  --sx-shade: rgba(0, 0, 0, 0.45);
+  --sx-wash-1: rgba(255, 255, 255, 0.05);
+  --sx-wash-2: rgba(255, 255, 255, 0.09);
+  --sx-shadow-1: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --sx-shadow-2: 0 8px 24px rgba(0, 0, 0, 0.42);
+  --sx-shadow-3: 0 18px 52px rgba(0, 0, 0, 0.5);
+
+  /* Whole box-shadow values: light swaps the bloom for a tight ring,
+     which needs the blur radius, not just the colour. */
+  --sx-glow-a: 0 0 14px rgba(72, 221, 211, 0.55);
+  --sx-glow-b: 0 0 14px rgba(255, 189, 61, 0.5);
+  --sx-glow-danger: 0 0 12px rgba(255, 45, 85, 0.6);
+
+  /* color-mix() bevel targets. BOTH endpoints move away from the page
+     background — on dark that means toward white, on light toward slate —
+     with -darken always the further of the two, so a bevel's top stop stays
+     lighter than its bottom in both themes. An earlier version had -lighten
+     as #ffffff in BOTH branches, which washed every accent fill toward the
+     white page and left three of them unable to carry white text. */
+  --sx-lighten: #ffffff;
+  --sx-darken: #000000;
+
+  /* ---------- physical materials ----------
+     Piano keys, fader handles, platter chrome are already "white plastic
+     on black". On paper they need a darker mid and a visible outline
+     rather than a straight inversion. */
+  --sx-metal-hi: #f4f7fb;
+  --sx-metal-mid: #cfd7df;
+  --sx-metal-lo: #596a77;
+  /* An outline ON metal — a dark score on dark, a real edge on paper. */
+  --sx-metal-edge: rgba(0, 0, 0, 0.3);
+  --sx-chrome: #cdd6ea;
+  /* The brightest single mark on a control (platter index tick, VU peak
+     cap). It has to be white on dark and genuinely dark on paper — chrome
+     is a label colour and reads as grey in both. */
+  --sx-marker: #ffffff;
+  /* A physical RIM is geometry, not a highlight: --sx-hilite is white-ish in
+     both themes and disappears against a light chassis. */
+  --sx-rim: rgba(255, 255, 255, 0.14);
+
+  /* ---------- piano keys ----------
+     Black keys stay black in both themes (a material fact), but the light
+     branch softens their edge so it sits in the same weight family as the
+     white-key separator instead of being 8x heavier. */
+  --sx-key-ink: #596a77;
+  --sx-key-line: #20242c;
+  --sx-key-black-hi: #263140;
+  --sx-key-black-lo: #05080d;
+  --sx-key-black-edge: #05070a;
+
+  /* Lane-coloured glow. Resolves --lane at the use site, so one token serves
+     all five lanes; light swaps the bloom for a tight ring, because a 12px
+     36%-alpha halo on every lit step turns a dense grid into mush on paper. */
+  --sx-glow-lane: 0 0 12px color-mix(in srgb, var(--lane) 36%, transparent);
+
+  /* ---------- canvas (resolved by js/theme.js, never parsed) ---------- */
+  --sx-wave-bg:       transparent;
+  --sx-wave-body: #eef4f8;
+  --sx-wave-grid-beat: rgba(255, 255, 255, 0.28);
+  --sx-wave-grid-bar: rgba(255, 255, 255, 0.10);
+  --sx-wave-label: rgba(255, 255, 255, 0.55);
+  --sx-wave-centre: rgba(255, 255, 255, 0.08);
+  --sx-wave-playhead: var(--sx-danger);
+  --sx-wave-cue-ink: #06070b;
+  --sx-viz-a:         var(--sx-brand-a);
+  --sx-viz-b:         var(--sx-deck-b);
+  --sx-patch-hi: #7fe3ff;
+  --sx-patch-lo:      var(--sx-brand-b);
+
+  /* ---------- geometry / type (unchanged values, one home) ---------- */
+  --sx-radius-sm: 6px;
+  --sx-radius: 10px;
+  --sx-radius-lg: 14px;
+  --sx-font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono", Consolas, monospace;
+}
+
+/* An explicit user choice overrides the OS preference in both directions. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }
+
+/* ---------- component-level tokens ----------
+   Named for the job, not the pixel. Anything that recurs across files and
+   would otherwise get spelled three ways lives here. */
+:root {
+  /* raised control face (buttons, pills, transport modules) */
+  --sx-btn-hi: #26334a;
+  --sx-btn-lo: #121a29;
+  --sx-btn-hover-hi: #2f3d57;
+  --sx-btn-hover-lo: #182236;
+  /* Amber gradient pair for primary / studio buttons. The light branch is
+     dark amber, not pale amber: these gradients carry white 900-weight text,
+     and #e0a13a gave 2.25:1 at the top stop — the PAD's primary buttons and
+     its active lane tab were illegible over their upper half. The dark
+     branch keeps the original #ffce4a rather than the paler #ffe17c four of
+     the five merged sites had used. */
+  --sx-amber-hi: #ffce4a;
+  --sx-amber-lo: #d69022;
+}
+
+/* Cue markers: eight fixed hues, readable on both stages. Kept as their
+   own scale because they must stay mutually distinguishable, not because
+   they are semantic. */
+:root {
+  /* Light values are dark enough to carry the white cue-number ink; the
+     yellow, orange and green were the three that could not. */
+  --sx-cue-1: #ffd23f;
+  --sx-cue-2: var(--sx-brand-a-ink);
+  --sx-cue-3: var(--sx-deck-b-ink);
+  --sx-cue-4: var(--sx-accent-ink);
+  --sx-cue-5: #f89b29;
+  --sx-cue-6: #79e66b;
+  --sx-cue-7: #b16cff;
+  --sx-cue-8: #6ad7ff;
+}
+
+
+/* =====================================================================
+   LIGHT THEME
+   ---------------------------------------------------------------------
+   Explicit overrides, not light-dark() inside the token values.
+   light-dark() is the tidier spelling, but a custom property holding one
+   is substituted as an UNRESOLVED token stream, and Chrome then resolved
+   it against the wrong branch once the value reached a `background`
+   shorthand: a dark-theme button rendered a light-theme face under
+   dark-theme text (measured 1.01:1 — invisible). Two explicit blocks
+   cannot go wrong in any engine.
+
+   Order matters: the media query gives the OS preference to anyone who
+   has not chosen, and the attribute block after it lets an explicit
+   choice win in both directions.
+   ===================================================================== */
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --sx-bg: #eceff6;
+    --sx-bg-glow-a: rgba(72, 221, 211, 0.16);
+    --sx-bg-glow-b: rgba(255, 189, 61, 0.16);
+    --sx-bg-vignette: #f7f9fc;
+    --sx-surface-1: #ffffff;
+    --sx-surface-2: #f2f5fa;
+    --sx-surface-3: #e6ebf4;
+    --sx-well: #dde3ee;
+    --sx-overlay: rgba(255, 255, 255, 0.94);
+    --sx-scrim: rgba(15, 23, 42, 0.34);
+    --sx-text-1: #0f172a;
+    --sx-text-2: #3c4a63;
+    --sx-text-3: #4a5568;
+    --sx-text-4: #64708a;
+    --sx-ink-on-accent: #ffffff;
+    --sx-line: #ccd4e2;
+    --sx-line-strong: #a8b5c9;
+    --sx-line-soft: rgba(15, 23, 42, 0.10);
+    --sx-brand-a: #0a6f68;
+    --sx-brand-a-ink: #0a6f68;
+    --sx-deck-a: #0a6f68;
+    --sx-deck-a-ink: #0a6f68;
+    --sx-brand-b: #8f5a00;
+    --sx-brand-b-ink: #8f5a00;
+    --sx-deck-b: #d63a56;
+    --sx-deck-b-ink: #b02843;
+    --sx-accent: #4b56d6;
+    --sx-accent-ink: #3b45b8;
+    --sx-cyan: #0e8f89;
+    --sx-cyan-ink: #0a6b66;
+    --sx-purple: #7a45d6;
+    --sx-purple-ink: #6032b8;
+    --sx-lane-chords: #1668c4;
+    --sx-lane-chords-ink: #12539c;
+    --sx-lane-bass: #0a8f79;
+    --sx-lane-bass-ink: #07705f;
+    --sx-lane-drums: #c8324c;
+    --sx-lane-drums-ink: #a3283e;
+    --sx-ok: #1a8f4c;
+    --sx-ok-ink: #136b39;
+    --sx-warn: #a37a00;
+    --sx-warn-ink: #7a5c00;
+    --sx-hot: #c25a12;
+    --sx-hot-ink: #96450e;
+    --sx-danger: #c2183c;
+    --sx-focus: #0f172a;
+    --sx-meter-low: #1f9d55;
+    --sx-meter-mid: #a08400;
+    --sx-meter-high: #d1442a;
+    --sx-hilite: rgba(255, 255, 255, 0.92);
+    --sx-shade: rgba(15, 23, 42, 0.09);
+    --sx-wash-1: rgba(15, 23, 42, 0.045);
+    --sx-wash-2: rgba(15, 23, 42, 0.085);
+    --sx-shadow-1: 0 1px 2px rgba(15, 23, 42, 0.08);
+    --sx-shadow-2: 0 4px 14px rgba(15, 23, 42, 0.10);
+    --sx-shadow-3: 0 14px 38px rgba(15, 23, 42, 0.14);
+    --sx-glow-a: 0 0 0 2px rgba(13, 143, 134, 0.45);
+    --sx-glow-b: 0 0 0 2px rgba(185, 116, 0, 0.42);
+    --sx-glow-danger: 0 0 0 2px rgba(194, 24, 60, 0.45);
+    --sx-lighten: #475569;
+    --sx-darken: #0f172a;
+    --sx-metal-hi: #ffffff;
+    --sx-metal-mid: #c3ccd8;
+    --sx-metal-lo: #8f9bab;
+    --sx-metal-edge: #8f9bab;
+    --sx-chrome: #5a6779;
+    --sx-marker: #3a4453;
+    --sx-rim: #a8b5c9;
+    --sx-key-ink: #3c4a63;
+    --sx-key-line: #b8c0cc;
+    --sx-key-black-hi: #3a4658;
+    --sx-key-black-lo: #121a26;
+    --sx-key-black-edge: #1b2432;
+    --sx-glow-lane: 0 0 0 2px color-mix(in srgb, var(--lane) 45%, transparent);
+    --sx-wave-body: #3c4a63;
+    --sx-wave-grid-beat: rgba(15, 23, 42, 0.30);
+    --sx-wave-grid-bar: rgba(15, 23, 42, 0.12);
+    --sx-wave-label: rgba(15, 23, 42, 0.6);
+    --sx-wave-centre: rgba(15, 23, 42, 0.12);
+    --sx-wave-cue-ink: #ffffff;
+    --sx-patch-hi: #0e7490;
+    --sx-btn-hi: #ffffff;
+    --sx-btn-lo: #eef1f7;
+    --sx-btn-hover-hi: #ffffff;
+    --sx-btn-hover-lo: #e6ebf4;
+    --sx-amber-hi: #8a5a00;
+    --sx-amber-lo: #6f4600;
+    --sx-cue-1: #8a6408;
+    --sx-cue-5: #9c4e0a;
+    --sx-cue-6: #2f6b23;
+    --sx-cue-7: #7a3fc4;
+    --sx-cue-8: #0f6f9c;
+  }
+  
+}
+
+/* An explicit choice wins over the OS preference, in both directions. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --sx-bg: #eceff6;
+  --sx-bg-glow-a: rgba(72, 221, 211, 0.16);
+  --sx-bg-glow-b: rgba(255, 189, 61, 0.16);
+  --sx-bg-vignette: #f7f9fc;
+  --sx-surface-1: #ffffff;
+  --sx-surface-2: #f2f5fa;
+  --sx-surface-3: #e6ebf4;
+  --sx-well: #dde3ee;
+  --sx-overlay: rgba(255, 255, 255, 0.94);
+  --sx-scrim: rgba(15, 23, 42, 0.34);
+  --sx-text-1: #0f172a;
+  --sx-text-2: #3c4a63;
+  --sx-text-3: #4a5568;
+  --sx-text-4: #64708a;
+  --sx-ink-on-accent: #ffffff;
+  --sx-line: #ccd4e2;
+  --sx-line-strong: #a8b5c9;
+  --sx-line-soft: rgba(15, 23, 42, 0.10);
+  --sx-brand-a: #0a6f68;
+  --sx-brand-a-ink: #0a6f68;
+  --sx-deck-a: #0a6f68;
+  --sx-deck-a-ink: #0a6f68;
+  --sx-brand-b: #8f5a00;
+  --sx-brand-b-ink: #8f5a00;
+  --sx-deck-b: #d63a56;
+  --sx-deck-b-ink: #b02843;
+  --sx-accent: #4b56d6;
+  --sx-accent-ink: #3b45b8;
+  --sx-cyan: #0e8f89;
+  --sx-cyan-ink: #0a6b66;
+  --sx-purple: #7a45d6;
+  --sx-purple-ink: #6032b8;
+  --sx-lane-chords: #1668c4;
+  --sx-lane-chords-ink: #12539c;
+  --sx-lane-bass: #0a8f79;
+  --sx-lane-bass-ink: #07705f;
+  --sx-lane-drums: #c8324c;
+  --sx-lane-drums-ink: #a3283e;
+  --sx-ok: #1a8f4c;
+  --sx-ok-ink: #136b39;
+  --sx-warn: #a37a00;
+  --sx-warn-ink: #7a5c00;
+  --sx-hot: #c25a12;
+  --sx-hot-ink: #96450e;
+  --sx-danger: #c2183c;
+  --sx-focus: #0f172a;
+  --sx-meter-low: #1f9d55;
+  --sx-meter-mid: #a08400;
+  --sx-meter-high: #d1442a;
+  --sx-hilite: rgba(255, 255, 255, 0.92);
+  --sx-shade: rgba(15, 23, 42, 0.09);
+  --sx-wash-1: rgba(15, 23, 42, 0.045);
+  --sx-wash-2: rgba(15, 23, 42, 0.085);
+  --sx-shadow-1: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --sx-shadow-2: 0 4px 14px rgba(15, 23, 42, 0.10);
+  --sx-shadow-3: 0 14px 38px rgba(15, 23, 42, 0.14);
+  --sx-glow-a: 0 0 0 2px rgba(13, 143, 134, 0.45);
+  --sx-glow-b: 0 0 0 2px rgba(185, 116, 0, 0.42);
+  --sx-glow-danger: 0 0 0 2px rgba(194, 24, 60, 0.45);
+  --sx-lighten: #475569;
+  --sx-darken: #0f172a;
+  --sx-metal-hi: #ffffff;
+  --sx-metal-mid: #c3ccd8;
+  --sx-metal-lo: #8f9bab;
+  --sx-metal-edge: #8f9bab;
+  --sx-chrome: #5a6779;
+  --sx-marker: #3a4453;
+  --sx-rim: #a8b5c9;
+  --sx-key-ink: #3c4a63;
+  --sx-key-line: #b8c0cc;
+  --sx-key-black-hi: #3a4658;
+  --sx-key-black-lo: #121a26;
+  --sx-key-black-edge: #1b2432;
+  --sx-glow-lane: 0 0 0 2px color-mix(in srgb, var(--lane) 45%, transparent);
+  --sx-wave-body: #3c4a63;
+  --sx-wave-grid-beat: rgba(15, 23, 42, 0.30);
+  --sx-wave-grid-bar: rgba(15, 23, 42, 0.12);
+  --sx-wave-label: rgba(15, 23, 42, 0.6);
+  --sx-wave-centre: rgba(15, 23, 42, 0.12);
+  --sx-wave-cue-ink: #ffffff;
+  --sx-patch-hi: #0e7490;
+  --sx-btn-hi: #ffffff;
+  --sx-btn-lo: #eef1f7;
+  --sx-btn-hover-hi: #ffffff;
+  --sx-btn-hover-lo: #e6ebf4;
+  --sx-amber-hi: #8a5a00;
+  --sx-amber-lo: #6f4600;
+  --sx-cue-1: #8a6408;
+  --sx-cue-5: #9c4e0a;
+  --sx-cue-6: #2f6b23;
+  --sx-cue-7: #7a3fc4;
+  --sx-cue-8: #0f6f9c;
+}

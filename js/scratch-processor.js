@@ -15,6 +15,11 @@
 //   - When not touching, a "motor" eases the rate toward the base rate (if
 //     playing) or toward zero (if paused) — giving turntable-like spin-up and
 //     brake inertia.
+//
+// Interpolation + loop-seam handling live in js/scratch-kernel.js (pure,
+// node-tested; inlined into this file by the production bundle).
+
+import { readClamped, createSeamState, seamStart, seamTick } from "./scratch-kernel.js";
 
 class ScratchProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -51,6 +56,10 @@ class ScratchProcessor extends AudioWorkletProcessor {
 
     this.reportInterval = Math.floor(sampleRate * 0.04); // ~25 fps position posts
     this.sinceReport = 0;
+
+    // Loop-seam crossfade (~5 ms): blends the post-wrap audio with the ghost
+    // continuation of the pre-wrap trajectory so loop wraps don't click.
+    this.seam = createSeamState(Math.max(32, Math.round(sampleRate * 0.005)));
 
     // Optional lock-free jog channel (SharedArrayBuffer). When present, the main
     // thread writes jog velocity here and bumps a generation counter; we poll it
@@ -192,30 +201,31 @@ class ScratchProcessor extends AudioWorkletProcessor {
       }
 
       // --- read interpolated sample at the playhead ---
-      // 4-point Catmull-Rom cubic interpolation: smoother and noticeably
-      // lower-aliasing than linear when the hand drives the rate hard (fast
-      // scratches, backspins), at a negligible CPU cost over the old lerp.
+      // 4-point Catmull-Rom cubic (js/scratch-kernel.js): smoother and lower-
+      // aliasing than linear under hard hand-driven rates. During a loop-wrap
+      // crossfade, the post-wrap audio blends with a "ghost" continuation of
+      // the pre-wrap trajectory so the seam doesn't click.
       const ph = this.playhead;
-      const idx = ph | 0;
-      const frac = ph - idx;
-      const i0 = idx > 0 ? idx - 1 : 0;
-      const i2 = idx < last ? idx + 1 : last;
-      const i3 = i2 < last ? i2 + 1 : last;
+      const seam = this.seam;
       for (let c = 0; c < chCount; c++) {
         const data = this.channels[c] || this.channels[0];
-        const p0 = data[i0], p1 = data[idx], p2 = data[i2], p3 = data[i3];
-        const a = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
-        const b = p0 - 2.5 * p1 + 2 * p2 - 0.5 * p3;
-        const d = -0.5 * p0 + 0.5 * p2;
-        out[c][i] = ((a * frac + b) * frac + d) * frac + p1;
+        let v = readClamped(data, ph, last);
+        if (seam.active) v = v * seam.wMain + readClamped(data, seam.ph, last) * seam.wGhost;
+        out[c][i] = v;
       }
+      if (seam.active) seamTick(seam, this.currentRate, last);
 
-      // --- advance the playhead (with loop wrap) ---
+      // --- advance the playhead (with loop wrap + seam crossfade) ---
       this.playhead += this.currentRate;
       if (this.loopActive && this.loopEnd > this.loopStart + 1) {
         const loopLen = this.loopEnd - this.loopStart;
-        if (this.playhead >= this.loopEnd) this.playhead -= loopLen;
-        else if (this.playhead < this.loopStart) this.playhead += loopLen;
+        if (this.playhead >= this.loopEnd) {
+          seamStart(seam, this.playhead, loopLen);
+          this.playhead -= loopLen;
+        } else if (this.playhead < this.loopStart) {
+          seamStart(seam, this.playhead, loopLen);
+          this.playhead += loopLen;
+        }
       } else if (this.playhead <= 0) {
         this.playhead = 0;
         if (this.currentRate < 0 && !this.touching) this.currentRate = 0;

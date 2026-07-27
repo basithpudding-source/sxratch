@@ -12,6 +12,54 @@ export class UI {
     this.playBtn = { A: document.getElementById("play-A"), B: document.getElementById("play-B") };
     this.crossfadeSet = null; // registered by app to the custom crossfader's setter
     this.bpmEl = { A: null, B: null }; // live BPM readouts (registered by the deck console)
+
+    // Screen-reader plumbing: toasts double as polite status announcements,
+    // and announce() drives an offscreen assertive region for events that
+    // must interrupt (recording started/stopped, engine failures).
+    if (this.toastEl) {
+      this.toastEl.setAttribute("role", "status");
+      this.toastEl.setAttribute("aria-live", "polite");
+    }
+    this.announceEl = document.createElement("div");
+    this.announceEl.setAttribute("aria-live", "assertive");
+    this.announceEl.setAttribute("role", "alert");
+    this.announceEl.className = "sr-only";
+    document.body.appendChild(this.announceEl);
+  }
+
+  /** Assertive screen-reader announcement (visually hidden). */
+  announce(msg) {
+    // Clear first so repeating the same message is re-announced.
+    this.announceEl.textContent = "";
+    requestAnimationFrame(() => { this.announceEl.textContent = msg; });
+  }
+
+  /**
+   * Trap Tab focus inside an open dialog, close on Esc via the app's global
+   * handler, and restore focus to the previously-focused element on close.
+   * Returns a release() function. Also stamps dialog ARIA roles.
+   */
+  trapFocus(dialogEl) {
+    dialogEl.setAttribute("role", "dialog");
+    dialogEl.setAttribute("aria-modal", "true");
+    const opener = document.activeElement;
+    const focusables = () => [...dialogEl.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )].filter((e) => !e.disabled && e.offsetParent !== null);
+    const onKey = (e) => {
+      if (e.key !== "Tab") return;
+      const f = focusables();
+      if (!f.length) return;
+      const first = f[0], lastEl = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); lastEl.focus(); }
+      else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); first.focus(); }
+    };
+    dialogEl.addEventListener("keydown", onKey);
+    (focusables()[0] || dialogEl).focus?.();
+    return () => {
+      dialogEl.removeEventListener("keydown", onKey);
+      opener?.focus?.();
+    };
   }
 
   /**
