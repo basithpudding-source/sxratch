@@ -512,6 +512,66 @@ document.getElementById("theme-btn")?.addEventListener("click", () => {
   if (sel) sel.value = m;
 });
 
+// ---------- Install (PWA) ----------
+// The app has been installable for a while, but nothing SAID so — the browser
+// omnibox hint is the only affordance Chrome gives and iOS gives none at all.
+// The topbar button appears when installing is actually possible: Chrome et
+// al. fire beforeinstallprompt; iOS Safari never does, so there the button
+// opens Add-to-Home-Screen instructions instead.
+{
+  const btn = document.getElementById("install-btn");
+  const standalone = window.matchMedia?.("(display-mode: standalone)").matches
+    || navigator.standalone === true;   // iOS's non-standard spelling
+  let deferredPrompt = null;
+
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();                 // no unsolicited mini-infobar
+    deferredPrompt = e;
+    if (btn && !standalone) btn.hidden = false;
+  });
+  window.addEventListener("appinstalled", () => { if (btn) btn.hidden = true; deferredPrompt = null; });
+
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); // iPadOS masquerades as Mac
+  if (btn && isIOS && !standalone) btn.hidden = false;
+
+  btn?.addEventListener("click", async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === "accepted") btn.hidden = true;
+      deferredPrompt = null;            // a prompt object is single-use
+      return;
+    }
+    // iOS: installing is a manual gesture Safari owns — show the steps.
+    // Class .dialog so the app-wide focus trap + Esc handling apply.
+    let dlg = document.getElementById("install-dialog");
+    if (!dlg) {
+      dlg = document.createElement("div");
+      dlg.className = "dialog";
+      dlg.id = "install-dialog";
+      dlg.innerHTML = `
+        <div class="dialog-card">
+          <h3>Install Sxratch</h3>
+          <p class="muted">Add it to your Home Screen and it runs full-screen,
+            works offline, and keeps your songs on the device:</p>
+          <ul class="help-list">
+            <li>Tap the <b>Share</b> button in Safari's toolbar</li>
+            <li>Scroll down and tap <b>Add to Home Screen</b></li>
+            <li>Tap <b>Add</b></li>
+          </ul>
+          <div class="dialog-actions">
+            <button class="btn primary" id="install-close">Got it</button>
+          </div>
+        </div>`;
+      document.body.appendChild(dlg);
+      dlg.querySelector("#install-close").addEventListener("click", () => { dlg.hidden = true; });
+    }
+    dlg.hidden = false;
+    dlg.querySelector("#install-close").focus();
+  });
+}
+
 // ---------- Boot (needs a user gesture for audio) ----------
 const overlay = document.getElementById("start-overlay");
 document.getElementById("start-btn").addEventListener("click", async () => {

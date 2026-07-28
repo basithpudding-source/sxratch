@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fitPage, playCol, fitRows } from "../js/pad-geometry.js";
+import { fitPage, playCol, fitRows, resolvePanelDrag } from "../js/pad-geometry.js";
 
 // The widths the real layout hands the grid at each target viewport.
 // centre column = viewport - shell padding - rail - inspector - gaps.
@@ -74,4 +74,25 @@ test("fitRows splits evenly, and windows rather than squashing", () => {
   assert.equal(tight.rowH, 32);
   assert.ok(tight.window < 8, "must window when 8 rows cannot fit at the floor");
   assert.ok(tight.window * 32 + 4 * (tight.window - 1) <= 141);
+});
+
+test("resolvePanelDrag: tracks the pointer inside [min, max]", () => {
+  const opts = { startSize: 236, min: 150, max: 340, collapseBelow: 90 };
+  assert.deepEqual(resolvePanelDrag({ ...opts, delta: 40 }), { size: 276, open: true });
+  assert.deepEqual(resolvePanelDrag({ ...opts, delta: 300 }), { size: 340, open: true });
+  assert.deepEqual(resolvePanelDrag({ ...opts, delta: -60 }), { size: 176, open: true });
+});
+
+test("resolvePanelDrag: collapses past the floor instead of pinning a sliver", () => {
+  const opts = { startSize: 236, min: 150, max: 340, collapseBelow: 90 };
+  const r = resolvePanelDrag({ ...opts, delta: -200 });
+  assert.equal(r.open, false);
+  // The stored size survives the collapse, so reopening restores it.
+  assert.equal(r.size, 236);
+});
+
+test("resolvePanelDrag: a size already outside the range is brought back in", () => {
+  // e.g. a width persisted on a wide monitor, reopened on a narrow one.
+  const r = resolvePanelDrag({ startSize: 500, delta: 0, min: 150, max: 340, collapseBelow: 90 });
+  assert.deepEqual(r, { size: 340, open: true });
 });

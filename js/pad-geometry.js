@@ -75,6 +75,24 @@ export function playCol(elapsed, stepSec, page0, pageSteps) {
 }
 
 /**
+ * Resolve a panel-edge drag into a size and an open/closed state.
+ *
+ * One rule serves all three panels (section rail, inspector, keyboard dock):
+ * the size tracks the pointer inside [min, max], and dragging past
+ * `collapseBelow` snaps the panel shut rather than pinning it at a useless
+ * sliver — a 40px inspector is worse than no inspector. The stored size is
+ * preserved on collapse so reopening restores what the user had.
+ *
+ * `delta` is signed toward "bigger" — the caller flips the axis (a right
+ * panel grows as the pointer moves left).
+ */
+export function resolvePanelDrag({ startSize, delta, min, max, collapseBelow }) {
+  const raw = startSize + delta;
+  if (raw < collapseBelow) return { size: Math.max(min, Math.min(max, startSize)), open: false };
+  return { size: Math.max(min, Math.min(max, raw)), open: true };
+}
+
+/**
  * Split the available height between a lane's rows.
  * Returns the row height, and how many rows actually fit when even the
  * minimum will not (so the caller can window rather than squash).

@@ -96,6 +96,11 @@ body.view-studio .studio-head { display: none; }
   --ruler-h: 26px;
   --dock-h: 156px;
   --pad-gap: 8px;
+  --handle-w: 14px;
+  /* Keybed key height — user-draggable via the dock handle. The min() caps a
+     size persisted on a tall desktop from swallowing a phone's viewport. */
+  --kbd-h: 112px;
+  --kbd-hh: min(var(--kbd-h), 30vh);
   --lblw: 62px;
   --gap: 4px;
   --cell: 26px;
@@ -177,6 +182,21 @@ body.view-studio .studio-head { display: none; }
   color: var(--sx-ink-on-accent);
 }
 .tp-primary .pad-stop { min-width: 46px; }
+.tp-primary .tp-loop {
+  min-width: 42px;
+  min-height: 38px;
+  border: 1px solid var(--sx-line);
+  border-radius: var(--sx-radius-sm);
+  background: linear-gradient(180deg, var(--sx-btn-hi), var(--sx-btn-lo));
+  color: var(--sx-text-2);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.tp-primary .tp-loop.active {
+  border-color: var(--sx-brand-b);
+  background: color-mix(in srgb, var(--sx-brand-b) 22%, var(--sx-btn-lo));
+  color: var(--sx-brand-b-ink);
+}
 .pad-transport-icon { font-size: 1rem; }
 
 .pad-bpm-module {
@@ -299,8 +319,11 @@ body.view-studio .studio-head { display: none; }
 .pad-body {
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--insp-w);
-  gap: var(--pad-gap);
+  grid-template-columns:
+    minmax(0, min(var(--rail-w), 28vw)) var(--handle-w)
+    minmax(0, 1fr)
+    var(--handle-w) minmax(0, min(var(--insp-w), 34vw));
+  gap: 2px;
   padding: 0 var(--pad-gap) var(--pad-gap);
 }
 .pad-section-rail,
@@ -313,6 +336,65 @@ body.view-studio .studio-head { display: none; }
   box-shadow: inset 0 1px 0 var(--sx-hilite);
   overflow: hidden;
 }
+
+/* ------------------------- panel edge handles ----------------------------
+   Each peripheral panel (rail / inspector / keyboard dock) collapses by
+   dragging its handle toward the screen edge, or by tapping it. The handle
+   is a real <button>: tap = toggle, drag = resize, Enter/Space = toggle,
+   arrow keys = nudge — so the whole mechanism works for mouse, touch and
+   keyboard from one control. The visual strip is 14px but the hit area is
+   inflated to ~44px for coarse pointers via ::after. */
+.panel-handle {
+  position: relative;
+  z-index: 5;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+  color: var(--sx-text-4);
+  font-size: 0.62rem;
+}
+.panel-handle::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 44px;
+  border-radius: 2px;
+  background: var(--sx-line-strong);
+}
+.panel-handle::after {           /* invisible hit inflation */
+  content: "";
+  position: absolute;
+  inset: 0 -15px;
+}
+.panel-handle:hover::before,
+.panel-handle.dragging::before { background: var(--sx-brand-b-ink); }
+.panel-handle:focus-visible { outline: 2px solid var(--sx-focus); outline-offset: -2px; }
+.handle-dock {
+  cursor: row-resize;
+  min-height: var(--handle-w);
+}
+.handle-dock::before { width: 44px; height: 4px; }
+.handle-dock::after { inset: -15px 0; }
+
+/* Collapsed panels: the grid column/row goes to zero and the content is
+   hidden, but the ELEMENT stays in the grid so auto-placement never shifts
+   the handles onto the wrong columns. The handle itself remains as the
+   reopening affordance — the chevron on it flips to say so. */
+body.pad-rail-closed .pad-section-rail,
+body.pad-insp-closed .pad-inspector {
+  visibility: hidden;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+}
+body.pad-dock-closed .pad-dock { display: none; }
 
 /* --------------------------- section rail -------------------------------- */
 .pad-section-rail {
@@ -487,7 +569,7 @@ body.view-studio .studio-head { display: none; }
      whole arrangement 1157px wider than its container instead of scrolling
      inside .seq-grid. */
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: var(--strip-h) var(--tabs-h) var(--ruler-h) minmax(0, 1fr) auto;
+  grid-template-rows: var(--strip-h) var(--tabs-h) var(--ruler-h) minmax(0, 1fr) auto auto;
   gap: 6px;
   padding: 9px;
 }
@@ -1020,7 +1102,7 @@ body.view-studio .studio-head { display: none; }
 }
 .kbd-inner {
   position: relative;
-  height: 112px;
+  height: var(--kbd-hh);
 }
 .kbd-key {
   -webkit-touch-callout: none;
@@ -1033,7 +1115,7 @@ body.view-studio .studio-head { display: none; }
 }
 .kbd-key.white {
   width: 34px;
-  height: 112px;
+  height: var(--kbd-hh);
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -1055,7 +1137,7 @@ body.view-studio .studio-head { display: none; }
 /* Black keys are black plastic, not a surface — they do not invert on paper. */
 .kbd-key.black {
   width: 22px;
-  height: 70px;
+  height: calc(var(--kbd-hh) * 0.62);
   border: 1px solid var(--sx-key-black-edge);
   border-radius: 0 0 4px 4px;
   z-index: 2;
@@ -1413,7 +1495,11 @@ body.view-studio .studio-head { display: none; }
    vanishing, so the synth editor and track mix stay reachable. */
 @media (max-width: 1023px) {
   #studio { --rail-w: 168px; --dock-h: 132px; }
-  .pad-body { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
+  .pad-body {
+    grid-template-columns:
+      minmax(0, min(var(--rail-w), 40vw)) var(--handle-w)
+      minmax(0, 1fr) var(--handle-w);
+  }
   .pad-inspector {
     position: absolute;
     z-index: 25;
@@ -1458,8 +1544,7 @@ body.view-studio .studio-head { display: none; }
   .seq-grid { --cell: 22px; --lblw: 46px; }
   .bass-grid .seq-cell, .lead-grid .seq-cell, .sampler-grid .seq-cell { height: 18px; }
   .drum-grid .seq-cell { height: 18px; }
-  .kbd-inner, .kbd-key.white { height: 62px; }
-  .kbd-key.black { height: 40px; }
+  #studio { --kbd-h: 62px; }
   .pad-keyboard-foot { display: none; }
 }
 
@@ -1470,6 +1555,20 @@ body.view-studio .studio-head { display: none; }
   .pad-body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 76px minmax(0, 1fr);
+  }
+  .handle-rail { display: none; }
+  .handle-insp {
+    position: fixed;
+    z-index: 26;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 18px;
+    height: 72px;
+    border-radius: 8px 0 0 8px;
+    background: var(--sx-surface-3);
+    border: 1px solid var(--sx-line);
+    border-right: none;
   }
   .pad-section-rail { grid-template-rows: auto minmax(0, 1fr); }
   .song-structure {

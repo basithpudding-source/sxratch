@@ -6,7 +6,7 @@ import { createMetronome } from './metronome.js';
 import { saveSample, loadAllSamples } from './idb-store.js';
 import { encodeMidi } from './midiexport.js';
 import { themeColors, onThemeChange } from './theme.js';
-import { playCol, fitPage } from './pad-geometry.js';
+import { playCol, fitPage, resolvePanelDrag } from './pad-geometry.js';
 import { buildGroove, GROOVE_FOR_TYPE } from './pad-grooves.js';
 import {
   playInstrument, playDrumHit, makeReverbSend, makeEchoSend, makeChorus,
@@ -332,6 +332,138 @@ export const SongBuilder = (() => {
   let chordRes = 1;              // default placement length, in bars-worth of steps
   let previewedOnce = false;     // has the user heard the whole song yet?
   let dragActive = false;        // a grid gesture is in progress
+  let panelDragActive = false;   // a panel-handle gesture is in progress
+
+  /* ---------------- collapsible peripheral panels ----------------
+   * The section rail, the inspector and the keyboard dock each collapse by
+   * dragging their edge handle (or tapping it). Sizes and open state persist
+   * per browser. The bench fitter re-runs after a panel change, so the step
+   * grid re-pages to the new centre width.
+   */
+  const PANELS_KEY = 'sxratch.padpanels';
+  const PANELS_V = 1;
+  const PANEL_RANGE = {
+    rail: { min: 150, max: 340, collapseBelow: 90, dflt: 236 },
+    insp: { min: 220, max: 380, collapseBelow: 110, dflt: 300 },
+    dock: { min: 56, max: 150, collapseBelow: 40, dflt: 112 },
+  };
+  let panels = { rail: 236, insp: 300, dock: 112, railOpen: true, inspOpen: true, dockOpen: true };
+
+  function loadPanels() {
+    const saved = readVersioned(PANELS_KEY, PANELS_V, []) || {};
+    for (const k of ['rail', 'insp', 'dock']) {
+      const r = PANEL_RANGE[k];
+      const v = Number(saved[k]);
+      panels[k] = Number.isFinite(v) ? Math.max(r.min, Math.min(r.max, v)) : r.dflt;
+      panels[k + 'Open'] = saved[k + 'Open'] !== false;
+    }
+  }
+  let _panelsSaveTimer = null;
+  function savePanels() {
+    clearTimeout(_panelsSaveTimer);
+    _panelsSaveTimer = setTimeout(() => writeVersioned(PANELS_KEY, PANELS_V, panels), 250);
+  }
+
+  /** Push the current panel state into CSS. The vars are the whole contract. */
+  function applyPanels() {
+    const st = document.getElementById('studio');
+    if (!st) return;
+    st.style.setProperty('--rail-w', (panels.railOpen ? panels.rail : 0) + 'px');
+    st.style.setProperty('--insp-w', (panels.inspOpen ? panels.insp : 0) + 'px');
+    st.style.setProperty('--kbd-h', panels.dock + 'px');
+    document.body.classList.toggle('pad-rail-closed', !panels.railOpen);
+    document.body.classList.toggle('pad-insp-closed', !panels.inspOpen);
+    document.body.classList.toggle('pad-dock-closed', !panels.dockOpen);
+    document.querySelectorAll('.panel-handle').forEach(h => {
+      const k = h.dataset.panel;
+      const open = panels[k + 'Open'];
+      h.setAttribute('aria-expanded', open ? 'true' : 'false');
+      h.title = (open ? 'Drag to resize, tap to hide the ' : 'Tap to show the ')
+        + (k === 'rail' ? 'song sections' : k === 'insp' ? 'instrument inspector' : 'keyboard');
+    });
+  }
+
+  /** The tablet/phone inspector is a slide-over, not a grid column. */
+  const inspIsDrawer = () => window.matchMedia('(max-width: 1023px)').matches;
+
+  function togglePanel(k) {
+    if (k === 'insp' && inspIsDrawer()) {
+      document.body.classList.toggle('pad-inspector-open');
+      return;
+    }
+    panels[k + 'Open'] = !panels[k + 'Open'];
+    applyPanels();
+    savePanels();
+    // The centre column changed width — let the fitter re-page the grid.
+    if (k !== 'dock') renderEditor();
+  }
+
+  /**
+   * One handle: tap toggles, drag resizes (collapsing past the floor),
+   * Enter/Space toggles, arrow keys nudge. Pointer events serve mouse and
+   * touch identically; setPointerCapture keeps the gesture when the pointer
+   * leaves the 14px strip, which it does immediately on any real drag.
+   */
+  function makePanelHandle(k, cls, axis, sign) {
+    const h = el('button', 'panel-handle ' + cls);
+    h.type = 'button';
+    h.dataset.panel = k;
+    h.setAttribute('aria-label',
+      k === 'rail' ? 'Song sections panel' : k === 'insp' ? 'Inspector panel' : 'Keyboard panel');
+    let start = null;
+    h.addEventListener('pointerdown', e => {
+      // A drawer-mode inspector only toggles — there is nothing to resize.
+      if (k === 'insp' && inspIsDrawer()) return;
+      e.preventDefault();
+      start = { p: axis === 'x' ? e.clientX : e.clientY, size: panels[k], moved: false, wasOpen: panels[k + 'Open'] };
+      panelDragActive = true;
+      h.classList.add('dragging');
+      try { h.setPointerCapture(e.pointerId); } catch (x) {}
+    });
+    h.addEventListener('pointermove', e => {
+      if (!start) return;
+      const delta = ((axis === 'x' ? e.clientX : e.clientY) - start.p) * sign;
+      if (!start.moved && Math.abs(delta) < 4) return;
+      start.moved = true;
+      // A drag on a CLOSED panel opens it and sizes from the floor.
+      if (!panels[k + 'Open']) { panels[k + 'Open'] = true; start.size = PANEL_RANGE[k].min; }
+      const r = resolvePanelDrag({ startSize: start.size, delta, ...PANEL_RANGE[k] });
+      panels[k] = r.size;
+      panels[k + 'Open'] = r.open;
+      applyPanels();
+    });
+    const finish = (e) => {
+      // In drawer mode pointerdown never armed a gesture, so any pointerup
+      // on the handle is a plain tap: toggle the slide-over.
+      if (!start) {
+        if (k === 'insp' && inspIsDrawer() && e.type === 'pointerup') togglePanel('insp');
+        return;
+      }
+      const wasTap = !start.moved;
+      start = null;
+      panelDragActive = false;
+      h.classList.remove('dragging');
+      if (wasTap) { togglePanel(k); return; }
+      savePanels();
+      if (k !== 'dock') renderEditor();   // re-page the grid once, at the final width
+    };
+    h.addEventListener('pointerup', finish);
+    h.addEventListener('pointercancel', finish);
+    h.setAttribute('aria-expanded', panels[k + 'Open'] ? 'true' : 'false');
+    h.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePanel(k); return; }
+      const grow = (axis === 'x') ? (k === 'rail' ? 'ArrowRight' : 'ArrowLeft') : 'ArrowUp';
+      const shrink = (axis === 'x') ? (k === 'rail' ? 'ArrowLeft' : 'ArrowRight') : 'ArrowDown';
+      if (e.key !== grow && e.key !== shrink) return;
+      e.preventDefault();
+      if (!panels[k + 'Open']) { panels[k + 'Open'] = true; panels[k] = PANEL_RANGE[k].min; }
+      const r = resolvePanelDrag({ startSize: panels[k], delta: e.key === grow ? 16 : -16, ...PANEL_RANGE[k] });
+      panels[k] = r.size; panels[k + 'Open'] = r.open;
+      applyPanels(); savePanels();
+      if (k !== 'dock') renderEditor();
+    });
+    return h;
+  }
   let page0 = 0;                 // first VISIBLE step (absolute index)
   let pagePref = 'auto';         // 'auto' | 1 | 2 | 4 | 'fit'  (bars per page)
   let followPlayhead = true;     // auto-page during playback
@@ -532,7 +664,7 @@ export const SongBuilder = (() => {
     renderStructure();
     renderEditor();
     const has = song.sections.length > 0;
-    ['#btn-song-preview', '#btn-song-deckA', '#btn-song-deckB', '#btn-song-dl', '#btn-song-export', '#btn-song-midi'].forEach(sel => { const b = $(sel); if (b) b.disabled = !has; });
+    ['#btn-song-preview', '#btn-song-play-sec', '#btn-song-deckA', '#btn-song-deckB', '#btn-song-dl', '#btn-song-export', '#btn-song-midi'].forEach(sel => { const b = $(sel); if (b) b.disabled = !has; });
     $('#song-duration').textContent = has ? `${totalSeconds().toFixed(1)}s · ${song.sections.length} sections` : '';
     saveSong();
   }
@@ -641,6 +773,7 @@ export const SongBuilder = (() => {
       buildInstrumentRail(s),
       buildBenchRuler(s),
       buildBench(s),
+      makePanelHandle('dock', 'handle-dock', 'y', -1),
       dockHost
     );
     refreshSharedKeyboard(s);
@@ -672,7 +805,7 @@ export const SongBuilder = (() => {
       if (Math.abs(w - benchWidth) < 2) return;
       const big = Math.abs(w - benchWidth) / Math.max(1, benchWidth) > 0.2;
       benchWidth = w;
-      if (dragActive) return;
+      if (dragActive || panelDragActive) return;
       if (sectionPlay && !big) return;
       clearTimeout(_benchReflowTimer);
       _benchReflowTimer = setTimeout(() => renderEditor(), 120);
@@ -738,10 +871,6 @@ export const SongBuilder = (() => {
     });
     swingWrap.append(el('span', 'strip-label', 'Swing'), swingIn, swingVal);
 
-    const playBtn = el('button', 'btn btn-primary strip-play', '▶ Play section');
-    playBtn.id = 'btn-song-play-sec';
-    playBtn.addEventListener('click', toggleSectionPlay);
-
     const toggle = (glyph, title, checked, onChange) => {
       const b = el('button', 'strip-toggle' + (checked ? ' active' : ''), glyph);
       b.type = 'button'; b.title = title;
@@ -754,15 +883,9 @@ export const SongBuilder = (() => {
       });
       return b;
     };
-    const loopBtn = toggle('🔁', 'Loop the section while it plays', loopSection, (on) => {
-      loopSection = on;
-      if (sectionPlay) {
-        sectionPlay.loop = on; sectionPlay.src.loop = on;
-        if (on) { sectionPlay.src.loopStart = 0; sectionPlay.src.loopEnd = sectionPlay.dur; }
-      }
-    });
     const countBtn = toggle('♩', 'One bar of clicks before the section starts', countInOn, (on) => { countInOn = on; });
 
+    countBtn.style.marginLeft = 'auto';
     const moreBtn = el('button', 'strip-more', '⋯');
     moreBtn.type = 'button';
     moreBtn.title = 'Section type, step grid, section tempo, delete';
@@ -771,7 +894,7 @@ export const SongBuilder = (() => {
 
     strip.append(dot, nameIn,
       field('Key', keySel), field('Bars', barsIn), field('Time', tsSel),
-      swingWrap, playBtn, loopBtn, countBtn, moreBtn);
+      swingWrap, countBtn, moreBtn);
     return strip;
   }
 
@@ -2747,12 +2870,12 @@ export const SongBuilder = (() => {
     const btn = $('#btn-song-preview'); btn.disabled = true; btn.textContent = '⏳ Rendering…';
     try {
       const buf = await renderSections(song.sections);
-      btn.textContent = '▶ Preview song'; btn.disabled = false;
+      btn.textContent = '▶ Song'; btn.disabled = false;
       if (!buf) return;
       previewedOnce = true;
       renderNextStep();
       const ac = _getCtx(); const src = ac.createBufferSource(); src.buffer = buf; src.connect(ac.destination); src.start(); playNodes.push(src);
-    } catch (e) { console.warn(e); btn.textContent = '▶ Preview song'; btn.disabled = false; _toast('Could not render the song.'); }
+    } catch (e) { console.warn(e); btn.textContent = '▶ Song'; btn.disabled = false; _toast('Could not render the song.'); }
   }
   const songLabel = () => `song · ${song.sections.length} sections · ${song.bpm} BPM`;
 
@@ -2808,7 +2931,7 @@ export const SongBuilder = (() => {
       btn.className = (btn.className + ' ' + cls).trim();
       btn.innerHTML = html;
     };
-    setButton('#btn-song-preview', 'pad-transport-btn pad-play', '<span class="pad-transport-icon">▶</span><span>Preview</span>');
+    setButton('#btn-song-preview', 'pad-transport-btn', '<span class="pad-transport-icon">▶</span><span>Song</span>');
     setButton('#btn-song-preview-stop', 'pad-transport-btn pad-stop', '<span class="pad-transport-icon">■</span><span>Stop</span>');
     setButton('#btn-song-dl', 'pad-transport-btn', '<span class="pad-transport-icon">⇩</span><span>WAV</span>');
     setButton('#btn-song-deckA', 'pad-send', 'Send A');
@@ -2835,8 +2958,28 @@ export const SongBuilder = (() => {
     };
     const grab = (sel) => meta.querySelector(sel) || root.querySelector(sel);
 
+    // Anchored transport: play/stop/loop/preview live HERE, in the one strip
+    // that exists at every breakpoint, in every panel state, at every scroll
+    // position — never inside the editor, which panels can cover or collapse.
     const primary = zone('tp-primary');
-    primary.append(grab('#btn-song-preview'), grab('#btn-song-preview-stop'));
+    const playSec = el('button', 'btn pad-transport-btn pad-play', '▶ Play section');
+    playSec.id = 'btn-song-play-sec';
+    playSec.disabled = true;
+    playSec.addEventListener('click', toggleSectionPlay);
+    const loopBtn = el('button', 'tp-loop' + (loopSection ? ' active' : ''), '🔁');
+    loopBtn.type = 'button';
+    loopBtn.title = 'Loop the section while it plays';
+    loopBtn.setAttribute('aria-pressed', loopSection ? 'true' : 'false');
+    loopBtn.addEventListener('click', () => {
+      loopSection = !loopSection;
+      loopBtn.setAttribute('aria-pressed', loopSection ? 'true' : 'false');
+      loopBtn.classList.toggle('active', loopSection);
+      if (sectionPlay) {
+        sectionPlay.loop = loopSection; sectionPlay.src.loop = loopSection;
+        if (loopSection) { sectionPlay.src.loopStart = 0; sectionPlay.src.loopEnd = sectionPlay.dur; }
+      }
+    });
+    primary.append(playSec, grab('#btn-song-preview-stop'), loopBtn, grab('#btn-song-preview'));
 
     const tempo = zone('tp-tempo', 'Song tempo');
     const bpmLabel = meta.querySelector('label');
@@ -2908,12 +3051,19 @@ export const SongBuilder = (() => {
     const inspector = el('aside', 'pad-inspector');
     inspector.id = 'song-inspector';
     const body = el('div', 'pad-body');
-    body.append(rail, arrangement, inspector);
+    // The handles are GRID CHILDREN between the panels, not absolutely
+    // positioned strips — as grid children their position can never drift
+    // from the panel widths they control.
+    loadPanels();
+    body.append(rail, makePanelHandle('rail', 'handle-rail', 'x', 1),
+      arrangement,
+      makePanelHandle('insp', 'handle-insp', 'x', -1), inspector);
 
     const shell = el('div', 'pad-workstation');
     shell.append(transport, body);
     root.innerHTML = '';
     root.appendChild(shell);
+    applyPanels();
   }
 
   /* ---------------- MIDI export ---------------- */
