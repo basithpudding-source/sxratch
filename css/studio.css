@@ -1,7 +1,7 @@
 /* ===================== SXRATCH / PAD navigation ===================== */
 .brandnav { display: flex; align-items: center; gap: 0.4rem; }
 .brand-seg {
-  font-weight: 900; letter-spacing: 0.14em; font-size: 1rem; cursor: pointer;
+  font-weight: 900; letter-spacing: 0.14em; font-size: var(--sx-fs-xl); cursor: pointer;
   background: none; border: none; padding: 2px 4px;
   font-family: inherit; transition: opacity 0.15s; opacity: 0.5;
 }
@@ -10,9 +10,14 @@
 .brand-seg:hover { opacity: 0.85; }
 .brand-seg.active { opacity: 1; }
 .brand-slash { color: var(--sx-text-3); font-weight: 700; }
-body.view-studio .deck-only { display: none; }
+/* Keep deck-only topbar modules out of PAD. The ID-based component rules for
+   MASTER and REC are declared later in styles.css, so this selector needs to
+   include the topbar ID to win the cascade instead of leaving those controls
+   visible in Studio (and pushing Settings / Help off narrow screens). */
+body.view-studio #topbar .deck-only { display: none; }
 body.view-studio #console { display: none; }
-body.view-studio #studio[hidden] { display: block; }
+/* No [hidden] display override: showView() toggles the REAL hidden attribute
+   on both <main>s, so exactly one is ever non-hidden (what AT expects). */
 
 /* ===================== PAD Song Builder — DAW cockpit ===================== */
 body.view-studio {
@@ -23,7 +28,7 @@ body.view-studio {
 }
 
 #studio {
-  height: calc(100dvh - 47px);
+  height: calc(100dvh - var(--sx-topbar-h));
   max-width: none;
   width: 100%;
   margin: 0;
@@ -32,16 +37,26 @@ body.view-studio {
   color: var(--sx-text-1);
 }
 
-body.view-studio .studio-head { display: none; }
+/* Present for assistive tech / the document outline, not painted: the studio
+   is a full-height workstation, and the tour + transport carry orientation.
+   (display:none would remove the only <h2> from the accessibility tree.) */
+body.view-studio .studio-head {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
 .song-builder { height: 100%; min-height: 0; }
 .hidden { display: none !important; }
 
-#studio .hint { color: var(--sx-text-3); font-size: 0.76rem; line-height: 1.25; }
+#studio .hint { color: var(--sx-text-3); font-size: var(--sx-fs-md); line-height: 1.25; }
 #studio .label-sm {
-  font-size: 0.66rem; text-transform: uppercase; letter-spacing: 1.7px;
+  font-size: var(--sx-fs-xs); text-transform: uppercase; letter-spacing: 1.7px;
   color: var(--sx-text-3); font-weight: 800;
 }
-#studio label { display: inline-flex; flex-direction: column; gap: 0.28rem; font-size: 0.76rem; color: var(--sx-text-3); }
+#studio label { display: inline-flex; flex-direction: column; gap: 0.28rem; font-size: var(--sx-fs-md); color: var(--sx-text-3); }
 #studio label.check { flex-direction: row; align-items: center; gap: 0.45rem; cursor: pointer; }
 #studio select,
 #studio input[type="number"],
@@ -52,14 +67,14 @@ body.view-studio .studio-head { display: none; }
   background: linear-gradient(180deg, var(--sx-surface-3), var(--sx-surface-1));
   color: var(--sx-text-1);
   border: 1px solid var(--sx-line);
-  border-radius: 8px;
+  border-radius: var(--sx-radius-md);
   padding: 0.34rem 0.5rem;
   font: inherit;
-  font-size: 0.78rem;
+  font-size: var(--sx-fs-md);
   box-shadow: inset 0 1px 0 var(--sx-hilite);
 }
 #studio input[type="range"] { accent-color: var(--sx-brand-b); }
-#studio .btn-mini { padding: 0.34rem 0.62rem; font-size: 0.72rem; border-radius: 7px; }
+#studio .btn-mini { padding: 0.34rem 0.62rem; font-size: var(--sx-fs-sm); border-radius: var(--sx-radius-sm); }
 #studio .btn-primary,
 #studio .pad-send {
   background: linear-gradient(180deg, var(--sx-amber-hi), var(--sx-amber-lo));
@@ -71,7 +86,7 @@ body.view-studio .studio-head { display: none; }
   color: var(--sx-lane-drums-ink);
   border-color: color-mix(in srgb, var(--sx-lane-drums) 55%, transparent);
 }
-#studio .btn:disabled { opacity: 0.42; cursor: not-allowed; }
+/* (disabled treatment is the shared app-wide rule in styles.css) */
 
 /* ===================== PAD — THE BENCH =====================================
    One instrument at full size, the whole song always in sight.
@@ -94,7 +109,6 @@ body.view-studio .studio-head { display: none; }
   --strip-h: 40px;
   --tabs-h: 54px;
   --ruler-h: 26px;
-  --dock-h: 156px;
   --pad-gap: 8px;
   --handle-w: 14px;
   /* Keybed key height — user-draggable via the dock handle. The min() caps a
@@ -149,7 +163,7 @@ body.view-studio .studio-head { display: none; }
   padding: 0 4px;
   background-color: var(--sx-surface-2);
   color: var(--sx-text-3);
-  font-size: 0.56rem;
+  font-size: var(--sx-fs-2xs);
   font-weight: 800;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -190,14 +204,14 @@ body.view-studio .studio-head { display: none; }
   background: linear-gradient(180deg, var(--sx-btn-hi), var(--sx-btn-lo));
   color: var(--sx-text-2);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--sx-fs-lg);
 }
 .tp-primary .tp-loop.active {
   border-color: var(--sx-brand-b);
   background: color-mix(in srgb, var(--sx-brand-b) 22%, var(--sx-btn-lo));
   color: var(--sx-brand-b-ink);
 }
-.pad-transport-icon { font-size: 1rem; }
+.pad-transport-icon { font-size: var(--sx-fs-xl); }
 
 .pad-bpm-module {
   flex-direction: row !important;
@@ -205,26 +219,26 @@ body.view-studio .studio-head { display: none; }
   gap: 6px;
   min-width: 150px;
   color: var(--sx-text-3);
-  font-size: 0.66rem;
+  font-size: var(--sx-fs-xs);
 }
 .pad-bpm-module #song-bpm-v {
   color: var(--sx-text-1);
   font-family: var(--sx-font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 1rem;
+  font-size: var(--sx-fs-xl);
   font-weight: 800;
 }
 .pad-bpm-module input[type="range"] { width: 74px; height: 18px; margin: 0; }
 
 .pad-engine-module { min-width: 132px; }
-.pad-engine-module select { width: 100%; min-height: 30px; font-size: 0.7rem; }
+.pad-engine-module select { width: 100%; min-height: 30px; font-size: var(--sx-fs-sm); }
 /* Was `display: none !important`, which made switching engines look like a
    no-op even while 32 MB of instruments loaded. */
 .pad-engine-status {
   display: block;
   max-width: 150px;
   color: var(--sx-text-3);
-  font-size: 0.62rem;
+  font-size: var(--sx-fs-xs);
   line-height: 1.2;
 }
 .pad-engine-status:empty { display: none; }
@@ -238,17 +252,17 @@ body.view-studio .studio-head { display: none; }
 }
 .tp-now-main {
   color: var(--sx-text-1);
-  font-size: 0.82rem;
+  font-size: var(--sx-fs-base);
   font-weight: 800;
   letter-spacing: 0.04em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.tp-now #song-duration { font-size: 0.66rem; color: var(--sx-text-3); }
+.tp-now #song-duration { font-size: var(--sx-fs-xs); color: var(--sx-text-3); }
 .tp-now-bar {
   height: 3px;
-  border-radius: 2px;
+  border-radius: var(--sx-radius-2xs);
   background-color: var(--sx-wash-2);
   overflow: hidden;
 }
@@ -271,7 +285,7 @@ body.view-studio .studio-head { display: none; }
   min-width: 44px;
   min-height: 40px;
   padding: 0 0.5rem;
-  font-size: 0.68rem;
+  font-size: var(--sx-fs-sm);
 }
 
 .pad-more { position: relative; }
@@ -284,7 +298,7 @@ body.view-studio .studio-head { display: none; }
   border-radius: var(--sx-radius-sm);
   background: linear-gradient(180deg, var(--sx-btn-hi), var(--sx-btn-lo));
   color: var(--sx-text-2);
-  font-size: 0.68rem;
+  font-size: var(--sx-fs-sm);
   font-weight: 800;
   letter-spacing: 0.08em;
   cursor: pointer;
@@ -350,12 +364,12 @@ body.view-studio .studio-head { display: none; }
   min-width: 0;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--sx-radius-sm);
   background: transparent;
   cursor: col-resize;
   touch-action: none;
   color: var(--sx-text-4);
-  font-size: 0.62rem;
+  font-size: var(--sx-fs-xs);
 }
 .panel-handle::before {
   content: "";
@@ -365,7 +379,7 @@ body.view-studio .studio-head { display: none; }
   transform: translate(-50%, -50%);
   width: 4px;
   height: 44px;
-  border-radius: 2px;
+  border-radius: var(--sx-radius-2xs);
   background: var(--sx-line-strong);
 }
 .panel-handle::after {           /* invisible hit inflation */
@@ -376,6 +390,33 @@ body.view-studio .studio-head { display: none; }
 .panel-handle:hover::before,
 .panel-handle.dragging::before { background: var(--sx-brand-b-ink); }
 .panel-handle:focus-visible { outline: 2px solid var(--sx-focus); outline-offset: -2px; }
+/* The chevron the collapse comment always promised: rides the pip and flips
+   with [aria-expanded], so a closed panel visibly offers to reopen. */
+.handle-chevron {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 18px;
+  border-radius: var(--sx-radius-2xs);
+  background: var(--sx-surface-2);
+  color: var(--sx-text-3);
+  font-size: var(--sx-fs-2xs);
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: none;
+}
+.panel-handle:hover .handle-chevron { color: var(--sx-brand-b-ink); }
+.handle-rail .handle-chevron::before { content: "‹"; }
+.handle-rail[aria-expanded="false"] .handle-chevron::before { content: "›"; }
+.handle-insp .handle-chevron::before { content: "›"; }
+.handle-insp[aria-expanded="false"] .handle-chevron::before { content: "‹"; }
+.handle-dock .handle-chevron { width: 18px; height: 14px; }
+.handle-dock .handle-chevron::before { content: "⌄"; }
+.handle-dock[aria-expanded="false"] .handle-chevron::before { content: "⌃"; }
 .handle-dock {
   cursor: row-resize;
   min-height: var(--handle-w);
@@ -421,7 +462,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   border-radius: var(--sx-radius-sm);
   background-color: var(--sx-surface-2);
   color: var(--sx-text-2);
-  font-size: 0.7rem;
+  font-size: var(--sx-fs-sm);
   font-weight: 800;
   letter-spacing: 0.08em;
   cursor: pointer;
@@ -433,7 +474,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 #studio #song-add-btns .btn {
   min-height: 30px;
   padding: 0.25rem 0.35rem;
-  font-size: 0.67rem;
+  font-size: var(--sx-fs-sm);
   border-radius: var(--sx-radius-sm);
 }
 
@@ -468,7 +509,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 .song-chip::before {
   content: "";
   grid-row: 1 / -1;
-  border-radius: 3px;
+  border-radius: var(--sx-radius-2xs);
   background-color: var(--sx-line-strong);
 }
 .song-chip:hover { border-color: var(--sx-brand-b-ink); }
@@ -477,12 +518,11 @@ body.pad-dock-closed .pad-dock { display: none; }
   background: color-mix(in srgb, var(--sx-brand-b) 12%, var(--sx-surface-2));
 }
 .song-chip.active::before { background-color: var(--sx-brand-b); }
-.song-chip.playing::before { background-color: var(--sx-lane-drums); }
 .song-chip-top { display: flex; justify-content: space-between; gap: 4px; }
 .song-chip-label { min-width: 0; display: grid; gap: 2px; align-content: center; }
 .song-chip-type {
   color: var(--sx-text-1);
-  font-size: 0.82rem;
+  font-size: var(--sx-fs-base);
   font-weight: 800;
   letter-spacing: 0.02em;
   overflow: hidden;
@@ -494,7 +534,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 .song-chip-bpm,
 .song-tl-total {
   color: var(--sx-text-3);
-  font-size: 0.62rem;
+  font-size: var(--sx-fs-xs);
   font-variant-numeric: tabular-nums;
 }
 .song-chip-bpm { color: var(--sx-brand-b-ink); font-weight: 800; }
@@ -505,7 +545,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 .chip-dot {
   width: 12px;
   height: 4px;
-  border-radius: 2px;
+  border-radius: var(--sx-radius-2xs);
   background-color: var(--sx-line);
   opacity: 0.5;
 }
@@ -520,23 +560,20 @@ body.pad-dock-closed .pad-dock { display: none; }
 .song-chip-acts { display: flex; gap: 2px; }
 .song-chip-btn,
 .song-chip-btn2 {
-  min-width: 22px;
-  min-height: 22px;
+  min-width: 24px;
+  min-height: 24px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--sx-radius-xs);
   background-color: var(--sx-wash-1);
   color: var(--sx-text-3);
-  font-size: 0.68rem;
+  font-size: var(--sx-fs-sm);
   cursor: pointer;
 }
 .song-chip-btn:hover,
 .song-chip-btn2:hover { color: var(--sx-brand-b-ink); border-color: var(--sx-line); }
-.song-chip-btn:disabled { opacity: 0.3; cursor: default; }
 .song-chip-x:hover { color: var(--sx-lane-drums-ink); }
 .song-tl-end { padding: 4px; text-align: center; color: var(--sx-brand-b-ink); }
-.song-tl-flag { display: none; }
-.song-chip.playing .song-tl-flag { display: inline; }
 
 /* The next useful action, derived from the song — replaces a static list. */
 .rail-next {
@@ -547,7 +584,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   border-radius: var(--sx-radius-sm);
   background-color: var(--sx-wash-1);
 }
-.next-text { color: var(--sx-text-2); font-size: 0.72rem; line-height: 1.25; }
+.next-text { color: var(--sx-text-2); font-size: var(--sx-fs-sm); line-height: 1.25; }
 #studio .next-cta {
   justify-self: stretch;
   min-height: 32px;
@@ -593,7 +630,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   width: 132px;
   min-width: 92px;
   font-weight: 800;
-  font-size: 0.82rem;
+  font-size: var(--sx-fs-base);
   color: var(--sx-text-1);
 }
 .strip-field {
@@ -604,7 +641,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 }
 .strip-label {
   color: var(--sx-text-3);
-  font-size: 0.58rem;
+  font-size: var(--sx-fs-2xs);
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -615,15 +652,10 @@ body.pad-dock-closed .pad-dock { display: none; }
 .strip-swing input[type="range"] { width: 84px; }
 .swing-readout {
   color: var(--sx-brand-b-ink);
-  font-size: 0.66rem;
+  font-size: var(--sx-fs-xs);
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   min-width: 30px;
-}
-#studio .strip-play {
-  margin-left: auto;
-  min-height: 30px;
-  white-space: nowrap;
 }
 .strip-toggle,
 .strip-more {
@@ -635,7 +667,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   background-color: var(--sx-surface-3);
   color: var(--sx-text-2);
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: var(--sx-fs-base);
 }
 .strip-toggle.active {
   border-color: var(--sx-brand-b);
@@ -687,7 +719,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 .inst-tab.active::before { opacity: 1; }
 .inst-name {
   color: var(--sx-text-1);
-  font-size: 0.7rem;
+  font-size: var(--sx-fs-sm);
   font-weight: 900;
   letter-spacing: 0.11em;
   text-transform: uppercase;
@@ -695,7 +727,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 .inst-tab.active .inst-name { color: color-mix(in srgb, var(--lane) 70%, var(--sx-text-1)); }
 .inst-sound {
   color: var(--sx-text-3);
-  font-size: 0.6rem;
+  font-size: var(--sx-fs-2xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -710,11 +742,11 @@ body.pad-dock-closed .pad-dock { display: none; }
 .inst-flags { position: absolute; top: 4px; right: 5px; display: flex; gap: 3px; }
 .inst-flag {
   font-style: normal;
-  font-size: 0.52rem;
+  font-size: var(--sx-fs-3xs);
   font-weight: 900;
   line-height: 1;
   padding: 2px 3px;
-  border-radius: 3px;
+  border-radius: var(--sx-radius-2xs);
 }
 .inst-flag.mute { background-color: var(--sx-lane-drums); color: var(--sx-ink-on-danger); }
 .inst-flag.solo { background-color: var(--sx-brand-b); color: var(--sx-ink-on-accent); }
@@ -732,29 +764,28 @@ body.pad-dock-closed .pad-dock { display: none; }
 .page-seg { display: flex; gap: 2px; }
 .page-btn {
   min-width: 26px;
-  min-height: 20px;
+  min-height: 24px;
   padding: 0 0.3rem;
   border: 1px solid var(--sx-line);
-  border-radius: 4px;
+  border-radius: var(--sx-radius-xs);
   background-color: var(--sx-surface-2);
   color: var(--sx-text-3);
-  font-size: 0.6rem;
+  font-size: var(--sx-fs-2xs);
   font-weight: 800;
   cursor: pointer;
 }
 .page-btn.active { border-color: var(--sx-brand-b); color: var(--sx-brand-b-ink); background-color: color-mix(in srgb, var(--sx-brand-b) 18%, var(--sx-surface-2)); }
 .page-nav { display: flex; align-items: center; gap: 4px; }
-.page-where { color: var(--sx-text-3); font-size: 0.62rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.page-where { color: var(--sx-text-3); font-size: var(--sx-fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .page-arrow {
-  min-width: 24px; min-height: 20px; padding: 0;
-  border: 1px solid var(--sx-line); border-radius: 4px;
+  min-width: 24px; min-height: 24px; padding: 0;
+  border: 1px solid var(--sx-line); border-radius: var(--sx-radius-xs);
   background-color: var(--sx-surface-2); color: var(--sx-text-2);
-  cursor: pointer; font-size: 0.66rem;
+  cursor: pointer; font-size: var(--sx-fs-xs);
 }
-.page-arrow:disabled { opacity: 0.35; cursor: default; }
 .ruler-stat {
   color: var(--sx-text-3);
-  font-size: 0.62rem;
+  font-size: var(--sx-fs-xs);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -762,7 +793,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 }
 #bench-chord-now {
   color: var(--sx-brand-b-ink);
-  font-size: 0.8rem;
+  font-size: var(--sx-fs-base);
   font-weight: 900;
   letter-spacing: 0.06em;
   font-variant-numeric: tabular-nums;
@@ -822,7 +853,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   background-color: var(--sx-surface-2);
   color: var(--sx-text-1);
   font-weight: 800;
-  font-size: 0.74rem;
+  font-size: var(--sx-fs-md);
   cursor: pointer;
 }
 .degree-btn:hover { border-color: var(--sx-lane-chords); }
@@ -866,7 +897,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   align-items: center;
 }
 .seq-row-label {
-  font-size: 0.65rem;
+  font-size: var(--sx-fs-xs);
   color: var(--sx-text-3);
   text-align: right;
   padding-right: 5px;
@@ -878,7 +909,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   width: var(--cell);
   min-width: 0;
   height: var(--cell);
-  border-radius: 4px;
+  border-radius: var(--sx-radius-xs);
   cursor: pointer;
   /* On paper an "off" cell is defined by its border, not by its fill. */
   background-color: var(--sx-surface-2);
@@ -914,7 +945,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 }
 .swing-readout {
   color: var(--sx-brand-b-ink);
-  font-weight: 850;
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
   margin-left: 4px;
 }
@@ -937,13 +968,13 @@ body.pad-dock-closed .pad-dock { display: none; }
   display: none;
   pointer-events: none;
   z-index: 3;
-  border-radius: 2px;
+  border-radius: var(--sx-radius-2xs);
 }
 .chord-now {
   min-height: 1em;
   padding-left: var(--lblw);
   color: var(--sx-brand-b-ink);
-  font-size: 0.7rem;
+  font-size: var(--sx-fs-sm);
   font-weight: 800;
 }
 .chord-name-strip {
@@ -956,7 +987,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 }
 .chord-name-cell {
   color: var(--lane);
-  font-size: 0.6rem;
+  font-size: var(--sx-fs-2xs);
   font-weight: 900;
   white-space: nowrap;
   overflow: hidden;
@@ -968,8 +999,8 @@ body.pad-dock-closed .pad-dock { display: none; }
 .chord-readout {
   min-width: 118px;
   color: var(--sx-brand-b-ink);
-  font-weight: 950;
-  font-size: 0.86rem;
+  font-weight: 900;
+  font-size: var(--sx-fs-lg);
   letter-spacing: 0.04em;
 }
 .chord-readout.rest { color: var(--sx-text-3); font-weight: 700; }
@@ -990,17 +1021,15 @@ body.pad-dock-closed .pad-dock { display: none; }
   background: none;
   color: var(--sx-text-3);
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--sx-fs-lg);
   line-height: 1;
 }
 .samp-row-x:hover { color: var(--sx-lane-drums-ink); }
 .seq-grid::-webkit-scrollbar,
 .song-structure::-webkit-scrollbar,
-.pad-lane-stack::-webkit-scrollbar,
 .chord-kbd::-webkit-scrollbar { width: 8px; height: 8px; }
 .seq-grid::-webkit-scrollbar-thumb,
 .song-structure::-webkit-scrollbar-thumb,
-.pad-lane-stack::-webkit-scrollbar-thumb,
 .chord-kbd::-webkit-scrollbar-thumb {
   background-color: var(--sx-line);
   border-radius: 999px;
@@ -1010,7 +1039,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 .pad-keyboard-dock {
   min-height: 182px;
   border: 1px solid var(--sx-line);
-  border-radius: 10px;
+  border-radius: var(--sx-radius);
   background: linear-gradient(180deg, var(--sx-surface-1), var(--sx-well));
   /* Upward cast — the dock overhangs the arrangement — so the shade token is
      used directly rather than one of the downward --sx-shadow-* values. */
@@ -1024,41 +1053,6 @@ body.pad-dock-closed .pad-dock { display: none; }
   padding: 8px;
   border-bottom: 1px solid var(--sx-line);
 }
-.pad-mode-tabs {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 4px;
-  container-type: inline-size;
-}
-.pad-mode-tab {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-width: 0;
-  min-height: 36px;
-  padding-inline: 2px;
-  overflow: hidden;
-  border: 1px solid var(--sx-line);
-  border-radius: 6px;
-  background: linear-gradient(180deg, var(--sx-btn-hi), var(--sx-btn-lo));
-  color: var(--sx-text-2);
-  font-size: 0.63rem;
-  font-weight: 900;
-  letter-spacing: 0.05em;
-  cursor: pointer;
-}
-/* Tight dock: the glyphs are decorative — drop them before clipping "CHORDS". */
-@container (max-width: 372px) {
-  .pad-mode-icon { display: none; }
-}
-.pad-mode-tab.active {
-  color: var(--sx-ink-on-accent);
-  border-color: var(--sx-amber-hi);
-  background: linear-gradient(180deg, var(--sx-amber-hi), var(--sx-amber-lo));
-  box-shadow: var(--sx-glow-b);
-}
-.pad-mode-icon { font-size: 0.82rem; }
 .pad-keyboard-status,
 .pad-keyboard-actions,
 .pad-keyboard-foot {
@@ -1075,7 +1069,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   border-left: 1px solid var(--sx-line);
   border-right: 1px solid var(--sx-line);
 }
-.pad-keyboard-status strong { font-size: 0.9rem; letter-spacing: 0.08em; color: var(--sx-text-1); }
+.pad-keyboard-status strong { font-size: var(--sx-fs-lg); letter-spacing: 0.08em; color: var(--sx-text-1); }
 .pad-keyboard-actions {
   justify-content: flex-end;
   flex-wrap: wrap;
@@ -1083,11 +1077,11 @@ body.pad-dock-closed .pad-dock { display: none; }
 .pad-cursor-readout {
   padding: 0.42rem 0.65rem;
   border: 1px solid var(--sx-line);
-  border-radius: 7px;
+  border-radius: var(--sx-radius-sm);
   color: var(--sx-text-1);
   background-color: var(--sx-wash-1);
-  font-size: 0.73rem;
-  font-weight: 850;
+  font-size: var(--sx-fs-md);
+  font-weight: 800;
 }
 .shared-kbd {
   overflow-x: auto;
@@ -1129,7 +1123,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   /* Label ink, not --sx-metal-lo: the note name sits on the pale end of the
      key gradient, where the metal shade read 1.74:1 on paper. */
   color: var(--sx-key-ink);
-  font-size: 0.58rem;
+  font-size: var(--sx-fs-2xs);
   /* Held well below full --sx-shade: the key's own gradient already does most
      of the shading and a 45% black would grey out the bottom third. */
   box-shadow: inset 0 -10px 16px color-mix(in srgb, var(--sx-shade) 27%, transparent);
@@ -1162,7 +1156,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   min-height: 26px;
   padding: 0 10px 7px;
 }
-.pad-keyboard-foot strong { color: var(--sx-cyan-ink); font-size: 0.74rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.pad-keyboard-foot strong { color: var(--sx-cyan-ink); font-size: var(--sx-fs-md); letter-spacing: 0.08em; text-transform: uppercase; }
 .kbd-range-jumps {
   margin-left: auto;
   display: flex;
@@ -1177,8 +1171,8 @@ body.pad-dock-closed .pad-dock { display: none; }
   border: 1px solid var(--sx-line);
   background-color: var(--sx-wash-1);
   color: var(--sx-text-2);
-  font-size: 0.64rem;
-  font-weight: 850;
+  font-size: var(--sx-fs-xs);
+  font-weight: 800;
   cursor: pointer;
 }
 .kbd-range-jump:hover {
@@ -1209,7 +1203,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 .inspector-head strong {
   color: var(--sx-text-1);
   letter-spacing: 0.12em;
-  font-size: 1rem;
+  font-size: var(--sx-fs-xl);
 }
 .inspector-wave {
   display: flex;
@@ -1218,19 +1212,19 @@ body.pad-dock-closed .pad-dock { display: none; }
   height: 70px;
   padding: 9px;
   border: 1px solid var(--sx-line);
-  border-radius: 8px;
+  border-radius: var(--sx-radius-md);
   background: color-mix(in srgb, var(--sx-well) 44%, transparent);
 }
 .inspector-wave i {
   flex: 1;
   align-self: center;
-  border-radius: 2px;
+  border-radius: var(--sx-radius-2xs);
   background: linear-gradient(180deg, var(--sx-lane-chords), var(--sx-cyan));
   opacity: 0.75;
 }
 /* Real rendered note of the selected patch (drawn by drawPatchPreview). */
 .patch-preview { display: block; width: 100%; height: 100%; }
-.inspector-wave .hint { margin: auto; font-size: 0.62rem; }
+.inspector-wave .hint { margin: auto; font-size: var(--sx-fs-xs); }
 
 /* ---- synth editor ---- */
 .synth-panel {
@@ -1238,7 +1232,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   gap: 7px;
   padding: 9px;
   border: 1px solid var(--sx-line);
-  border-radius: 9px;
+  border-radius: var(--sx-radius-md);
   background: linear-gradient(180deg, var(--sx-surface-2), var(--sx-bg));
 }
 .synth-head {
@@ -1248,15 +1242,15 @@ body.pad-dock-closed .pad-dock { display: none; }
 }
 .synth-head strong {
   color: var(--sx-text-1);
-  font-size: 0.72rem;
+  font-size: var(--sx-fs-sm);
   letter-spacing: 0.08em;
   margin-right: auto;
 }
 .synth-edited {
   padding: 2px 6px;
   border-radius: 999px;
-  font-size: 0.54rem;
-  font-weight: 850;
+  font-size: var(--sx-fs-3xs);
+  font-weight: 800;
   letter-spacing: 0.1em;
   color: var(--sx-ink-on-accent);
   background: linear-gradient(180deg, var(--sx-amber-hi), var(--sx-amber-lo));
@@ -1268,7 +1262,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 .synth-panel.sampled .synth-actions { opacity: 0.55; }
 .synth-sec {
   border: 1px solid var(--sx-line);
-  border-radius: 7px;
+  border-radius: var(--sx-radius-sm);
   background: color-mix(in srgb, var(--sx-well) 40%, transparent);
   overflow: hidden;
 }
@@ -1279,8 +1273,8 @@ body.pad-dock-closed .pad-dock { display: none; }
   display: flex;
   align-items: center;
   color: var(--sx-text-3);
-  font-size: 0.62rem;
-  font-weight: 850;
+  font-size: var(--sx-fs-xs);
+  font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   list-style: none;
@@ -1293,7 +1287,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 }
 .synth-sec[open] > summary { color: var(--sx-text-1); }
 .synth-sec[open] > summary::after { transform: rotate(90deg); }
-.synth-sec > summary:focus-visible { outline: 2px solid var(--sx-brand-b-ink); outline-offset: -2px; }
+/* (focus ring comes from the shared #studio :focus-visible block below) */
 .synth-sec-body {
   display: grid;
   gap: 7px;
@@ -1304,58 +1298,35 @@ body.pad-dock-closed .pad-dock { display: none; }
 .synth-select {
   width: 100%;
   min-height: 28px;
-  font-size: 0.68rem;
+  font-size: var(--sx-fs-sm);
 }
 .synth-actions {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
   gap: 6px;
 }
-@media (prefers-reduced-motion: reduce) {
-  .synth-sec > summary::after { transition: none; }
+/* One focus treatment for every studio control — the same ring the decks use
+   (decks.css gives .controller-shell button/select the identical outline).
+   Dense grid cells and piano keys pull the ring INSIDE the cell so it is not
+   swallowed by the neighbouring cells. */
+#studio button:focus-visible,
+#studio select:focus-visible,
+#studio input:focus-visible,
+#studio summary:focus-visible {
+  outline: 2px solid var(--sx-focus);
+  outline-offset: 2px;
 }
-.inspector-knobs {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px 10px;
-}
-.inspector-knob {
-  display: grid;
-  justify-items: center;
-  gap: 5px;
-}
-.knob-face {
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-  border: 1px solid var(--sx-line-strong);
-  background:
-    linear-gradient(var(--rot), transparent 0 49%, var(--sx-brand-b) 50% 55%, transparent 56%),
-    radial-gradient(circle at 38% 30%, var(--sx-btn-hi), var(--sx-bg) 70%);
-  box-shadow: inset 0 0 0 6px var(--sx-wash-1), var(--sx-shadow-2);
-}
-.inspector-knob small {
-  color: var(--sx-text-3);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  font-size: 0.58rem;
-}
-.inspector-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-}
-.inspector-action {
-  min-height: 34px;
-  justify-content: center;
-  text-align: center;
+#studio .seq-cell:focus-visible,
+#studio .kbd-key:focus-visible {
+  outline-offset: -2px;
+  z-index: 1;
 }
 .track-mix-panel {
   display: grid;
   gap: 8px;
   padding: 9px;
   border: 1px solid var(--sx-line);
-  border-radius: 9px;
+  border-radius: var(--sx-radius-md);
   background:
     linear-gradient(180deg, var(--sx-surface-2), var(--sx-bg));
 }
@@ -1368,7 +1339,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 }
 .track-mix-head strong {
   color: var(--sx-text-1);
-  font-size: 0.76rem;
+  font-size: var(--sx-fs-md);
   letter-spacing: 0.08em;
 }
 .track-mix-toggles,
@@ -1393,14 +1364,14 @@ body.pad-dock-closed .pad-dock { display: none; }
 }
 .track-mix-row-top {
   color: var(--sx-text-3);
-  font-size: 0.62rem;
-  font-weight: 850;
+  font-size: var(--sx-fs-xs);
+  font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 .track-mix-row-top strong {
   color: var(--sx-text-1);
-  font-size: 0.66rem;
+  font-size: var(--sx-fs-xs);
   font-variant-numeric: tabular-nums;
 }
 .track-mix-row input[type="range"] {
@@ -1408,68 +1379,6 @@ body.pad-dock-closed .pad-dock { display: none; }
   margin: 0;
   accent-color: var(--sx-brand-b);
 }
-.inspector-stats {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 7px;
-}
-.inspector-stat {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px;
-  border: 1px solid var(--sx-line);
-  border-radius: 7px;
-  background-color: var(--sx-wash-1);
-}
-.inspector-stat span { color: var(--sx-text-3); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.1em; }
-.inspector-stat strong { color: var(--sx-text-1); font-size: 0.76rem; }
-.inspector-mixer {
-  min-height: 0;
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 5px;
-  padding: 8px;
-  border: 1px solid var(--sx-line);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--sx-well) 34%, transparent);
-}
-.mini-strip {
-  min-width: 0;
-  display: grid;
-  grid-template-rows: auto minmax(70px, 1fr);
-  gap: 5px;
-  justify-items: center;
-}
-.mini-strip span {
-  color: var(--sx-text-3);
-  font-size: 0.56rem;
-  font-weight: 900;
-}
-.mini-meter {
-  position: relative;
-  width: 10px;
-  height: 100%;
-  min-height: 92px;
-  border-radius: 5px;
-  /* Fades to nothing rather than to a second wash — the border carries the
-     track on paper. */
-  background: linear-gradient(180deg, var(--sx-wash-1), transparent);
-  border: 1px solid var(--sx-line);
-  overflow: hidden;
-}
-.mini-meter i {
-  position: absolute;
-  left: 1px;
-  right: 1px;
-  bottom: 1px;
-  border-radius: 4px;
-  /* The PAD minis read brighter than the deck VUs on purpose — they are 10px
-     wide and read at a glance, so they use the saturated state colours rather
-     than the shared --sx-meter-* ramp. */
-  background: linear-gradient(0deg, var(--sx-ok), var(--sx-warn) 64%, var(--sx-lane-drums));
-}
-
 /* ============================ responsive ==================================
    Progressive DISCLOSURE, never deletion. The previous breakpoints hid the
    add-section pad, the whole per-section settings row, undo/redo, Projects
@@ -1494,7 +1403,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 /* Tablet / small laptop: the inspector becomes a slide-over rather than
    vanishing, so the synth editor and track mix stay reachable. */
 @media (max-width: 1023px) {
-  #studio { --rail-w: 168px; --dock-h: 132px; }
+  #studio { --rail-w: 168px; }
   .pad-body {
     grid-template-columns:
       minmax(0, min(var(--rail-w), 40vw)) var(--handle-w)
@@ -1525,12 +1434,12 @@ body.pad-dock-closed .pad-dock { display: none; }
 @media (max-width: 1023px) and (max-height: 560px) {
   #studio {
     --tp-h: 48px; --rail-w: 116px; --strip-h: 34px;
-    --tabs-h: 40px; --ruler-h: 22px; --dock-h: 104px; --pad-gap: 5px;
+    --tabs-h: 40px; --ruler-h: 22px; --pad-gap: 5px;
   }
   #studio .pad-transport-btn,
   #studio .pad-utility,
   #studio .pad-send,
-  .pad-more-summary { min-height: 34px; font-size: 0.62rem; }
+  .pad-more-summary { min-height: 34px; font-size: var(--sx-fs-xs); }
   .tp-primary .pad-play { min-width: 78px; }
   .pad-transport { gap: 5px; padding: 4px 6px; }
   .tp-zone { padding: 3px 5px; }
@@ -1551,7 +1460,7 @@ body.pad-dock-closed .pad-dock { display: none; }
 /* Portrait: a real single-column layout. The old behaviour was a blur filter
    plus a "rotate your device" card over live, still-clickable controls. */
 @media (max-width: 900px) and (orientation: portrait) {
-  #studio { --rail-w: 100%; --dock-h: 138px; --pad-gap: 6px; }
+  #studio { --rail-w: 100%; --pad-gap: 6px; }
   .pad-body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 76px minmax(0, 1fr);
@@ -1583,16 +1492,16 @@ body.pad-dock-closed .pad-dock { display: none; }
     transform: translateY(calc(100% + 20px)); }
   body.pad-inspector-open .pad-inspector { transform: none; }
   .section-strip { overflow-x: auto; }
-  .inst-name { font-size: 0.6rem; }
+  .inst-name { font-size: var(--sx-fs-2xs); }
 }
 
 /* Height, not just width: studio.css had zero height queries, so a 1440x720
    window laid out as if it had 900px to spend. */
 @media (max-height: 820px) {
-  #studio { --dock-h: 132px; --tabs-h: 48px; --strip-h: 36px; }
+  #studio { --tabs-h: 48px; --strip-h: 36px; }
 }
 @media (max-height: 700px) {
-  #studio { --dock-h: 108px; --ruler-h: 22px; }
+  #studio { --ruler-h: 22px; }
   .pad-keyboard-foot { display: none; }
 }
 
@@ -1608,7 +1517,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   min-width: 0;
   background-color: var(--sx-surface-2);
   border: 1px solid var(--sx-line);
-  border-radius: 8px;
+  border-radius: var(--sx-radius-md);
   color: var(--sx-text-1);
   padding: 0.5rem 0.65rem;
   font: inherit;
@@ -1628,7 +1537,7 @@ body.pad-dock-closed .pad-dock { display: none; }
   align-items: center;
   padding: 8px 10px;
   border: 1px solid var(--sx-line);
-  border-radius: 9px;
+  border-radius: var(--sx-radius-md);
   background-color: var(--sx-surface-2);
 }
 .project-item .p-name {
@@ -1639,10 +1548,10 @@ body.pad-dock-closed .pad-dock { display: none; }
 }
 .project-item .p-meta {
   color: var(--sx-text-3);
-  font-size: 0.7rem;
+  font-size: var(--sx-fs-sm);
   font-variant-numeric: tabular-nums;
 }
-.project-item .btn { padding: 0.35rem 0.6rem; font-size: 0.72rem; }
+.project-item .btn { padding: 0.35rem 0.6rem; font-size: var(--sx-fs-sm); }
 .project-del.confirm {
   background-color: var(--sx-danger);
   color: var(--sx-ink-on-danger);
@@ -1658,6 +1567,69 @@ body.pad-dock-closed .pad-dock { display: none; }
   .rail-head::after {
     content: 'Landscape gives you more room';
     color: var(--sx-text-3);
-    font-size: 0.6rem;
+    font-size: var(--sx-fs-2xs);
   }
 }
+
+/* ===================== DAW Extended FX & Velocity Editor ===================== */
+.daw-roll-header-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.daw-velocity-lane {
+  display: flex;
+  height: 52px;
+  background: var(--sx-surface-3);
+  border-top: 1px solid var(--sx-line);
+  padding: 4px 8px;
+  gap: 8px;
+}
+.daw-vel-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 16), minmax(0, 1fr));
+  gap: 2px;
+  height: 100%;
+}
+.daw-vel-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  cursor: ns-resize;
+  background: color-mix(in srgb, var(--sx-surface-1) 50%, transparent);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.daw-vel-bar {
+  width: 100%;
+  background: var(--sx-amber-hi);
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+  pointer-events: none;
+}
+.daw-vel-col:hover {
+  background: color-mix(in srgb, var(--sx-brand-b) 20%, transparent);
+}
+.daw-mon.active {
+  background: var(--sx-hot) !important;
+  color: #fff !important;
+  border-color: var(--sx-hot) !important;
+}
+
+.daw-region-recording {
+  border-color: var(--sx-danger) !important;
+  background: color-mix(in srgb, var(--sx-danger) 22%, var(--sx-surface-1)) !important;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--sx-danger) 45%, transparent);
+  animation: dawRecGlow 1.2s ease-in-out infinite alternate;
+  pointer-events: none;
+  z-index: 3;
+}
+@keyframes dawRecGlow {
+  from { border-color: var(--sx-danger); }
+  to { border-color: #ff80ab; }
+}
+
+

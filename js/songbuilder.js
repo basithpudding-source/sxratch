@@ -74,7 +74,7 @@ export const SongBuilder = (() => {
     { label: '6/8', num: 6, den: 8 }, { label: '5/4', num: 5, den: 4 }, { label: '7/8', num: 7, den: 8 }, { label: '12/8', num: 12, den: 8 },
   ];
   const SUBDIVS = [{ label: '8th-note grid', v: 2 }, { label: '16th-note grid', v: 4 }, { label: 'Triplet grid', v: 3 }];
-  const CHORD_RES = [{ label: 'Per bar', v: 1 }, { label: 'Per beat', v: 'beat' }, { label: 'Per ½ beat', v: 'half' }, { label: 'Per ¼ beat', v: 'quarter' }];
+  const CHORD_RES = [{ id: 'bar', label: 'Per bar' }, { id: 'beat', label: 'Per beat' }, { id: 'half', label: 'Per ½ beat' }, { id: 'quarter', label: 'Per ¼ beat' }];
   const CHORD_SOUNDS = [
     { id: 'pad', label: 'Warm synth pad' }, { id: 'strings', label: 'String ensemble' },
     { id: 'epiano', label: 'Electric piano' }, { id: 'organ', label: 'Drawbar organ' }, { id: 'guitar', label: 'Acoustic guitar' },
@@ -318,7 +318,59 @@ export const SongBuilder = (() => {
   function el(tag, cls, txt) { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
   function opt(value, label, sel) { const o = el('option', null, label); o.value = value; if (sel) o.selected = true; return o; }
   function labelWrap(text, control) { const l = el('label', null, text); l.appendChild(control); return l; }
+  // The ONE writer for icon+text transport buttons. They carry an icon span +
+  // a text span; a bare textContent write destroys that markup (the WAV
+  // button used to read a flat "⇩WAV" forever after its first render).
+  function setBtnLabel(btn, icon, text) {
+    if (!btn) return btn;
+    btn.replaceChildren(el('span', 'pad-transport-icon', icon), el('span', null, text));
+    return btn;
+  }
   const cellMarks = (c, sub, spb) => (c % spb === 0 ? ' bar' : (c % sub === 0 ? ' beat' : ''));
+
+  /* ---------------- sequencer-grid accessibility ----------------
+   * Every grid surface is a sea of visually-identical <button>s. Two fixes:
+   * each cell gets a computed accessible name, and the whole grid folds into
+   * ONE tab stop (roving tabindex + arrow-key navigation) instead of 512.
+   * Enter/Space activates through `activate` on the lanes whose placement is
+   * pointer-gesture-driven; drum cells already activate natively via click.
+   */
+  const stepName = (s, c) => {
+    const spb = stepsPerBar(s);
+    return `bar ${Math.floor(c / spb) + 1} beat ${Math.floor((c % spb) / s.subdiv) + 1} step ${(c % s.subdiv) + 1}`;
+  };
+  function gridA11y(grid, groupLabel, activate) {
+    grid.setAttribute('role', 'group');
+    grid.setAttribute('aria-label', groupLabel);
+    const cells = [...grid.querySelectorAll('.seq-cell')];
+    if (!cells.length) return;
+    const anchor = grid.querySelector('.seq-cell.cursor-cell, .seq-cell.sel') || cells[0];
+    cells.forEach(c => { c.tabIndex = c === anchor ? 0 : -1; });
+    grid.addEventListener('keydown', (e) => {
+      const cur = e.target && e.target.closest ? e.target.closest('.seq-cell') : null;
+      if (!cur) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        // stopPropagation either way: the global keymap must not fire
+        // (Space = play both decks) while editing a grid.
+        if (activate) { e.preventDefault(); e.stopPropagation(); activate(cur); }
+        else e.stopPropagation();
+        return;
+      }
+      const rows = [...grid.querySelectorAll('.seq-row')];
+      const ri = rows.findIndex(r => r.contains(cur));
+      if (ri < 0) return;
+      const rowCells = r => [...rows[r].querySelectorAll('.seq-cell')];
+      const ci = rowCells(ri).indexOf(cur);
+      let target = null;
+      if (e.key === 'ArrowRight') target = rowCells(ri)[ci + 1];
+      else if (e.key === 'ArrowLeft') target = rowCells(ri)[ci - 1];
+      else if (e.key === 'ArrowDown' && ri + 1 < rows.length) target = rowCells(ri + 1)[ci];
+      else if (e.key === 'ArrowUp' && ri > 0) target = rowCells(ri - 1)[ci];
+      else return;
+      e.preventDefault(); e.stopPropagation();
+      if (target) { cur.tabIndex = -1; target.tabIndex = 0; target.focus(); }
+    });
+  }
 
   const PAD_MODES = [
     { key: 'chords', label: 'CHORDS', icon: '▰▰▰' },
@@ -329,7 +381,13 @@ export const SongBuilder = (() => {
   ];
   let activePadMode = 'chords';
   let chordQual = 'auto';        // palette quality: 'auto' = diatonic for the degree
-  let chordRes = 1;              // default placement length, in bars-worth of steps
+  let chordRes = 'bar';          // tap-to-place chord length: 'bar' | 'beat' | 'half' | 'quarter'
+  // Steps a TAPPED chord spans, from the palette's Length pick (a drag always
+  // places exactly the dragged range instead).
+  const chordResSteps = s => chordRes === 'beat' ? s.subdiv
+    : chordRes === 'half' ? Math.max(1, Math.round(s.subdiv / 2))
+    : chordRes === 'quarter' ? Math.max(1, Math.round(s.subdiv / 4))
+    : stepsPerBar(s);
   let previewedOnce = false;     // has the user heard the whole song yet?
   let dragActive = false;        // a grid gesture is in progress
   let panelDragActive = false;   // a panel-handle gesture is in progress
@@ -410,6 +468,10 @@ export const SongBuilder = (() => {
     h.dataset.panel = k;
     h.setAttribute('aria-label',
       k === 'rail' ? 'Song sections panel' : k === 'insp' ? 'Inspector panel' : 'Keyboard panel');
+    // The open/closed chevron — CSS picks the glyph off [aria-expanded].
+    const chev = el('span', 'handle-chevron');
+    chev.setAttribute('aria-hidden', 'true');
+    h.appendChild(chev);
     let start = null;
     h.addEventListener('pointerdown', e => {
       // A drawer-mode inspector only toggles — there is nothing to resize.
@@ -641,7 +703,7 @@ export const SongBuilder = (() => {
         // Throttled: a grid drag calls saveSong per cell — one warning per 30 s.
         if (Date.now() - _quotaToastAt > 30000) {
           _quotaToastAt = Date.now();
-          _toast("Browser storage is full — your edits are NOT being auto-saved.");
+          _toast("Browser storage is full — your edits are NOT being auto-saved.", { severity: 'error' });
         }
       },
     });
@@ -682,16 +744,21 @@ export const SongBuilder = (() => {
       // top row: move controls + actions
       const top = el('div', 'song-chip-top');
       const move = el('div', 'song-chip-move');
+      const secName = s.name || s.type;
       const left = el('button', 'song-chip-btn', '◀'); left.disabled = i === 0; left.title = 'Move left';
+      left.setAttribute('aria-label', `Move ${secName} left`);
       const right = el('button', 'song-chip-btn', '▶'); right.disabled = i === song.sections.length - 1; right.title = 'Move right';
+      right.setAttribute('aria-label', `Move ${secName} right`);
       left.addEventListener('click', e => { e.stopPropagation(); moveSection(i, -1); });
       right.addEventListener('click', e => { e.stopPropagation(); moveSection(i, 1); });
       move.append(left, right);
       const acts = el('div', 'song-chip-acts');
       const dup = el('button', 'song-chip-btn2', '⧉'); dup.title = 'Duplicate section';
+      dup.setAttribute('aria-label', `Duplicate ${secName}`);
       dup.addEventListener('click', e => { e.stopPropagation(); duplicateSection(i); });
       const del = el('button', 'song-chip-btn2 song-chip-x', '×'); del.title = 'Remove section';
-      del.addEventListener('click', e => { e.stopPropagation(); removeSection(i); });
+      del.setAttribute('aria-label', `Remove ${secName}`);
+      del.addEventListener('click', e => { e.stopPropagation(); removeSection(i); _toast('Section deleted — Ctrl+Z to undo.'); });
       acts.append(dup, del);
       top.append(move, acts);
       // label
@@ -726,7 +793,7 @@ export const SongBuilder = (() => {
     });
     // end-of-song total marker
     const end = el('div', 'song-tl-end');
-    end.append(el('span', 'song-tl-flag', '▏'), el('span', 'song-tl-total', fmtTime(cum)));
+    end.append(el('span', 'song-tl-total', fmtTime(cum)));
     wrap.appendChild(end);
   }
 
@@ -874,6 +941,7 @@ export const SongBuilder = (() => {
     const toggle = (glyph, title, checked, onChange) => {
       const b = el('button', 'strip-toggle' + (checked ? ' active' : ''), glyph);
       b.type = 'button'; b.title = title;
+      b.setAttribute('aria-label', title); // glyph-only button — the title IS the name
       b.setAttribute('aria-pressed', checked ? 'true' : 'false');
       b.addEventListener('click', () => {
         const next = b.getAttribute('aria-pressed') !== 'true';
@@ -902,8 +970,9 @@ export const SongBuilder = (() => {
   function openSectionSheet(s) {
     let dlg = $('#section-sheet');
     if (!dlg) {
-      dlg = el('div', 'dialog');           // .dialog → app.js's focus trap + Esc applies
+      dlg = el('div', 'dialog');           // .dialog → app.js's focus trap applies; Esc via app.js's dialog list
       dlg.id = 'section-sheet';
+      dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.hidden = true; });
       document.body.appendChild(dlg);
     }
     const card = el('div', 'dialog-card');
@@ -943,7 +1012,7 @@ export const SongBuilder = (() => {
     });
     bpmIn.addEventListener('change', () => {
       const v = parseInt(bpmIn.value, 10);
-      if (!(v >= 50 && v <= 180)) { _toast('Section tempo must be 50–180 BPM.'); bpmIn.value = s.bpm || song.bpm; return; }
+      if (!(v >= 50 && v <= 180)) { _toast('Section tempo must be 50–180 BPM.', { severity: 'error' }); bpmIn.value = s.bpm || song.bpm; return; }
       pushState(); s.bpm = v; render();
     });
     bpmWrap.append(bpmOn, bpmIn);
@@ -951,9 +1020,15 @@ export const SongBuilder = (() => {
 
     const actions = el('div', 'dialog-actions');
     const del = el('button', 'btn btn-danger', 'Delete section');
-    let armed = false;
+    // Arm-confirm that auto-reverts (the one confirm pattern app-wide).
+    let armed = false, armTimer = null;
     del.addEventListener('click', () => {
-      if (!armed) { armed = true; del.textContent = 'Delete — sure?'; del.classList.add('confirm'); return; }
+      if (!armed) {
+        armed = true; del.textContent = 'Delete — sure?'; del.classList.add('confirm');
+        armTimer = setTimeout(() => { armed = false; del.textContent = 'Delete section'; del.classList.remove('confirm'); }, 2600);
+        return;
+      }
+      clearTimeout(armTimer);
       dlg.hidden = true;
       removeSection(song.selected);
       _toast('Section deleted — Ctrl+Z to undo.');
@@ -980,6 +1055,7 @@ export const SongBuilder = (() => {
       tab.dataset.lane = m.key;
       tab.setAttribute('role', 'tab');
       tab.setAttribute('aria-selected', active ? 'true' : 'false');
+      tab.setAttribute('aria-controls', 'pad-bench');
       tab.tabIndex = active ? 0 : -1;      // roving tabindex
       tab.append(el('span', 'inst-name', m.label));
       tab.append(el('span', 'inst-sound', modeSoundName(s, m.key)));
@@ -1052,9 +1128,11 @@ export const SongBuilder = (() => {
 
     const nav = el('div', 'page-nav');
     const prev = el('button', 'page-arrow', '\u2039'); prev.type = 'button'; prev.title = 'Previous page';
+    prev.setAttribute('aria-label', 'Previous page');
     prev.disabled = page0 <= 0;
     prev.addEventListener('click', () => setPage(s, page0 - g.pageSteps));
     const next = el('button', 'page-arrow', '\u203a'); next.type = 'button'; next.title = 'Next page';
+    next.setAttribute('aria-label', 'Next page');
     next.disabled = page0 + g.pageSteps >= g.cols;
     next.addEventListener('click', () => setPage(s, page0 + g.pageSteps));
     const spb = stepsPerBar(s);
@@ -1066,6 +1144,7 @@ export const SongBuilder = (() => {
     const follow = el('button', 'page-btn' + (followPlayhead ? ' active' : ''), '\u27f3');
     follow.type = 'button';
     follow.title = 'Follow the playhead \u2014 turn off to page manually while it plays';
+    follow.setAttribute('aria-label', 'Follow the playhead');
     follow.setAttribute('aria-pressed', followPlayhead ? 'true' : 'false');
     follow.addEventListener('click', () => { followPlayhead = !followPlayhead; renderEditor(); });
 
@@ -1083,6 +1162,10 @@ export const SongBuilder = (() => {
   function buildBench(s) {
     const bench = el('div', 'bench bench-' + activePadMode);
     bench.dataset.lane = activePadMode;
+    // The ONE mounted lane is the panel the instrument-rail tabs control.
+    bench.id = 'pad-bench';
+    bench.setAttribute('role', 'tabpanel');
+    bench.setAttribute('aria-label', (PAD_MODES.find(m => m.key === activePadMode) || {}).label || activePadMode);
     bench.append(buildLaneTools(s, activePadMode));
 
     if (activePadMode === 'chords') {
@@ -1177,8 +1260,10 @@ export const SongBuilder = (() => {
       opts.appendChild(l);
       return sel;
     };
-    pick('Quality', [{ id: 'auto', label: 'In key' }, ...QUALITIES.map(q => ({ id: q, label: q }))], chordQual, v => { chordQual = v; refreshChords(s); });
-    pick('Length', CHORD_RES.map(r => ({ id: String(r.v), label: r.label })), String(chordRes), v => { chordRes = +v; });
+    // QUALITIES entries are {id,label,sfx} objects — map the FIELDS out, or
+    // every option renders (and stores chordQual as) "[object Object]".
+    pick('Quality', [{ id: 'auto', label: 'In key' }, ...QUALITIES.map(q => ({ id: q.id, label: q.label }))], chordQual, v => { chordQual = v; refreshChords(s); });
+    pick('Length', CHORD_RES, chordRes, v => { chordRes = v; });
     wrap.appendChild(opts);
     return wrap;
   }
@@ -1336,7 +1421,7 @@ export const SongBuilder = (() => {
       controls.append(readout, hear, clr);
       if (chordSelStep != null && s.chords[chordSelStep]) {
         const rm = el('button', 'btn btn-mini btn-danger', 'Remove placed');
-        rm.addEventListener('click', () => { s.chords[chordSelStep] = null; chordSelStep = null; refreshChords(s); saveSong(); });
+        rm.addEventListener('click', () => { pushState(); s.chords[chordSelStep] = null; chordSelStep = null; refreshChords(s); saveSong(); });
         controls.appendChild(rm);
       }
     } else if (activePadMode === 'bass' || activePadMode === 'lead') {
@@ -1383,12 +1468,14 @@ export const SongBuilder = (() => {
     whiteMidis.forEach((m, i) => {
       const wk = el('button', sharedKeyClass(m, s, false, scalePcs));
       wk.dataset.midi = m; wk.style.left = (i * KW) + 'px';
+      wk.setAttribute('aria-label', keyName(m));
       if (m === KBD_LO || m % 12 === 0 || m === KBD_HI) wk.appendChild(el('span', 'kbd-label', keyName(m)));
       inner.appendChild(wk);
       if ([0, 2, 5, 7, 9].includes(m % 12) && m + 1 <= KBD_HI) {
         const bm = m + 1;
         const bk = el('button', sharedKeyClass(bm, s, true, scalePcs));
         bk.dataset.midi = bm; bk.style.left = ((i + 1) * KW - KBW / 2) + 'px';
+        bk.setAttribute('aria-label', keyName(bm));
         inner.appendChild(bk);
       }
     });
@@ -1463,9 +1550,10 @@ export const SongBuilder = (() => {
   }
 
   function fmtMixValue(prop, value) {
-    if (prop === 'volume' || prop === 'echo' || prop === 'reverb') return Math.round(value * 100) + '%';
+    if (prop === 'volume' || prop === 'echo' || prop === 'reverb' || prop === 'duck') return Math.round(value * 100) + '%';
     if (prop === 'pan') return value === 0 ? 'C' : `${value < 0 ? 'L' : 'R'}${Math.round(Math.abs(value) * 100)}`;
     if (prop === 'tone') return value < 0.46 ? 'Dark' : (value > 0.62 ? 'Bright' : 'Neutral');
+    if (prop === 'hp') return Math.round(value) + ' Hz';
     return String(value);
   }
 
@@ -1527,6 +1615,17 @@ export const SongBuilder = (() => {
       mixRange(s, track, 'echo', 'Echo', 0, 0.85, 0.01),
       mixRange(s, track, 'reverb', 'Reverb', 0, 0.85, 0.01)
     );
+    // hp/duck have shaped the render since the premium-mix work; they were
+    // just never given controls. Ducking is driven BY the kick, so the drums
+    // lane itself doesn't get a duck row (it would be another dead control).
+    const hpRow = mixRange(s, track, 'hp', 'Low cut', 20, 300, 1);
+    hpRow.title = 'High-pass filter — trims rumble below this frequency';
+    ranges.appendChild(hpRow);
+    if (track !== 'drums') {
+      const duckRow = mixRange(s, track, 'duck', 'Kick duck', 0, 0.6, 0.01);
+      duckRow.title = 'Sidechain — how much each kick hit pushes this track down';
+      ranges.appendChild(duckRow);
+    }
 
     const actions = el('div', 'track-mix-actions');
     const reset = el('button', 'btn btn-mini', 'Reset track');
@@ -1912,12 +2011,29 @@ export const SongBuilder = (() => {
       if (cv && cv.startStep === chordSelStep) cls += ' sel';
       const cell = el('button', cls); cell.dataset.col = c;
       if (cv && cv.start) cell.title = cv.name;
+      cell.setAttribute('aria-label', `${stepName(s, c)} — ${cv ? (cv.name || 'chord') : 'empty'}`);
       row.appendChild(cell);
     }
     grid.appendChild(row);
     grid.appendChild(el('div', 'seq-playhead'));
     attachChordPlace(grid, s);
     attachChordHoverAudition(row, s);
+    gridA11y(grid, 'Chord timeline', (cell) => {
+      const c = +cell.dataset.col;
+      beginGesture();
+      const start = chordStartCovering(s, c);
+      if (start != null) {                                // Enter on a placed chord: select, again = remove
+        if (chordSelStep === start) { s.chords[start] = null; chordSelStep = null; }
+        else { chordSelStep = start; builtNotes = s.chords[start].notes.slice(); }
+      } else if (builtNotes.length) {
+        const len = Math.min(chordResSteps(s), totalSteps(s) - c);
+        notesClearRange(s.chords, c, c + len); s.chords[c] = makeChordObj(builtNotes, len); chordSelStep = c; previewNotes(s, builtNotes);
+      }
+      endGesture();
+      refreshChords(s);
+      document.querySelector(`.chord-grid .seq-cell[data-col="${c}"]`)?.focus();
+      saveSong();
+    });
     return grid;
   }
 
@@ -1977,8 +2093,9 @@ export const SongBuilder = (() => {
         if (start != null) {                              // tap a placed chord → select & load it (tap again removes)
           if (chordSelStep === start) { s.chords[start] = null; chordSelStep = null; }
           else { chordSelStep = start; builtNotes = s.chords[start].notes.slice(); }
-        } else if (builtNotes.length) {                   // tap empty with a built chord → drop a 1-step chord
-          notesClearRange(s.chords, a, a + 1); s.chords[a] = makeChordObj(builtNotes, 1); chordSelStep = a; previewNotes(s, builtNotes);
+        } else if (builtNotes.length) {                   // tap empty with a built chord → drop at the palette's Length
+          const len = Math.min(chordResSteps(s), totalSteps(s) - a);
+          notesClearRange(s.chords, a, a + len); s.chords[a] = makeChordObj(builtNotes, len); chordSelStep = a; previewNotes(s, builtNotes);
         }
       } else if (builtNotes.length) {                     // drag with a built chord → place it across the range
         notesClearRange(s.chords, a, b + 1); s.chords[a] = makeChordObj(builtNotes, b - a + 1); chordSelStep = a; previewNotes(s, builtNotes);
@@ -2040,12 +2157,25 @@ export const SongBuilder = (() => {
         if (activePadMode === kind && cursor.row === r && cursor.col === c) cls += ' cursor-cell';
         const cell = el('button', cls);
         cell.dataset.row = r; cell.dataset.col = c;
+        cell.setAttribute('aria-label', `${bassRowName(r, s.key)} — ${stepName(s, c)}${cv && cv.r === r ? ' — on' : ''}`);
         rowEl.appendChild(cell);
       }
       grid.appendChild(rowEl);
     }
     grid.appendChild(el('div', 'seq-playhead'));
     attachNoteDrag(grid, s, kind);
+    gridA11y(grid, (kind === 'bass' ? 'Bass' : 'Lead') + ' step grid', (cell) => {
+      const row = +cell.dataset.row, col = +cell.dataset.col;
+      beginGesture();
+      if (arr[col] && arr[col].r === row) { arr[col] = null; }   // Enter on a note removes it
+      else { notesClearRange(arr, col, col + 1); arr[col] = { r: row, len: 1 }; (kind === 'bass' ? previewBass : previewLead)(s, row); }
+      noteCursor[kind] = { row, col };
+      endGesture();
+      const fresh = buildNoteGrid(s, kind); const sl = grid.scrollLeft; grid.replaceWith(fresh); fresh.scrollLeft = sl;
+      fresh.querySelector(`.seq-cell[data-row="${row}"][data-col="${col}"]`)?.focus();
+      refreshSharedKeyboard(s);
+      saveSong();
+    });
     return grid;
   }
   function attachNoteDrag(grid, s, kind) {
@@ -2112,6 +2242,8 @@ export const SongBuilder = (() => {
         if (activePadMode === 'drums' && drumCursor.key === r.key && drumCursor.col === c) cls += ' cursor-cell';
         const cell = el('button', cls);
         cell.title = 'Tap cycles: hit → accent → ghost → off';
+        const DRUM_VAL_NAMES = ['off', 'hit', 'accent', 'ghost'];
+        cell.setAttribute('aria-label', `${r.label} — ${stepName(s, c)} — ${DRUM_VAL_NAMES[v0]}`);
         cell.addEventListener('click', () => {
           if (activePadMode !== 'drums') setActivePadMode('drums');
           drumCursor = { key: r.key, col: c };
@@ -2121,6 +2253,7 @@ export const SongBuilder = (() => {
           cell.classList.toggle('on', nv > 0);
           cell.classList.toggle('accent', nv === 2);
           cell.classList.toggle('ghost', nv === 3);
+          cell.setAttribute('aria-label', `${r.label} — ${stepName(s, c)} — ${DRUM_VAL_NAMES[nv]}`);
           if (nv) previewDrum(s, r.key, DRUM_VELS[nv] || 1);
           refreshSharedKeyboard(s);
           saveSong();
@@ -2130,6 +2263,7 @@ export const SongBuilder = (() => {
       grid.appendChild(rowEl);
     });
     grid.appendChild(el('div', 'seq-playhead'));
+    gridA11y(grid, 'Drum step grid'); // cells are click-driven, so Enter/Space already work
     return grid;
   }
 
@@ -2158,7 +2292,7 @@ export const SongBuilder = (() => {
 
   function portFromPads() {
     const sampler = _getSampler();
-    if (!sampler || !sampler.slots) { _toast('Sampler unavailable.'); return; }
+    if (!sampler || !sampler.slots) { _toast('Sampler unavailable.', { severity: 'error' }); return; }
     let n = 0;
     sampler.slots.forEach((slot, i) => {
       if (!slot || !slot.buffer) return;
@@ -2235,7 +2369,7 @@ export const SongBuilder = (() => {
       if (s) refreshSharedKeyboard(s);
     } catch (e) {
       console.warn('sample import failed', e);
-      _toast('Could not decode that sample file.');
+      _toast('Could not decode that sample file.', { severity: 'error' });
     }
   }
 
@@ -2332,7 +2466,7 @@ export const SongBuilder = (() => {
 
   function addSamplerRow(s) {
     const samp = findPorted(smpSel.sampleId);
-    if (!samp) { _toast('Import and pick a sample first.'); return; }
+    if (!samp) { _toast('Import and pick a sample first.', { severity: 'error' }); return; }
     pushState();
     s.samplerRows = s.samplerRows || [];
     s.samplerRows.push({ id: ++idc, sampleId: smpSel.sampleId, name: samp.name, transpose: smpSel.transpose, defaultLen: Math.max(1, smpSel.len), placements: new Array(totalSteps(s)).fill(null) });
@@ -2359,6 +2493,7 @@ export const SongBuilder = (() => {
       const missing = !findPorted(row.sampleId);
       label.append(el('span', 'samp-row-name', (row.name || 'sample') + ' · ' + noteLabel(60 + row.transpose) + (missing ? ' ⚠' : '')));
       const rm = el('button', 'samp-row-x', '×'); rm.title = 'Remove row';
+      rm.setAttribute('aria-label', 'Remove sample row');
       rm.addEventListener('click', (e) => { e.stopPropagation(); pushState(); s.samplerRows = s.samplerRows.filter(r => r !== row); renderEditor(); saveSong(); });
       label.appendChild(rm);
       rowEl.appendChild(label);
@@ -2367,12 +2502,25 @@ export const SongBuilder = (() => {
         let cls = 'seq-cell' + cellMarks(c, s.subdiv, spb);
         const cv = cov[c]; if (cv) cls += cv.start ? ' on' : ' on tied';
         const cell = el('button', cls); cell.dataset.rowid = row.id; cell.dataset.col = c;
+        cell.setAttribute('aria-label', `${row.name || 'sample'} — ${stepName(s, c)}${cv ? ' — on' : ''}`);
         rowEl.appendChild(cell);
       }
       grid.appendChild(rowEl);
     });
     grid.appendChild(el('div', 'seq-playhead'));
     attachSamplerDrag(grid, s);
+    gridA11y(grid, 'Sampler step grid', (cell) => {
+      const col = +cell.dataset.col;
+      const row = s.samplerRows.find(r => String(r.id) === String(cell.dataset.rowid));
+      if (!row) return;
+      beginGesture();
+      if (row.placements[col]) { row.placements[col] = null; }
+      else { notesClearRange(row.placements, col, col + 1); row.placements[col] = { len: 1 }; previewRow(s, row, 1); }
+      endGesture();
+      const fresh = buildSamplerGrid(s); const sl = grid.scrollLeft; grid.replaceWith(fresh); fresh.scrollLeft = sl;
+      if (fresh.querySelector) fresh.querySelector(`.seq-cell[data-rowid="${cell.dataset.rowid}"][data-col="${col}"]`)?.focus();
+      saveSong();
+    });
     return grid;
   }
   function attachSamplerDrag(grid, s) {
@@ -2779,14 +2927,26 @@ export const SongBuilder = (() => {
   }
 
   /* ---------------- per-section play + playhead ---------------- */
+
+  // The transport "now playing" readout (#tp-now-main + #tp-now-bar):
+  // section name + position while anything plays, cleared when idle so the
+  // #song-duration line underneath carries the resting state.
+  function setTpNow(text, frac) {
+    const m = document.getElementById('tp-now-main');
+    if (m && m.textContent !== (text || '')) m.textContent = text || '';
+    const fill = document.getElementById('tp-now-bar')?.firstElementChild;
+    if (fill) fill.style.width = text ? (Math.max(0, Math.min(1, frac || 0)) * 100).toFixed(2) + '%' : '0';
+  }
+
   function toggleSectionPlay() {
     if (sectionPlay) { stopSectionPlay(); return; }
+    stopPreview(); // one thing sounds at a time — and one owner for tp-now
     const s = song.sections[song.selected];
     const btn = $('#btn-song-play-sec');
-    btn.disabled = true; btn.textContent = '⏳ Rendering…';
+    btn.disabled = true; setBtnLabel(btn, '⏳', 'Rendering…');
     renderSections([s]).then(buf => {
       btn.disabled = false;
-      if (!buf) { btn.textContent = '▶ Play section'; return; }
+      if (!buf) { setBtnLabel(btn, '▶', 'Play section'); return; }
       const ac = _getCtx();
       const src = ac.createBufferSource(); src.buffer = buf; src.connect(ac.destination);
       const dur = sectionSec(s);
@@ -2808,9 +2968,9 @@ export const SongBuilder = (() => {
       const nowName = $('#song-editor').querySelector('.chord-now');
       sectionPlay = { src, startAt, dur, s, chordGrid, nowName, lastChordStart: -2, raf: null, loop: loopSection };
       src.onended = () => { if (sectionPlay && sectionPlay.src === src) stopSectionPlay(); };
-      btn.textContent = '⏹ Stop section';
+      setBtnLabel(btn, '⏹', 'Stop section');
       runPlayhead();
-    }).catch(e => { console.warn(e); btn.disabled = false; btn.textContent = '▶ Play section'; _toast('Could not render the section.'); });
+    }).catch(e => { console.warn(e); btn.disabled = false; setBtnLabel(btn, '▶', 'Play section'); _toast('Could not render the section.', { severity: 'error' }); });
   }
 
   function runPlayhead() {
@@ -2835,6 +2995,8 @@ export const SongBuilder = (() => {
           g.style.setProperty('--play-col', col.toFixed(3));
           h.style.display = onPage ? 'block' : 'none';
         });
+        const bar = Math.min(sp.s.bars, 1 + Math.floor(elapsed / barSec(sp.s)));
+        setTpNow(`${sp.s.name || sp.s.type} · bar ${bar} of ${sp.s.bars}`, elapsed / sp.dur);
         const step = Math.min(totalSteps(sp.s) - 1, Math.floor(elapsed / stepSec(sp.s)));
         const start = chordStartCovering(sp.s, step);
         if (start !== sp.lastChordStart) {
@@ -2860,22 +3022,38 @@ export const SongBuilder = (() => {
     if (sp.chordGrid) sp.chordGrid.querySelectorAll('.seq-cell.playing').forEach(c => c.classList.remove('playing'));
     if (sp.nowName) sp.nowName.textContent = '';
     document.querySelectorAll('#song-editor .seq-playhead').forEach(h => { h.style.display = 'none'; });
-    const btn = $('#btn-song-play-sec'); if (btn) { btn.textContent = '▶ Play section'; btn.disabled = false; }
+    setTpNow('');
+    const btn = $('#btn-song-play-sec'); if (btn) { setBtnLabel(btn, '▶', 'Play section'); btn.disabled = false; }
   }
 
   /* ---------------- whole-song preview & apply ---------------- */
-  function stopPreview() { playNodes.forEach(n => { try { n.stop(); } catch (e) {} }); playNodes = []; }
+  function stopPreview() { playNodes.forEach(n => { try { n.stop(); } catch (e) {} }); playNodes = []; setTpNow(''); }
   async function preview() {
     stopPreview(); stopSectionPlay();
-    const btn = $('#btn-song-preview'); btn.disabled = true; btn.textContent = '⏳ Rendering…';
+    const btn = $('#btn-song-preview'); btn.disabled = true; setBtnLabel(btn, '⏳', 'Rendering…');
     try {
       const buf = await renderSections(song.sections);
-      btn.textContent = '▶ Song'; btn.disabled = false;
+      setBtnLabel(btn, '▶', 'Song'); btn.disabled = false;
       if (!buf) return;
       previewedOnce = true;
       renderNextStep();
       const ac = _getCtx(); const src = ac.createBufferSource(); src.buffer = buf; src.connect(ac.destination); src.start(); playNodes.push(src);
-    } catch (e) { console.warn(e); btn.textContent = '▶ Song'; btn.disabled = false; _toast('Could not render the song.'); }
+      // Drive the transport readout through the whole-song preview. The guard
+      // on playNodes doubles as the stop signal: stopPreview() empties it.
+      const secs = song.sections.map(s => sectionSec(s));
+      const total = secs.reduce((a, b) => a + b, 0);
+      const t0 = ac.currentTime;
+      (function tick() {
+        if (!playNodes.includes(src)) return;             // stopped (or replaced)
+        const e = ac.currentTime - t0;
+        if (e >= total) { setTpNow(''); return; }         // musical end (tail may ring)
+        let i = 0, acc = 0;
+        while (i < secs.length - 1 && e >= acc + secs[i]) acc += secs[i++];
+        const sec = song.sections[i];
+        setTpNow(`${sec.name || sec.type} · ${fmtTime(Math.max(0, e))} / ${fmtTime(total)}`, e / total);
+        requestAnimationFrame(tick);
+      })();
+    } catch (e) { console.warn(e); setBtnLabel(btn, '▶', 'Song'); btn.disabled = false; _toast('Could not render the song.', { severity: 'error' }); }
   }
   const songLabel = () => `song · ${song.sections.length} sections · ${song.bpm} BPM`;
 
@@ -2897,23 +3075,23 @@ export const SongBuilder = (() => {
         _onUse(buf, songLabel(), deck, tempos.size === 1 ? [...tempos][0] : null, cues);
         _toast(`Loaded onto Deck ${deck} — sections are on hot cues 1–${Math.min(8, cues.length)}.`);
       }
-    } catch (e) { console.warn(e); _toast('Could not render the song.'); }
+    } catch (e) { console.warn(e); _toast('Could not render the song.', { severity: 'error' }); }
     btn.textContent = txt; btn.disabled = false;
   }
 
   async function downloadSong() {
-    const btn = $('#btn-song-dl'); const txt = btn.textContent;
-    btn.disabled = true; btn.textContent = '⏳ Rendering…';
+    const btn = $('#btn-song-dl');
+    btn.disabled = true; setBtnLabel(btn, '⏳', 'Rendering…');
     try {
       const buf = await renderSections(song.sections);
       if (buf) {
         const url = URL.createObjectURL(bufferToWav(buf));
         const a = document.createElement('a'); a.href = url; a.download = 'sxratch-pad-song.wav'; a.click();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
-        _toast('Downloaded your song as WAV.');
+        _toast('Downloaded your song as WAV.', { severity: 'ok' });
       }
-    } catch (e) { console.warn(e); _toast('Could not render the song.'); }
-    btn.textContent = txt; btn.disabled = false;
+    } catch (e) { console.warn(e); _toast('Could not render the song.', { severity: 'error' }); }
+    setBtnLabel(btn, '⇩', 'WAV'); btn.disabled = false;
   }
 
   function upgradePadShell(root) {
@@ -2925,15 +3103,16 @@ export const SongBuilder = (() => {
     const duration = root.querySelector('#song-duration');
     if (!meta || !add || !timeline || !editor) return;
 
-    const setButton = (sel, cls, html) => {
+    const setButton = (sel, cls, text) => {
       const btn = root.querySelector(sel);
-      if (!btn) return;
+      if (!btn) return null;
       btn.className = (btn.className + ' ' + cls).trim();
-      btn.innerHTML = html;
+      if (text != null) btn.textContent = text;
+      return btn;
     };
-    setButton('#btn-song-preview', 'pad-transport-btn', '<span class="pad-transport-icon">▶</span><span>Song</span>');
-    setButton('#btn-song-preview-stop', 'pad-transport-btn pad-stop', '<span class="pad-transport-icon">■</span><span>Stop</span>');
-    setButton('#btn-song-dl', 'pad-transport-btn', '<span class="pad-transport-icon">⇩</span><span>WAV</span>');
+    setBtnLabel(setButton('#btn-song-preview', 'pad-transport-btn'), '▶', 'Song');
+    setBtnLabel(setButton('#btn-song-preview-stop', 'pad-transport-btn pad-stop'), '■', 'Stop');
+    setBtnLabel(setButton('#btn-song-dl', 'pad-transport-btn'), '⇩', 'WAV');
     setButton('#btn-song-deckA', 'pad-send', 'Send A');
     setButton('#btn-song-deckB', 'pad-send', 'Send B');
     setButton('#btn-song-export', 'pad-utility', 'Export');
@@ -2962,13 +3141,14 @@ export const SongBuilder = (() => {
     // that exists at every breakpoint, in every panel state, at every scroll
     // position — never inside the editor, which panels can cover or collapse.
     const primary = zone('tp-primary');
-    const playSec = el('button', 'btn pad-transport-btn pad-play', '▶ Play section');
+    const playSec = setBtnLabel(el('button', 'btn pad-transport-btn pad-play'), '▶', 'Play section');
     playSec.id = 'btn-song-play-sec';
     playSec.disabled = true;
     playSec.addEventListener('click', toggleSectionPlay);
     const loopBtn = el('button', 'tp-loop' + (loopSection ? ' active' : ''), '🔁');
     loopBtn.type = 'button';
     loopBtn.title = 'Loop the section while it plays';
+    loopBtn.setAttribute('aria-label', 'Loop the section while it plays');
     loopBtn.setAttribute('aria-pressed', loopSection ? 'true' : 'false');
     loopBtn.addEventListener('click', () => {
       loopSection = !loopSection;
@@ -3004,6 +3184,7 @@ export const SongBuilder = (() => {
     const nowMain = el('div', 'tp-now-main'); nowMain.id = 'tp-now-main';
     if (duration) now.append(nowMain, duration); else now.append(nowMain);
     const nowBar = el('div', 'tp-now-bar'); nowBar.id = 'tp-now-bar';
+    nowBar.appendChild(el('i')); // the progress fill (.tp-now-bar > i)
     now.appendChild(nowBar);
 
     const out = zone('tp-out', 'Send to deck');
@@ -3142,7 +3323,7 @@ export const SongBuilder = (() => {
   }
   function writeProjects(p) {
     return writeVersioned(PROJECTS_KEY, PROJECTS_SCHEMA_V, p, {
-      onQuota: () => _toast('Could not save — browser storage is full.'),
+      onQuota: () => _toast('Could not save — browser storage is full.', { severity: 'error' }),
     });
   }
   const projectSizeKb = (p) => Math.max(1, Math.round(JSON.stringify(p.song || {}).length / 1024));
@@ -3177,7 +3358,7 @@ export const SongBuilder = (() => {
         `Song · ${song.sections.length} sections · ${new Date().toLocaleDateString()}`;
       const projects = readProjects();
       if (Object.keys(projects).length >= PROJECTS_MAX) {
-        _toast(`Project limit (${PROJECTS_MAX}) reached — delete one from the list first.`);
+        _toast(`Project limit (${PROJECTS_MAX}) reached — delete one from the list first.`, { severity: 'error' });
         return;
       }
       projects[String(Date.now())] = { name, savedAt: Date.now(), song: JSON.parse(JSON.stringify(song)) };
@@ -3210,7 +3391,7 @@ export const SongBuilder = (() => {
       const load = el('button', 'btn', 'Load');
       load.type = 'button';
       load.addEventListener('click', () => {
-        if (!rec.song || !Array.isArray(rec.song.sections)) { _toast('That save looks corrupted.'); return; }
+        if (!rec.song || !Array.isArray(rec.song.sections)) { _toast('That save looks corrupted.', { severity: 'error' }); return; }
         pushState(); // loading is one undo step away from your current song
         song = JSON.parse(JSON.stringify(rec.song));
         idc = Math.max(0, ...song.sections.map(s => s.id || 0));
@@ -3354,12 +3535,25 @@ export const SongBuilder = (() => {
       a.download = `sxratch-song-${Date.now()}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      _toast('Song configuration exported.');
+      _toast('Song exported as a JSON file.', { severity: 'ok' });
     });
 
     const importBtn = $('#btn-song-import');
     const importInput = $('#song-import-file');
-    importBtn.addEventListener('click', () => importInput.click());
+    // Importing REPLACES the whole song: arm-confirm before the picker opens
+    // (same auto-reverting pattern as project delete), and snapshot on apply
+    // so the replace is a single undoable edit.
+    let impArmed = false, impTimer = null;
+    const disarmImport = () => { impArmed = false; importBtn.textContent = 'Import'; importBtn.classList.remove('confirm'); };
+    importBtn.addEventListener('click', () => {
+      if (!impArmed) {
+        impArmed = true; importBtn.textContent = 'Replaces song — sure?'; importBtn.classList.add('confirm');
+        impTimer = setTimeout(disarmImport, 2600);
+        return;
+      }
+      clearTimeout(impTimer); disarmImport();
+      importInput.click();
+    });
     importInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -3368,17 +3562,20 @@ export const SongBuilder = (() => {
         try {
           const parsed = JSON.parse(evt.target.result);
           if (parsed && Array.isArray(parsed.sections)) {
+            pushState();
             song = parsed;
             idc = Math.max(0, ...song.sections.map(s => s.id || 0));
             $('#song-bpm').value = song.bpm || 90;
             $('#song-bpm-v').textContent = song.bpm || 90;
             render();
-            _toast('Song configuration imported!');
+            renderCache.clear();
+            saveSong();
+            _toast('Song imported — Ctrl+Z to undo.');
           } else {
-            _toast('Invalid song file structure.');
+            _toast('Invalid song file structure.', { severity: 'error' });
           }
         } catch (err) {
-          _toast('Failed to parse song JSON file.');
+          _toast('Could not read that song file.', { severity: 'error' });
         }
       };
       reader.readAsText(file);
@@ -3411,7 +3608,7 @@ export const SongBuilder = (() => {
         console.warn('sample load failed', e);
         useSamples = false; engineSel.value = 'synth';
         engineStatus.textContent = 'Could not load samples — using synth';
-        _toast('Could not load sampled instruments (offline?). Using synth.');
+        _toast('Could not load sampled instruments (offline?). Using synth.', { severity: 'error' });
       }
       engineSel.disabled = false;
     });

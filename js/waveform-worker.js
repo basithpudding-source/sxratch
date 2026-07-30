@@ -6,6 +6,7 @@ import { drawWaveform } from "./waveform-draw.js";
 
 let ctx = null;
 const s = {
+  // color fallback = tokens.css --sx-brand-a (dark); real values arrive via init/theme messages
   w: 1, h: 1, bg: "transparent", color: "#48ddd3",
   levels: null, baseCount: 0, duration: 0, grid: null,
   position: 0, pixelsPerPeak: 1, cues: [], loop: null,

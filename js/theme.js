@@ -111,25 +111,27 @@ function syncMetaThemeColor() {
 }
 
 /**
- * Apply a theme mode. "auto" removes the attribute so the OS preference
- * (and any later OS change) wins.
+ * Apply a theme mode. The attribute always carries the RESOLVED theme
+ * ("light"/"dark", never "auto" and never absent): tokens.css has exactly
+ * one light block, keyed off [data-theme="light"]. "Auto" is resolved here
+ * against the OS preference, and initTheme's matchMedia listener re-applies
+ * on OS changes so auto still tracks the system live.
  */
 export function applyTheme(mode) {
   _mode = THEME_MODES.includes(mode) ? mode : "auto";
+  const resolved = effectiveTheme();
   const root = document.documentElement;
-  if (_mode === "auto") delete root.dataset.theme;
-  else root.dataset.theme = _mode;
+  root.dataset.theme = resolved;
 
-  // The attribute is mirrored onto <body> as well, and the view-scoped token
-  // blocks in tokens.css key off THAT. Chrome did not re-resolve custom
-  // properties declared in a body-scoped block when only an attribute on
-  // <html> changed — the :root tokens updated and the body-scoped ones kept
-  // their old values, so a runtime toggle left the studio showing dark text
-  // on a light surface until the next reload. An element's own attribute
-  // always invalidates its own style.
+  // The attribute is mirrored onto <body> as well, for any body-scoped token
+  // overrides. Chrome did not re-resolve custom properties declared in a
+  // body-scoped block when only an attribute on <html> changed — the :root
+  // tokens updated and the body-scoped ones kept their old values, so a
+  // runtime toggle left the studio showing dark text on a light surface
+  // until the next reload. An element's own attribute always invalidates
+  // its own style.
   if (document.body) {
-    if (_mode === "auto") delete document.body.dataset.theme;
-    else document.body.dataset.theme = _mode;
+    document.body.dataset.theme = resolved;
     // Flush the invalidation before anything reads a computed colour. When a
     // view switch (which toggles `view-studio` on the same element) lands in
     // the same style pass as the theme change, Chrome would otherwise serve

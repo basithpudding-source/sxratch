@@ -96,8 +96,11 @@ export function attachKnob(el, opts = {}) {
   let pointerId = null;
 
   // Screen-reader / keyboard affordances for what is visually just a div.
+  // opts.label is the accessible NAME — without it the control announces as
+  // an anonymous slider (the visible <label> is an unassociated sibling).
   if (!el.hasAttribute("role")) el.setAttribute("role", "slider");
   if (!el.hasAttribute("tabindex")) el.tabIndex = 0;
+  if (opts.label && !el.hasAttribute("aria-label")) el.setAttribute("aria-label", opts.label);
   el.setAttribute("aria-valuemin", "0");
   el.setAttribute("aria-valuemax", "1");
   el.setAttribute("aria-orientation", "vertical");
@@ -107,6 +110,7 @@ export function attachKnob(el, opts = {}) {
     const ind = opts.indicator || el;
     ind.style.transform = `rotate(${angle}deg)`;
     el.setAttribute("aria-valuenow", value.toFixed(2));
+    if (opts.valueText) el.setAttribute("aria-valuetext", opts.valueText(value));
   };
 
   const set = (v) => {
@@ -186,6 +190,7 @@ export function attachFader(el, opts = {}) {
 
   if (!el.hasAttribute("role")) el.setAttribute("role", "slider");
   if (!el.hasAttribute("tabindex")) el.tabIndex = 0;
+  if (opts.label && !el.hasAttribute("aria-label")) el.setAttribute("aria-label", opts.label);
   el.setAttribute("aria-valuemin", String(min));
   el.setAttribute("aria-valuemax", String(max));
   el.setAttribute("aria-orientation", vertical ? "vertical" : "horizontal");
@@ -223,6 +228,7 @@ export function attachFader(el, opts = {}) {
     if (vertical) fill.style.height = p + "%";
     else fill.style.width = p + "%";
     el.setAttribute("aria-valuenow", value.toFixed(3));
+    if (opts.valueText) el.setAttribute("aria-valuetext", opts.valueText(value));
   };
 
   const set = (v, fire = true) => {

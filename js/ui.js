@@ -115,11 +115,34 @@ export class UI {
     );
   }
 
-  toast(msg) {
-    this.toastEl.textContent = msg;
-    this.toastEl.classList.add("show");
-    clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => this.toastEl.classList.remove("show"), 1600);
+  /**
+   * Toast v2 — stacking pills instead of a single self-clobbering slot.
+   *  - toast(msg) keeps working everywhere (severity "info").
+   *  - toast(msg, { severity: "error" | "ok", duration }) styles the pill,
+   *    and errors also fire the assertive announcer (a 2s pill is missable).
+   *  - Dwell scales with message length instead of a flat 1600 ms.
+   *  - At most 3 pills; the oldest drops off.
+   */
+  toast(msg, opts = {}) {
+    const { severity = "info", duration } = opts;
+    if (severity === "error") this.announce(msg);
+    const host = this.toastEl;
+    if (!host) return;
+    const pill = document.createElement("div");
+    pill.className = "toast-pill" + (severity !== "info" ? " toast-" + severity : "");
+    pill.textContent = msg;
+    host.appendChild(pill);
+    while (host.children.length > 3) host.firstElementChild.remove();
+    void pill.offsetWidth;              // flush so the .show transition runs
+    pill.classList.add("show");
+    const ms = duration ?? Math.min(
+      6000,
+      Math.max(severity === "error" ? 2600 : 1600, 900 + msg.length * 55)
+    );
+    setTimeout(() => {
+      pill.classList.remove("show");
+      setTimeout(() => pill.remove(), 300);
+    }, ms);
   }
 }
 // (BPM readouts intentionally show "--" until a tempo is actually known.)

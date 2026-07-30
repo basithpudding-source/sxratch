@@ -2,9 +2,10 @@
 //
 // Sampler-row PLACEMENTS always persisted with the song, but the audio
 // buffers lived only in memory — every reload turned rows into ⚠ "re-import"
-// stubs. Slices are small (pad one-shots / loop regions), so they fit
-// comfortably in IndexedDB as raw Float32Array channel data (structured
-// clone handles typed arrays natively). Budget-capped with LRU eviction.
+// stubs. Buffers are stored as raw Float32Array channel data (structured clone
+// handles typed arrays natively). Sampler assets use a budget-capped LRU;
+// DAW project clips are pinned and rely on the browser quota instead, because
+// silently evicting audio that a saved arrangement references is data loss.
 //
 // All methods resolve gracefully (null / false) when IndexedDB is
 // unavailable (private mode) — persistence is an enhancement, never a
@@ -12,7 +13,7 @@
 
 const DB_NAME = "sxratch";
 const STORE = "pad-samples";
-const BUDGET_BYTES = 50 * 1024 * 1024; // ~50 MB of float audio
+export const SAMPLE_BUDGET_BYTES = 50 * 1024 * 1024; // sampler/non-project audio only
 
 function openDb() {
   return new Promise((resolve) => {
@@ -43,16 +44,17 @@ const recBytes = (rec) => rec.channels.reduce((a, c) => a + c.byteLength, 0);
 
 /**
  * Save one sample. `buffer` is an AudioBuffer; stored as
- * { id, name, sampleRate, channels: Float32Array[], savedAt, bytes }.
+ * { id, name, sampleRate, channels: Float32Array[], savedAt, bytes, pinned }.
+ * Pinned records are project data and are never removed by sampler LRU.
  */
-export async function saveSample(id, name, buffer) {
+export async function saveSample(id, name, buffer, { pinned = false } = {}) {
   const db = await openDb();
   if (!db) return false;
   const channels = [];
   for (let c = 0; c < buffer.numberOfChannels; c++) {
     channels.push(new Float32Array(buffer.getChannelData(c))); // copy — source is live
   }
-  const rec = { id, name, sampleRate: buffer.sampleRate, channels, savedAt: Date.now(), bytes: 0 };
+  const rec = { id, name, sampleRate: buffer.sampleRate, channels, savedAt: Date.now(), bytes: 0, pinned: !!pinned };
   rec.bytes = recBytes(rec);
   const ok = await tx(db, "readwrite", (store) => store.put(rec));
   if (ok) await enforceBudget(db);
@@ -60,7 +62,7 @@ export async function saveSample(id, name, buffer) {
   return !!ok;
 }
 
-/** Load every stored sample as { id, name, sampleRate, channels }. */
+/** Load every stored sample as { id, name, sampleRate, channels, pinned }. */
 export async function loadAllSamples() {
   const db = await openDb();
   if (!db) return [];
@@ -83,7 +85,21 @@ export async function deleteSample(id) {
   return !!ok;
 }
 
-/** Evict oldest samples until the store fits the byte budget. */
+export function samplesToEvict(records, budgetBytes = SAMPLE_BUDGET_BYTES) {
+  const evictable = (records || []).filter((r) => !r.pinned);
+  let total = evictable.reduce((a, r) => a + (r.bytes || recBytes(r)), 0);
+  if (total <= budgetBytes) return [];
+  evictable.sort((a, b) => (a.savedAt || 0) - (b.savedAt || 0));
+  const ids = [];
+  for (const r of evictable) {
+    if (total <= budgetBytes) break;
+    ids.push(r.id);
+    total -= r.bytes || recBytes(r);
+  }
+  return ids;
+}
+
+/** Evict oldest non-project samples until their own cache fits the budget. */
 async function enforceBudget(db) {
   const all = await new Promise((resolve) => {
     try {
@@ -92,12 +108,7 @@ async function enforceBudget(db) {
       req.onerror = () => resolve([]);
     } catch { resolve([]); }
   });
-  let total = all.reduce((a, r) => a + (r.bytes || recBytes(r)), 0);
-  if (total <= BUDGET_BYTES) return;
-  all.sort((a, b) => (a.savedAt || 0) - (b.savedAt || 0)); // oldest first
-  for (const r of all) {
-    if (total <= BUDGET_BYTES) break;
-    await tx(db, "readwrite", (store) => store.delete(r.id));
-    total -= r.bytes || 0;
+  for (const id of samplesToEvict(all)) {
+    await tx(db, "readwrite", (store) => store.delete(id));
   }
 }

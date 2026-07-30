@@ -1,13 +1,13 @@
 {
-  "name": "Sxratch / Pad — Browser DJ",
+  "name": "Sxratch / Pad — Browser DJ & Song Builder",
   "short_name": "Sxratch",
   "description": "Two-deck scratch & mix DJ rig with a studio song builder, in the browser.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0a0b10",
-  "theme_color": "#0a0b10",
+  "background_color": "#0a0f1c",
+  "theme_color": "#0a0f1c",
   "categories": ["music", "entertainment"],
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },

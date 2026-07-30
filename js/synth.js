@@ -488,13 +488,11 @@ export const ENGINE_SCHEMA = {
 const SCHEMA_KEYS = Object.fromEntries(
   Object.entries(ENGINE_SCHEMA).map(([eng, secs]) => [eng, new Set(secs.flatMap((s) => s.params.map((p) => p.key)))])
 );
-
 const SUB = (params) => ({ engine: "subtractive", params });
 const FM = (params) => ({ engine: "fm", params });
 const ORG = (params) => ({ engine: "organ", params });
 const PLK = (params) => ({ engine: "pluck", params });
 
-/* Factory parameter sets — these reproduce the S1 voices exactly. */
 export const FACTORY_PATCHES = {
   chord: {
     pad: SUB({
@@ -534,6 +532,48 @@ export const FACTORY_PATCHES = {
       strum: 0.016, panSpread: 0.22, durAdd: 0.7, durMax: 2.8,
       level: 0.5, body: 1, seed: 1, chorus: 0,
     }),
+    grand_piano: SUB({
+      wave1: 1, level1: 0.8, wave2: 0, level2: 0.2, detune2: 7, sub: 0, noise: 0.005, noiseTone: 2200, drive: 1,
+      voices: 3, detune: 5, spread: 0.4,
+      type: 0, cutoff: 4500, keyTrack: 0.7, q: 0.7, envAmount: -2200, envTime: 0.15, velToCutoff: 2500, envVel: 0.8,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.003, attackKey: 0.1, decay: 1.2, sustain: 0.4, release: 0.45, level: 0.18,
+      vibRate: 0, vibCents: 0, vibDelay: 0,
+      trLevel: 0.08, trHp: 1500, trLp: 5000, trDecay: 0.003,
+      chorus: 0.15,
+    }),
+    clavinet: FM({
+      ratio: 5, index: 9, indexDecay: 0.03, indexVel: 1.6,
+      otRatio: 3, otLevel: 0.2, otDecay: 0.1,
+      attack: 0.001, decay: 0.8, decayAdd: 0.1, sustain: 0.15, release: 0.1, level: 0.2, velCurve: 1.3,
+      panSpread: 0.1, chorus: 0.1,
+    }),
+    brass_section: SUB({
+      wave1: 2, level1: 1, wave2: 2, level2: 0.6, detune2: 12, sub: 0.3, noise: 0, noiseTone: 1900, drive: 1.2,
+      voices: 4, detune: 14, spread: 0.7,
+      type: 0, cutoff: 1800, keyTrack: 0.8, q: 1.2, envAmount: 3200, envTime: 0.12, velToCutoff: 1800, envVel: 0.6,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.04, attackKey: 0, decay: 0.25, sustain: 0.75, release: 0.3, level: 0.14,
+      vibRate: 4.8, vibCents: 3, vibDelay: 0.2,
+      trLevel: 0.04, trHp: 800, trLp: 4000, trDecay: 0.005,
+      chorus: 0.25,
+    }),
+    supersaw_pad: SUB({
+      wave1: 2, level1: 1, wave2: 2, level2: 0.8, detune2: -15, sub: 0.4, noise: 0, noiseTone: 1900, drive: 1.1,
+      voices: 7, detune: 24, spread: 0.95,
+      type: 0, cutoff: 1200, keyTrack: 0.5, q: 0.8, envAmount: 1800, envTime: 0.4, velToCutoff: 1200, envVel: 0.5,
+      lfoRate: 0.2, lfoDepth: 250,
+      attack: 0.15, attackKey: 0, decay: 0.6, sustain: 0.9, release: 0.7, level: 0.08,
+      vibRate: 0, vibCents: 0, vibDelay: 0,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.6,
+    }),
+    glass_keys: FM({
+      ratio: 4.5, index: 4.8, indexDecay: 0.4, indexVel: 1.1,
+      otRatio: 7, otLevel: 0.25, otDecay: 0.6,
+      attack: 0.002, decay: 2.5, decayAdd: 0.5, sustain: 0.2, release: 0.8, level: 0.15, velCurve: 1,
+      panSpread: 0.3, chorus: 0.4,
+    }),
   },
   bass: {
     electric: SUB({
@@ -570,6 +610,38 @@ export const FACTORY_PATCHES = {
       vibRate: 0, vibCents: 0, vibDelay: 0.2,
       trLevel: 0.03, trHp: 900, trLp: 2400, trDecay: 0.0015,
       chorus: 0,
+    }),
+    acid_tb: SUB({
+      wave1: 2, level1: 1, wave2: 3, level2: 0.3, detune2: 0, sub: 0.4, noise: 0, noiseTone: 1900, drive: 2.8,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 180, keyTrack: 0.4, q: 9.5, envAmount: 4200, envTime: 0.08, velToCutoff: 1200, envVel: 0.9,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.002, attackKey: 0, decay: 0.15, sustain: 0.4, release: 0.1, level: 0.3,
+      vibRate: 0, vibCents: 0, vibDelay: 0,
+      trLevel: 0.05, trHp: 600, trLp: 2800, trDecay: 0.002,
+      chorus: 0.1,
+    }),
+    slap_bass: FM({
+      ratio: 2, index: 8.5, indexDecay: 0.04, indexVel: 1.8,
+      otRatio: 5, otLevel: 0.3, otDecay: 0.08,
+      attack: 0.001, decay: 0.4, decayAdd: 0.1, sustain: 0.3, release: 0.12, level: 0.28, velCurve: 1.4,
+      panSpread: 0, chorus: 0.15,
+    }),
+    wobble_bass: SUB({
+      wave1: 2, level1: 1, wave2: 3, level2: 0.5, detune2: 0, sub: 0.6, noise: 0, noiseTone: 1900, drive: 2.4,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 400, keyTrack: 0, q: 6.5, envAmount: 0, envTime: 0.1, velToCutoff: 0, envVel: 0,
+      lfoRate: 4, lfoDepth: 1800,
+      attack: 0.005, attackKey: 0, decay: 0.3, sustain: 0.7, release: 0.15, level: 0.3,
+      vibRate: 0, vibCents: 0, vibDelay: 0,
+      trLevel: 0.04, trHp: 500, trLp: 2000, trDecay: 0.003,
+      chorus: 0,
+    }),
+    fm_lately: FM({
+      ratio: 1, index: 7.2, indexDecay: 0.07, indexVel: 1.3,
+      otRatio: 3, otLevel: 0.15, otDecay: 0.15,
+      attack: 0.002, decay: 0.6, decayAdd: 0.1, sustain: 0.45, release: 0.15, level: 0.26, velCurve: 1.2,
+      panSpread: 0, chorus: 0.1,
     }),
   },
   lead: {
@@ -614,6 +686,94 @@ export const FACTORY_PATCHES = {
       strum: 0, panSpread: 0, durAdd: 0.4, durMax: 3.6,
       level: 0.42, body: 1, seed: 5, chorus: 0,
     }),
+    supersaw_lead: SUB({
+      wave1: 2, level1: 1, wave2: 2, level2: 0.8, detune2: 12, sub: 0.2, noise: 0, noiseTone: 1900, drive: 1.2,
+      voices: 7, detune: 22, spread: 0.8,
+      type: 0, cutoff: 5200, keyTrack: 0.7, q: 1.2, envAmount: 2400, envTime: 0.1, velToCutoff: 1800, envVel: 0.6,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.008, attackKey: 0, decay: 0.3, sustain: 0.8, release: 0.25, level: 0.11,
+      vibRate: 5.5, vibCents: 6, vibDelay: 0.2,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.35,
+    }),
+    soft_lead: SUB({
+      wave1: 1, level1: 1, wave2: 0, level2: 0.4, detune2: 0, sub: 0.2, noise: 0, noiseTone: 1900, drive: 1,
+      voices: 2, detune: 6, spread: 0.3,
+      type: 0, cutoff: 1600, keyTrack: 0.9, q: 0.8, envAmount: 800, envTime: 0.15, velToCutoff: 1200, envVel: 0.5,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.02, attackKey: 0, decay: 0.2, sustain: 0.85, release: 0.3, level: 0.16,
+      vibRate: 4.8, vibCents: 9, vibDelay: 0.15,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.2,
+    }),
+    brass_lead: SUB({
+      wave1: 2, level1: 1, wave2: 3, level2: 0.4, detune2: 7, sub: 0.3, noise: 0, noiseTone: 1900, drive: 1.3,
+      voices: 3, detune: 10, spread: 0.5,
+      type: 0, cutoff: 2400, keyTrack: 0.8, q: 2.2, envAmount: 3800, envTime: 0.08, velToCutoff: 1500, envVel: 0.7,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.015, attackKey: 0, decay: 0.2, sustain: 0.75, release: 0.2, level: 0.14,
+      vibRate: 5.2, vibCents: 5, vibDelay: 0.2,
+      trLevel: 0.04, trHp: 1200, trLp: 5000, trDecay: 0.003,
+      chorus: 0.15,
+    }),
+    whistle: SUB({
+      wave1: 0, level1: 1, wave2: 0, level2: 0, detune2: 0, sub: 0, noise: 0.015, noiseTone: 3000, drive: 1,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 7000, keyTrack: 1, q: 0.6, envAmount: 0, envTime: 0.1, velToCutoff: 0, envVel: 0,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.025, attackKey: 0, decay: 0.1, sustain: 0.9, release: 0.15, level: 0.18,
+      vibRate: 5.8, vibCents: 12, vibDelay: 0.1,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.1,
+    }),
+  },
+  chorus: {
+    choir_vox: SUB({
+      wave1: 1, level1: 1, wave2: 2, level2: 0.5, detune2: 9, sub: 0.3, noise: 0.015, noiseTone: 2400, drive: 1,
+      voices: 5, detune: 18, spread: 0.8,
+      type: 0, cutoff: 1400, keyTrack: 0.6, q: 1.8, envAmount: 1200, envTime: 0.3, velToCutoff: 1000, envVel: 0.5,
+      lfoRate: 0.15, lfoDepth: 180,
+      attack: 0.12, attackKey: 0, decay: 0.4, sustain: 0.85, release: 0.6, level: 0.1,
+      vibRate: 5.0, vibCents: 7, vibDelay: 0.25,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.55,
+    }),
+    warm_chorus: SUB({
+      wave1: 3, level1: 1, wave2: 0, level2: 0, detune2: 0, sub: 0.5, noise: 0, noiseTone: 1900, drive: 1,
+      voices: 4, detune: 14, spread: 0.75,
+      type: 0, cutoff: 900, keyTrack: 0.5, q: 0.7, envAmount: 900, envTime: 0.3, velToCutoff: 800, envVel: 0.4,
+      lfoRate: 0.2, lfoDepth: 200,
+      attack: 0.08, attackKey: 0, decay: 0.5, sustain: 0.85, release: 0.5, level: 0.11,
+      vibRate: 0, vibCents: 0, vibDelay: 0,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.65,
+    }),
+    ambient_space: SUB({
+      wave1: 0, level1: 1, wave2: 1, level2: 0.7, detune2: 15, sub: 0.4, noise: 0.01, noiseTone: 1500, drive: 1,
+      voices: 4, detune: 20, spread: 0.9,
+      type: 0, cutoff: 800, keyTrack: 0.4, q: 0.8, envAmount: 1500, envTime: 0.8, velToCutoff: 600, envVel: 0.3,
+      lfoRate: 0.1, lfoDepth: 300,
+      attack: 0.3, attackKey: 0, decay: 0.8, sustain: 0.9, release: 1.2, level: 0.09,
+      vibRate: 4.2, vibCents: 5, vibDelay: 0.4,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.7,
+    }),
+    celestial: FM({
+      ratio: 5.5, index: 4.2, indexDecay: 0.5, indexVel: 1,
+      otRatio: 8, otLevel: 0.3, otDecay: 0.8,
+      attack: 0.05, decay: 2.0, decayAdd: 0.5, sustain: 0.4, release: 1.0, level: 0.14, velCurve: 1,
+      panSpread: 0.4, chorus: 0.5,
+    }),
+    lush_strings: SUB({
+      wave1: 2, level1: 1, wave2: 2, level2: 0.7, detune2: -10, sub: 0.2, noise: 0, noiseTone: 1900, drive: 1,
+      voices: 6, detune: 18, spread: 0.85,
+      type: 0, cutoff: 2200, keyTrack: 0.7, q: 0.6, envAmount: 1000, envTime: 0.4, velToCutoff: 1000, envVel: 0.5,
+      lfoRate: 0.18, lfoDepth: 150,
+      attack: 0.14, attackKey: 0.2, decay: 0.5, sustain: 0.85, release: 0.75, level: 0.085,
+      vibRate: 5.2, vibCents: 8, vibDelay: 0.3,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.5,
+    }),
   },
 };
 
@@ -651,19 +811,15 @@ export function factoryValue(family, sound, key) {
   return fac ? fac.params[key] : undefined;
 }
 
-/* ------------------------------- engines --------------------------------- */
-
 function renderSubtractive(ctx, dest, midi, at, dur, vel, p, o = {}) {
   const f = mtof(midi);
   const voices = Math.max(1, Math.round(p.voices));
 
-  // Filter: settles at cutoff (+key follow, +velocity), starting envAmount away.
   const settled = clamp(p.cutoff + p.keyTrack * f + p.velToCutoff * vel, 30, 20000);
   const start = clamp(settled + p.envAmount * (1 - p.envVel + p.envVel * vel), 30, 20000);
   const filt = bq(ctx, FILTER_TYPES[p.type] || "lowpass", start, Math.max(0.05, p.q));
   if (Math.abs(settled - start) > 1) filt.frequency.setTargetAtTime(settled, at + 0.02, Math.max(0.01, p.envTime));
 
-  // Low notes bow in slower when attackKey > 0 (string/pad realism).
   const atk = p.attackKey > 0
     ? clamp(p.attack * Math.pow(220 / f, p.attackKey), p.attack * 0.55, p.attack * 1.55)
     : p.attack;
@@ -677,9 +833,6 @@ function renderSubtractive(ctx, dest, midi, at, dur, vel, p, o = {}) {
   if (p.drive > 1.01) { const ws = ctx.createWaveShaper(); ws.curve = driveCurve(p.drive); node.connect(ws); node = ws; }
   node.connect(env).connect(dest);
 
-  // Note identity — different for every note of a chord and every step of a
-  // bar, and reproducible for a given song. Drives both the wave-bank pick
-  // and the noise-bed read position.
   const ndx = o.ndx || 0, step = o.step || 0;
   const phaseNdx = (step * 7 + ndx * 3 + midi) | 0;
 
@@ -700,14 +853,12 @@ function renderSubtractive(ctx, dest, midi, at, dur, vel, p, o = {}) {
     oscs.push(o2);
   }
   if (p.sub > 0.001) {
-    // The sub gets its own phase too, so it does not always add to the
-    // fundamental in the same relationship.
     const sb = ctx.createOscillator(); setWave(ctx, sb, "sine", phaseNdx + 3); sb.frequency.value = f / 2;
     const sg = ctx.createGain(); sg.gain.value = p.sub;
     sb.connect(sg).connect(filt);
     sb.start(at); sb.stop(stop);
   }
-  if (p.noise > 0.0005 && o.noise) { // breath / air bed, riding the amp envelope
+  if (p.noise > 0.0005 && o.noise) {
     const ns = ctx.createBufferSource(); ns.buffer = o.noise; ns.loop = true;
     const bp = bq(ctx, "bandpass", clamp(p.noiseTone || 1900, 100, 12000), 0.8);
     const ng = ctx.createGain();
@@ -721,7 +872,7 @@ function renderSubtractive(ctx, dest, midi, at, dur, vel, p, o = {}) {
   }
   if (p.lfoDepth > 0.5 && p.lfoRate > 0.001) {
     const lfo = ctx.createOscillator();
-    lfo.frequency.value = p.lfoRate + (midi % 5) * 0.011; // per-note offset: pads never phase in lockstep
+    lfo.frequency.value = p.lfoRate + (midi % 5) * 0.011;
     const lg = ctx.createGain(); lg.gain.value = p.lfoDepth;
     lfo.connect(lg).connect(filt.frequency);
     lfo.start(at); lfo.stop(stop);
@@ -729,6 +880,7 @@ function renderSubtractive(ctx, dest, midi, at, dur, vel, p, o = {}) {
   if (p.trLevel > 0.0005) {
     noiseBurst(ctx, dest, o.noise, { at, peak: p.trLevel * vel, hp: p.trHp, lp: p.trLp || 0, decay: p.trDecay, ndx, step });
   }
+  return { env, stop, ctx };
 }
 
 function renderFM(ctx, dest, midi, at, dur, vel, p, o = {}) {
@@ -737,7 +889,7 @@ function renderFM(ctx, dest, midi, at, dur, vel, p, o = {}) {
   const mod = ctx.createOscillator(); mod.type = "sine"; mod.frequency.value = f * p.ratio;
   const mg = ctx.createGain();
   mg.gain.setValueAtTime(f * p.index * Math.pow(vel, p.indexVel), at);
-  mg.gain.setTargetAtTime(0.0001, at + 0.001, Math.max(0.005, p.indexDecay)); // strike brightness softens fast
+  mg.gain.setTargetAtTime(0.0001, at + 0.001, Math.max(0.005, p.indexDecay));
   mod.connect(mg).connect(car.frequency);
 
   const env = ctx.createGain();
@@ -763,9 +915,10 @@ function renderFM(ctx, dest, midi, at, dur, vel, p, o = {}) {
 
   car.start(at); car.stop(stop);
   mod.start(at); mod.stop(stop);
+  return { env, stop, ctx };
 }
 
-const ORGAN_RATIOS = [0.5, 1.5, 1, 2, 3, 4, 5, 6, 8]; // 16′ 5⅓′ 8′ 4′ 2⅔′ 2′ 1⅗′ 1⅓′ 1′
+const ORGAN_RATIOS = [0.5, 1.5, 1, 2, 3, 4, 5, 6, 8];
 
 function renderOrgan(ctx, dest, midi, at, dur, vel, p, o = {}) {
   const f = mtof(midi);
@@ -788,8 +941,6 @@ function renderOrgan(ctx, dest, midi, at, dur, vel, p, o = {}) {
     vibrato(ctx, oscs, { rate: p.vibRate, cents: p.vibCents, delay: 0.03, at, stop });
   }
   env.connect(dest);
-  // Percussion + key click are POST-envelope: the note envelope would scale
-  // these fast transients a second time and bury them.
   if (p.percLevel > 0.0005) {
     const perc = ctx.createOscillator(); perc.type = "sine"; perc.frequency.value = f * p.percRatio;
     const pg = ctx.createGain();
@@ -801,6 +952,7 @@ function renderOrgan(ctx, dest, midi, at, dur, vel, p, o = {}) {
   if (p.clickLevel > 0.0005) {
     noiseBurst(ctx, dest, o.noise, { at, peak: p.clickLevel * vel, hp: 1800, decay: 0.0011, ndx: o.ndx || 0, step: o.step || 0 });
   }
+  return { env, stop, ctx };
 }
 
 function renderPluck(ctx, dest, midi, at, dur, vel, p, o = {}) {
@@ -818,7 +970,7 @@ function renderPluck(ctx, dest, midi, at, dur, vel, p, o = {}) {
     seed: midi * (p.seed || 1),
     ndx, step: o.step || 0,
   });
-  if (p.thump > 0.0005) { // felt/finger thump on the front of an upright note
+  if (p.thump > 0.0005) {
     const th = ctx.createOscillator(); th.type = "sine"; th.frequency.value = Math.max(45, f * 0.5);
     const tg = ctx.createGain();
     tg.gain.setValueAtTime(p.thump * vel, at);
@@ -826,19 +978,16 @@ function renderPluck(ctx, dest, midi, at, dur, vel, p, o = {}) {
     th.connect(tg).connect(dest);
     th.start(at); th.stop(at + 0.2);
   }
+  return { env: null, stop: at + dur, ctx };
 }
 
 const ENGINE_RENDER = { subtractive: renderSubtractive, fm: renderFM, organ: renderOrgan, pluck: renderPluck };
 
-/**
- * Play one note. `o.patch` is a resolved patch ({engine, params}) — when
- * omitted the factory patch for family/sound is used, so callers that don't
- * know about the editor keep working.
- */
 export function playInstrument(family, sound, ctx, dest, midi, at, dur, vel = 1, o = {}) {
   const patch = o.patch && o.patch.params ? o.patch : resolvePatch(family, sound);
   const render = ENGINE_RENDER[patch.engine] || renderSubtractive;
-  render(ctx, dest, midi, at, Math.max(0.03, dur), clamp(vel, 0.05, 1.25), patch.params, o);
+  const handle = render(ctx, dest, midi, at, Math.max(0.03, dur), clamp(vel, 0.05, 1.25), patch.params, o);
+  return { ...(handle || {}), patch };
 }
 
 /* ============================== wave shaping =============================== */

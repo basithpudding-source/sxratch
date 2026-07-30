@@ -10,7 +10,7 @@
 // loads one, after which that instrument works offline. They live in their
 // own UNVERSIONED cache: the files are immutable, so a shell version bump
 // must not throw away megabytes of downloaded instruments.
-const CACHE = "sxratch-v19"; // bump when the shell changes so clients refresh
+const CACHE = "sxratch-v26"; // bump when the shell changes so clients refresh
 const SAMPLE_CACHE = "sxratch-samples-v1";
 const SHELL = [
   "/",
@@ -18,6 +18,7 @@ const SHELL = [
   "/css/styles.css",
   "/css/tokens.css",
   "/css/studio.css",
+  "/css/daw.css",
   "/css/decks.css",
   "/js/app.js",
   "/js/audio-engine.js",
@@ -31,7 +32,9 @@ const SHELL = [
   "/js/ui.js",
   "/js/input.js",
   "/js/practice.js",
-  "/js/songbuilder.js",
+  "/js/daw.js",
+  "/js/daw-engine.js",
+  "/js/daw-model.js",
   "/js/synth.js",
   "/js/theme.js",
   "/js/pad-geometry.js",

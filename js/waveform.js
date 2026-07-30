@@ -17,7 +17,7 @@ export class Waveform {
    */
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
-    this.color = opts.color || "#48ddd3";
+    this.color = opts.color || "#48ddd3"; // fallback = tokens.css --sx-brand-a (dark)
     this.bg = opts.bg || "transparent";
     this.ink = opts.ink || null;   // theme colours (see waveform-draw THEME_INK)
     this.peaks = null;       // level-0 full-range peaks (kept for geometry + thumbnails)

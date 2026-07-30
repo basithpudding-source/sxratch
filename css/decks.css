@@ -14,11 +14,13 @@ body:not(.view-studio) {
   color: var(--sx-text-1);
 }
 
+body:not(.view-studio) { --sx-topbar-h: 64px; }
+
 body:not(.view-studio) #topbar {
   position: relative;
   display: flex;
-  height: 64px;
-  min-height: 64px;
+  height: var(--sx-topbar-h);
+  min-height: var(--sx-topbar-h);
   align-items: center;
   gap: 0;
   padding: 0 14px 0 64px;
@@ -77,13 +79,13 @@ body:not(.view-studio) .brand-seg {
   border: 0;
   background: none;
   color: var(--sx-text-4);
-  font: 800 0.78rem/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 800; font-size: var(--sx-fs-md); line-height: 1;
   letter-spacing: 0.18em;
 }
 
 body:not(.view-studio) #nav-decks {
   color: var(--sx-text-1);
-  font-size: 1.05rem;
+  font-size: var(--sx-fs-xl);
   letter-spacing: 0.14em;
 }
 
@@ -127,7 +129,7 @@ body:not(.view-studio) #topbar #help-btn { order: 6; }
 
 body:not(.view-studio) #topbar .master label {
   color: var(--sx-text-1);
-  font-size: 0.67rem;
+  font-size: var(--sx-fs-sm);
   font-weight: 800;
   letter-spacing: 0.15em;
 }
@@ -145,7 +147,7 @@ body:not(.view-studio) #topbar .master input {
   width: 158px;
   height: 20px;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--sx-radius-2xs);
   background:
     repeating-linear-gradient(90deg, var(--sx-wash-1) 0 10px, transparent 10px 13px),
     var(--sx-well);
@@ -200,7 +202,7 @@ body:not(.view-studio) #topbar .master input {
   width: 2px;
   height: 8px;
   transform: translateX(-50%);
-  border-radius: 2px;
+  border-radius: var(--sx-radius-2xs);
   background-color: var(--sx-chrome);
   box-shadow: var(--sx-shadow-1);
 }
@@ -220,7 +222,7 @@ body:not(.view-studio) #topbar > #help-btn {
   border-radius: 0;
   background: transparent;
   color: var(--sx-text-2);
-  font: 700 0.72rem/1 system-ui, sans-serif;
+  font-weight: 700; font-size: var(--sx-fs-sm); line-height: 1;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -254,7 +256,7 @@ body:not(.view-studio) #console,
 body.use-landscape-layout:not(.view-studio) #console {
   display: block;
   width: 100%;
-  height: calc(100dvh - 64px);
+  height: calc(100dvh - var(--sx-topbar-h));
   padding: 10px;
   overflow: hidden;
   background-color: var(--sx-bg);
@@ -280,7 +282,7 @@ body.use-landscape-layout:not(.view-studio) #console {
 .wave-console,
 .controller-center .mixer {
   border: 1px solid var(--sx-line);
-  border-radius: 12px;
+  border-radius: var(--sx-radius);
   background: linear-gradient(180deg, var(--sx-surface-2) 0%, var(--sx-surface-1) 100%);
   box-shadow: var(--sx-shadow-2), inset 0 1px 0 var(--sx-hilite);
 }
@@ -336,7 +338,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
   min-width: 0;
   border-bottom: 0;
   color: var(--sx-deck-a-ink);
-  font: 800 1rem/1 system-ui, sans-serif;
+  font-weight: 800; font-size: var(--sx-fs-xl); line-height: 1;
   letter-spacing: 0.14em;
 }
 
@@ -357,7 +359,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--sx-line);
-  border-radius: 8px;
+  border-radius: var(--sx-radius-md);
   background:
     radial-gradient(circle at 50% 50%, var(--sx-surface-1) 0 18%, var(--sx-surface-2) 19% 21%, var(--sx-surface-1) 22% 46%, var(--sx-surface-2) 47% 49%, var(--sx-well) 50% 100%),
     linear-gradient(180deg, var(--sx-surface-2), var(--sx-well));
@@ -432,10 +434,10 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
   align-content: center;
   padding: 6px 4px;
   border: 1px solid var(--sx-line);
-  border-radius: 10px;
+  border-radius: var(--sx-radius);
   background: linear-gradient(180deg, var(--sx-surface-3), var(--sx-surface-2));
   color: var(--sx-text-2);
-  font: 700 0.66rem/1.2 system-ui, sans-serif;
+  font-weight: 700; font-size: var(--sx-fs-xs); line-height: 1.2;
   letter-spacing: 0.1em;
   box-shadow: inset 0 1px 0 var(--sx-hilite), var(--sx-shadow-1);
 }
@@ -452,7 +454,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
 .loop-label,
 .rail-label {
   color: var(--sx-text-3);
-  font: 800 0.64rem/1 system-ui, sans-serif;
+  font-weight: 800; font-size: var(--sx-fs-xs); line-height: 1;
   letter-spacing: 0.09em;
 }
 
@@ -470,10 +472,10 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
   height: clamp(28px, 3.6vh, 36px);
   padding: 0;
   border: 1px solid var(--sx-line);
-  border-radius: 7px;
+  border-radius: var(--sx-radius-sm);
   background-color: var(--sx-btn-lo);
   color: var(--sx-text-2);
-  font: 700 0.82rem/1 system-ui, sans-serif;
+  font-weight: 700; font-size: var(--sx-fs-base); line-height: 1;
   box-shadow: inset 0 1px 0 var(--sx-hilite);
 }
 
@@ -530,7 +532,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-rail {
   border: 0;
   background: none;
   color: var(--sx-deck-a-ink);
-  font: 900 0.72rem/1 system-ui, sans-serif;
+  font-weight: 900; font-size: var(--sx-fs-sm); line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 
@@ -653,7 +655,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side.deck-b .platter-disc,
   border: 0;
   width: 4px;
   height: 5.5%;
-  border-radius: 3px;
+  border-radius: var(--sx-radius-2xs);
   background-color: var(--sx-chrome);
   box-shadow: var(--sx-shadow-1);
   opacity: 0.95;
@@ -666,17 +668,34 @@ body.use-landscape-layout:not(.view-studio) .deck-side.deck-b .platter-disc,
   top: 0;
   width: 2px;
   height: 8.5%;
-  border-radius: 2px;
+  border-radius: var(--sx-radius-2xs);
   background: color-mix(in srgb, var(--sx-chrome) 85%, transparent);
   box-shadow: none;
 }
 
 .deck-side .platter-label,
-.deck-side .armed-tag,
-.deck-side .pad-hint,
 .deck-side .platter-ring,
 .deck-side .platter-sticker {
   display: none;
+}
+
+/* The gesture hints stay VISIBLE in the chassis — they are the only
+   on-surface instruction for the app's headline interaction (app.js writes
+   per-device copy into .pad-hint, and .armed-tag names the Ctrl arm key).
+   Muted and non-interactive, so they read as etched panel labels. */
+.deck-side .pad-hint {
+  bottom: 2px;
+  font-size: var(--sx-fs-xs);
+  letter-spacing: 0.04em;
+  color: var(--sx-text-4);
+}
+.deck-side .armed-tag {
+  top: 2px;
+  font-size: var(--sx-fs-2xs);
+}
+/* Too short for etched labels — the platter itself is near minimum size. */
+@media (max-height: 560px) {
+  .deck-side .pad-hint { display: none; }
 }
 
 .deck-side .transport,
@@ -704,10 +723,10 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   height: 100%;
   padding: 0 8px;
   border: 1px solid var(--sx-line);
-  border-radius: 9px;
+  border-radius: var(--sx-radius-md);
   background-color: var(--sx-btn-lo);
   color: var(--sx-text-2);
-  font: 700 0.8rem/1 system-ui, sans-serif;
+  font-weight: 700; font-size: var(--sx-fs-base); line-height: 1;
   letter-spacing: 0.05em;
   box-shadow: inset 0 1px 0 var(--sx-hilite);
 }
@@ -751,7 +770,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   align-items: center;
   justify-content: center;
   gap: 10px;
-  font-size: 1.02rem;
+  font-size: var(--sx-fs-xl);
   letter-spacing: 0.1em;
 }
 
@@ -807,10 +826,10 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
 .deck-pick {
   min-width: 0;
   border: 1px solid var(--sx-line);
-  border-radius: 8px;
+  border-radius: var(--sx-radius-md);
   background-color: var(--sx-btn-lo);
   color: var(--sx-text-3);
-  font: 800 0.86rem/1 system-ui, sans-serif;
+  font-weight: 800; font-size: var(--sx-fs-lg); line-height: 1;
   cursor: pointer;
 }
 .deck-pick[data-deck="A"].active {
@@ -852,10 +871,10 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   min-width: 0;
   padding-left: 15px;
   border: 1px solid var(--sx-line);
-  border-radius: 9px;
+  border-radius: var(--sx-radius-md);
   background-color: var(--sx-btn-lo);
   color: var(--sx-text-3);
-  font: 700 0.7rem/1 system-ui, sans-serif;
+  font-weight: 700; font-size: var(--sx-fs-sm); line-height: 1;
   letter-spacing: 0.1em;
 }
 
@@ -866,7 +885,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   border: 0;
   background: transparent;
   color: var(--sx-text-1);
-  font: 700 0.8rem/1 system-ui, sans-serif;
+  font-weight: 700; font-size: var(--sx-fs-base); line-height: 1;
 }
 
 .zoom-group {
@@ -890,7 +909,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   margin: 6px 12px 0;
   overflow: hidden;
   border: 1px solid var(--sx-line-soft);
-  border-radius: 8px;
+  border-radius: var(--sx-radius-md);
   background-color: var(--sx-well);
   box-shadow: inset 0 0 24px var(--sx-shade);
 }
@@ -901,7 +920,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   left: 10px;
   z-index: 5;
   color: var(--sx-text-3);
-  font: 700 0.66rem/1 system-ui, sans-serif;
+  font-weight: 700; font-size: var(--sx-fs-xs); line-height: 1;
   letter-spacing: 0.04em;
   pointer-events: none;
 }
@@ -941,7 +960,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   border: 1px solid color-mix(in srgb, var(--sx-deck-a-ink) 55%, transparent);
   background-color: var(--sx-overlay);
   color: var(--sx-deck-a-ink);
-  font: 800 0.68rem/1 system-ui, sans-serif;
+  font-weight: 800; font-size: var(--sx-fs-sm); line-height: 1;
   letter-spacing: 0.08em;
   cursor: pointer;
   box-shadow: var(--sx-shadow-2);
@@ -966,10 +985,10 @@ body.use-landscape-layout:not(.view-studio) .deck-side .transport .btn,
   height: 24px;
   margin-top: -12px;
   place-items: center;
-  border-radius: 5px;
+  border-radius: var(--sx-radius-xs);
   background-color: var(--sx-deck-a);
   color: var(--sx-ink-on-accent);
-  font: 900 0.9rem/1 system-ui, sans-serif;
+  font-weight: 900; font-size: var(--sx-fs-lg); line-height: 1;
   box-shadow: var(--sx-shadow-1);
 }
 
@@ -1005,7 +1024,7 @@ body.use-landscape-layout:not(.view-studio) .wave-stage .waveform {
 .center-loop-strip .loop-label {
   display: flex;
   align-items: center;
-  font-size: 0.7rem;
+  font-size: var(--sx-fs-sm);
   letter-spacing: 0.1em;
 }
 
@@ -1013,7 +1032,7 @@ body.use-landscape-layout:not(.view-studio) .wave-stage .waveform {
   height: 100%;
   min-width: 0;
   padding: 0 4px;
-  font-size: 0.74rem;
+  font-size: var(--sx-fs-md);
 }
 
 /* Active auto-loop: outlined in the deck colour like the reference "4". */
@@ -1112,7 +1131,7 @@ body.use-landscape-layout:not(.view-studio) .controller-center .eq .knob {
 body.use-landscape-layout:not(.view-studio) .controller-center .eq .knob-group label {
   width: auto;
   color: var(--sx-text-3);
-  font: 700 0.72rem/1 system-ui, sans-serif;
+  font-weight: 700; font-size: var(--sx-fs-sm); line-height: 1;
   letter-spacing: 0.08em;
 }
 
@@ -1143,15 +1162,10 @@ body.use-landscape-layout:not(.view-studio) .controller-center .crossfade-col {
   align-items: flex-end;
   padding: 1px 0;
   color: var(--sx-text-4);
-  font: 600 0.58rem/1 system-ui, sans-serif;
+  font-weight: 600; font-size: var(--sx-fs-2xs); line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 .meter-scale.r { align-items: flex-start; }
-
-.controller-center .visualizers-container,
-.controller-center .deck-viz-wrap {
-  display: none;
-}
 
 .controller-center .transport-center {
   display: flex;
@@ -1164,10 +1178,10 @@ body.use-landscape-layout:not(.view-studio) .controller-center .crossfade-col {
   min-width: 96px;
   min-height: 36px;
   border: 1px solid var(--sx-line);
-  border-radius: 9px;
+  border-radius: var(--sx-radius-md);
   background-color: var(--sx-btn-lo);
   color: var(--sx-text-2);
-  font: 700 0.74rem/1 system-ui, sans-serif;
+  font-weight: 700; font-size: var(--sx-fs-md); line-height: 1;
   letter-spacing: 0.1em;
 }
 
@@ -1207,7 +1221,7 @@ body.use-landscape-layout:not(.view-studio) .controller-center .vfader .vol-row 
 .meter-bridge .vu {
   width: 16px;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--sx-radius-2xs);
   background:
     repeating-linear-gradient(0deg, var(--sx-wash-1) 0 5px, transparent 5px 8px),
     var(--sx-well);
@@ -1241,7 +1255,7 @@ body.use-landscape-layout:not(.view-studio) .controller-center .vfader .vol-row 
 
 .controller-center .xf-end {
   color: var(--sx-text-3);
-  font: 800 0.8rem/1 system-ui, sans-serif;
+  font-weight: 800; font-size: var(--sx-fs-base); line-height: 1;
 }
 
 /* The track's outline is a physical edge, not a highlight: --sx-hilite is
@@ -1249,7 +1263,7 @@ body.use-landscape-layout:not(.view-studio) .controller-center .vfader .vol-row 
 .fader-track {
   background: linear-gradient(90deg, var(--sx-well), var(--sx-surface-1));
   border: 1px solid var(--sx-rim);
-  border-radius: 2px;
+  border-radius: var(--sx-radius-2xs);
   box-shadow: inset 0 1px 6px var(--sx-shade);
 }
 
@@ -1297,7 +1311,7 @@ body.use-landscape-layout:not(.view-studio) .controller-center .vfader .vol-row 
    stay a real edge on paper. */
 .fader-handle {
   border: 1px solid color-mix(in srgb, var(--sx-darken) 58%, transparent);
-  border-radius: 3px;
+  border-radius: var(--sx-radius-2xs);
   background: linear-gradient(180deg, var(--sx-metal-hi) 0%, var(--sx-metal-mid) 48%, var(--sx-metal-lo) 52%, color-mix(in srgb, var(--sx-metal-hi) 70%, var(--sx-metal-mid)) 100%);
   box-shadow:
     var(--sx-shadow-1),
@@ -1451,14 +1465,11 @@ body.drawer-open:not(.view-studio) .controller-center .channel[data-deck="B"] > 
 }
 
 @media (max-height: 760px) {
-  body:not(.view-studio) #topbar {
-    height: 50px;
-    min-height: 50px;
-  }
+  body:not(.view-studio) { --sx-topbar-h: 50px; }
 
   body:not(.view-studio) #console,
   body.use-landscape-layout:not(.view-studio) #console {
-    height: calc(100dvh - 50px);
+    height: calc(100dvh - var(--sx-topbar-h));
   }
 
   .deck-side {
@@ -1473,7 +1484,7 @@ body.drawer-open:not(.view-studio) .controller-center .channel[data-deck="B"] > 
   }
 
   .hotcue-block { gap: 5px; }
-  .deck-side .hotcue-chip { height: 25px; font-size: 0.68rem; }
+  .deck-side .hotcue-chip { height: 25px; font-size: var(--sx-fs-sm); }
   .deck-body { gap: 8px; }
   .deck-side .transport { gap: 7px; grid-template-rows: minmax(31px, 0.72fr) minmax(42px, 1fr); }
   .controller-center { grid-template-rows: minmax(185px, 0.44fr) minmax(230px, 0.56fr); }
@@ -1487,9 +1498,9 @@ body.drawer-open:not(.view-studio) .controller-center .channel[data-deck="B"] > 
 }
 
 @media (max-height: 560px) {
+  body:not(.view-studio) { --sx-topbar-h: 42px; }
+
   body:not(.view-studio) #topbar {
-    height: 42px;
-    min-height: 42px;
     padding-left: 56px;
   }
 
@@ -1499,20 +1510,21 @@ body.drawer-open:not(.view-studio) .controller-center .channel[data-deck="B"] > 
     height: 14px;
   }
 
-  body:not(.view-studio) #topbar .master,
-  body:not(.view-studio) #help-btn {
+  /* Only the master module folds away — help must stay reachable at every
+     size (it is the sole in-app explanation of the Ctrl-arm gesture). */
+  body:not(.view-studio) #topbar .master {
     display: none;
   }
 
   body:not(.view-studio) #topbar > .deck-only {
     min-width: 44px;
     padding-inline: 10px;
-    font-size: 0.58rem;
+    font-size: var(--sx-fs-2xs);
   }
 
   body:not(.view-studio) #console,
   body.use-landscape-layout:not(.view-studio) #console {
-    height: calc(100dvh - 42px);
+    height: calc(100dvh - var(--sx-topbar-h));
     padding: 3px;
   }
 
@@ -1537,16 +1549,16 @@ body.drawer-open:not(.view-studio) .controller-center .channel[data-deck="B"] > 
     display: none;
   }
 
-  .deck-heading { font-size: 0.64rem; }
+  .deck-heading { font-size: var(--sx-fs-xs); }
   .track-card { grid-template-columns: 38px minmax(0, 1fr) 38px; gap: 6px; }
-  .track-info .title { font-size: 0.62rem; }
-  .track-stats { gap: 7px; font-size: 0.6rem; }
-  .deck-side .load-tile { min-height: 38px; font-size: 0.56rem; }
+  .track-info .title { font-size: var(--sx-fs-xs); }
+  .track-stats { gap: 7px; font-size: var(--sx-fs-2xs); }
+  .deck-side .load-tile { min-height: 38px; font-size: var(--sx-fs-2xs); }
   .deck-body { grid-template-columns: 37px minmax(0, 1fr); gap: 4px; }
   .deck-b .deck-body { grid-template-columns: minmax(0, 1fr) 37px; }
   .deck-side .deck-rail { width: 37px; height: 96%; }
   .deck-side .deck-rail .rail-label { display: none; }
-  .rail-read { font-size: 0.58rem; }
+  .rail-read { font-size: var(--sx-fs-2xs); }
   .deck-side .deck-rail .fader.v { width: 37px; min-height: 80px; }
   .deck-side .transport {
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1568,28 +1580,28 @@ body.drawer-open:not(.view-studio) .controller-center .channel[data-deck="B"] > 
   .wave-toolbar { grid-template-columns: 50px 56px 42px minmax(70px, 1fr) 74px; gap: 4px; padding: 4px 5px 2px; }
   .wave-toolbar .btn,
   .wave-toolbar button,
-  .preset-wrap { height: 24px; font-size: 0.6rem; }
+  .preset-wrap { height: 24px; font-size: var(--sx-fs-2xs); }
   .deck-switch { height: 24px; gap: 3px; }
-  .deck-pick { font-size: 0.68rem; }
+  .deck-pick { font-size: var(--sx-fs-sm); }
   .preset-wrap { gap: 6px; padding-left: 7px; }
   .center-loop-strip { padding: 4px 5px; }
   .center-loop-strip .loop-row { grid-template-columns: 44px repeat(7, minmax(0, 1fr)); gap: 4px; }
-  .center-loop-strip .loop-btn { font-size: 0.6rem; }
+  .center-loop-strip .loop-btn { font-size: var(--sx-fs-2xs); }
   .controller-center .mixer { padding: 5px 4px; grid-template-columns: minmax(60px, 0.76fr) minmax(88px, 1fr) minmax(60px, 0.76fr); }
   .controller-center .channel { padding-inline: 3px; }
   .controller-center .eq .knob-group { grid-template-columns: 30px 1fr; gap: 3px; }
   .controller-center .channel[data-deck="B"] .knob-group { grid-template-columns: 1fr 30px; }
   .controller-center .eq .knob-group:first-child { display: none; }
   .controller-center .eq .knob-dial { width: 30px; height: 30px; }
-  .controller-center .eq .knob { width: 22px; height: 22px; top: 4px; left: 4px; }
-  .controller-center .eq .knob-group label { font-size: 0.56rem; }
+  .controller-center .eq .knob { width: 24px; height: 24px; top: 3px; left: 3px; } /* 24px = the interactive floor */
+  .controller-center .eq .knob-group label { font-size: var(--sx-fs-2xs); }
   .controller-center .crossfade-col { gap: 4px; padding-inline: 4px; grid-template-rows: minmax(40px, auto) minmax(0, 1fr) auto; }
   .controller-center .both-btn,
   .controller-center .transport-center { display: none; }
   .center-faders { gap: 4px; }
   .controller-center .vfader .vol-row { grid-template-columns: 34px; gap: 0; }
   .meter-bridge { gap: 4px; grid-template-columns: auto 10px 10px auto; }
-  .meter-scale { font-size: 0.5rem; }
+  .meter-scale { font-size: var(--sx-fs-3xs); }
   .controller-center .vu, .meter-bridge .vu { width: 10px; }
   .controller-center .crossfader-wrap { gap: 3px; }
 
@@ -1618,16 +1630,7 @@ body.drawer-open:not(.view-studio) .controller-center .channel[data-deck="B"] > 
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .controller-shell *,
-  .controller-shell *::before,
-  .controller-shell *::after {
-    scroll-behavior: auto !important;
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-  }
-}
+/* (Reduced-motion handling is global, in styles.css — one strategy app-wide.) */
 
 /* ====================================================================
    TRUE PORTRAIT LAYOUT (body.portrait-mode — phones held upright).
@@ -1662,25 +1665,25 @@ body.portrait-mode:not(.view-studio) .deck-side .deck-meta {
   grid-template-rows: 18px auto auto;
   gap: 5px;
 }
-body.portrait-mode:not(.view-studio) .deck-heading { font-size: 0.6rem; }
+body.portrait-mode:not(.view-studio) .deck-heading { font-size: var(--sx-fs-2xs); }
 body.portrait-mode:not(.view-studio) .track-card { grid-template-columns: 34px minmax(0, 1fr) 40px; gap: 6px; }
 body.portrait-mode:not(.view-studio) .track-info { gap: 3px; }
-body.portrait-mode:not(.view-studio) .track-info .title { font-size: 0.62rem; }
-body.portrait-mode:not(.view-studio) .track-stats { gap: 8px; font-size: 0.6rem; }
-body.portrait-mode:not(.view-studio) .deck-side .load-tile { min-height: 32px; font-size: 0.52rem; }
+body.portrait-mode:not(.view-studio) .track-info .title { font-size: var(--sx-fs-xs); }
+body.portrait-mode:not(.view-studio) .track-stats { gap: 8px; font-size: var(--sx-fs-2xs); }
+body.portrait-mode:not(.view-studio) .deck-side .load-tile { min-height: 32px; font-size: var(--sx-fs-3xs); }
 body.portrait-mode:not(.view-studio) .deck-side .hotcues { gap: 4px; }
-body.portrait-mode:not(.view-studio) .deck-side .hotcue-chip { height: 24px; font-size: 0.66rem; }
+body.portrait-mode:not(.view-studio) .deck-side .hotcue-chip { height: 24px; font-size: var(--sx-fs-xs); }
 body.portrait-mode:not(.view-studio) .deck-body { grid-template-columns: 30px minmax(0, 1fr); gap: 6px; }
 body.portrait-mode:not(.view-studio) .deck-b .deck-body { grid-template-columns: minmax(0, 1fr) 30px; }
 body.portrait-mode:not(.view-studio) .deck-side .deck-rail { width: 30px; }
 body.portrait-mode:not(.view-studio) .deck-side .deck-rail .fader.v { width: 30px; min-height: 84px; }
 body.portrait-mode:not(.view-studio) .deck-side .deck-rail .rail-label { display: none; }
-body.portrait-mode:not(.view-studio) .rail-read { font-size: 0.56rem; }
+body.portrait-mode:not(.view-studio) .rail-read { font-size: var(--sx-fs-2xs); }
 body.portrait-mode:not(.view-studio) .deck-side .transport {
   grid-template-rows: minmax(28px, auto) minmax(36px, auto);
   gap: 5px 4px;
 }
-body.portrait-mode:not(.view-studio) .deck-side .transport .btn { font-size: 0.6rem; padding: 0 3px; }
+body.portrait-mode:not(.view-studio) .deck-side .transport .btn { font-size: var(--sx-fs-2xs); padding: 0 3px; }
 
 /* Wave toolbar + loop strip: compact. */
 body.portrait-mode:not(.view-studio) .wave-toolbar {
@@ -1690,7 +1693,7 @@ body.portrait-mode:not(.view-studio) .wave-toolbar {
 }
 body.portrait-mode:not(.view-studio) .wave-toolbar .btn,
 body.portrait-mode:not(.view-studio) .wave-toolbar button,
-body.portrait-mode:not(.view-studio) .preset-wrap { height: 28px; font-size: 0.58rem; }
+body.portrait-mode:not(.view-studio) .preset-wrap { height: 28px; font-size: var(--sx-fs-2xs); }
 body.portrait-mode:not(.view-studio) .preset-wrap { gap: 6px; padding-left: 7px; }
 body.portrait-mode:not(.view-studio) .deck-switch { height: 28px; gap: 3px; }
 body.portrait-mode:not(.view-studio) .center-loop-strip { padding: 3px 5px 4px; }
@@ -1698,7 +1701,7 @@ body.portrait-mode:not(.view-studio) .center-loop-strip .loop-row {
   grid-template-columns: 40px repeat(7, minmax(0, 1fr));
   gap: 4px;
 }
-body.portrait-mode:not(.view-studio) .center-loop-strip .loop-btn { font-size: 0.56rem; padding: 0 2px; }
+body.portrait-mode:not(.view-studio) .center-loop-strip .loop-btn { font-size: var(--sx-fs-2xs); padding: 0 2px; }
 
 /* Mixer: horizontal EQ rows sandwich the faders + crossfader; scrolls if tight. */
 body.portrait-mode:not(.view-studio) .controller-center .mixer {
@@ -1739,7 +1742,7 @@ body.portrait-mode:not(.view-studio) .controller-center .channel[data-deck="B"] 
 }
 body.portrait-mode:not(.view-studio) .controller-center .eq .knob-dial { width: 40px; height: 40px; }
 body.portrait-mode:not(.view-studio) .controller-center .eq .knob { width: 30px; height: 30px; top: 5px; left: 5px; }
-body.portrait-mode:not(.view-studio) .controller-center .eq .knob-group label { font-size: 0.52rem; }
+body.portrait-mode:not(.view-studio) .controller-center .eq .knob-group label { font-size: var(--sx-fs-3xs); }
 body.portrait-mode:not(.view-studio) .controller-center .crossfade-col {
   grid-area: ctr;
   display: grid;

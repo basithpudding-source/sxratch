@@ -53,7 +53,13 @@ await esbuild.build({
 
 // Stylesheets.
 await esbuild.build({
-  entryPoints: [join(root, "css/tokens.css"), join(root, "css/styles.css"), join(root, "css/studio.css"), join(root, "css/decks.css")],
+  entryPoints: [
+    join(root, "css/tokens.css"),
+    join(root, "css/styles.css"),
+    join(root, "css/studio.css"),
+    join(root, "css/daw.css"),
+    join(root, "css/decks.css"),
+  ],
   minify: true,
   outdir: join(dist, "css"),
   logLevel: "info",

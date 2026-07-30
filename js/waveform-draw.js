@@ -23,7 +23,8 @@
 
 const xAt = (s, pos) => s.w / 2 + (pos - s.position) * s.baseCount * s.pixelsPerPeak;
 
-/** Dark-theme defaults — every value is overridable through `state.ink`. */
+/** Dark-theme defaults — every value is overridable through `state.ink`.
+ *  KEEP IN SYNC with tokens.css: --sx-wave-* (dark block) + --sx-cue-1. */
 export const THEME_INK = {
   body: "#eef4f8",
   gridBeat: "rgba(255,255,255,0.28)",

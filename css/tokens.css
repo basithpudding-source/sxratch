@@ -186,10 +186,40 @@
   --sx-patch-hi: #7fe3ff;
   --sx-patch-lo:      var(--sx-brand-b);
 
-  /* ---------- geometry / type (unchanged values, one home) ---------- */
+  /* ---------- geometry / type ---------- */
+  /* Radius scale. Every border-radius in the app is one of these (or the
+     bespoke 50% / 999px circle+pill forms). */
+  --sx-radius-2xs: 2px;
+  --sx-radius-xs: 4px;
   --sx-radius-sm: 6px;
+  --sx-radius-md: 8px;
   --sx-radius: 10px;
   --sx-radius-lg: 14px;
+
+  /* Type scale — nine steps replace the 38 ad-hoc sizes that used to be
+     scattered across the stylesheets. Values sit on the centres of the old
+     clusters, so adopting the scale moved nothing by more than ~0.5px. */
+  --sx-fs-3xs: 0.52rem;
+  --sx-fs-2xs: 0.58rem;
+  --sx-fs-xs: 0.64rem;
+  --sx-fs-sm: 0.7rem;
+  --sx-fs-md: 0.76rem;
+  --sx-fs-base: 0.82rem;
+  --sx-fs-lg: 0.9rem;
+  --sx-fs-xl: 1rem;
+  --sx-fs-2xl: 1.1rem;
+
+  /* ONE body stack. ("Inter" used to lead it but was never shipped as a
+     webfont, so what users actually saw was this system stack — now it is
+     also what the CSS says.) */
+  --sx-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* ONE disabled treatment (three ad-hoc opacities used to compete). */
+  --sx-disabled-opacity: 0.4;
+  /* Topbar height — every "viewport minus chrome" calc reads THIS, never a
+     magic number. The deck view (and its short-height breakpoints) override
+     it in decks.css; the studio inherits this base value. */
+  --sx-topbar-h: 47px;
   --sx-font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono", Consolas, monospace;
 }
 
@@ -241,114 +271,18 @@
    is substituted as an UNRESOLVED token stream, and Chrome then resolved
    it against the wrong branch once the value reached a `background`
    shorthand: a dark-theme button rendered a light-theme face under
-   dark-theme text (measured 1.01:1 — invisible). Two explicit blocks
+   dark-theme text (measured 1.01:1 — invisible). An explicit block
    cannot go wrong in any engine.
 
-   Order matters: the media query gives the OS preference to anyone who
-   has not chosen, and the attribute block after it lets an explicit
-   choice win in both directions.
+   ONE block, not two. "Auto" never reaches CSS: the inline <head> script
+   stamps the RESOLVED data-theme before first paint, and js/theme.js
+   re-resolves it on every toggle and OS-preference change. A duplicated
+   @media (prefers-color-scheme: light) copy of this block used to live
+   here and drifted from this one; do not bring it back. (No-JS visitors
+   only ever see the splash — the whole app is JS-built — so the dark
+   base is an acceptable no-JS fallback.)
    ===================================================================== */
 
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    color-scheme: light;
-    --sx-bg: #eceff6;
-    --sx-bg-glow-a: rgba(72, 221, 211, 0.16);
-    --sx-bg-glow-b: rgba(255, 189, 61, 0.16);
-    --sx-bg-vignette: #f7f9fc;
-    --sx-surface-1: #ffffff;
-    --sx-surface-2: #f2f5fa;
-    --sx-surface-3: #e6ebf4;
-    --sx-well: #dde3ee;
-    --sx-overlay: rgba(255, 255, 255, 0.94);
-    --sx-scrim: rgba(15, 23, 42, 0.34);
-    --sx-text-1: #0f172a;
-    --sx-text-2: #3c4a63;
-    --sx-text-3: #4a5568;
-    --sx-text-4: #64708a;
-    --sx-ink-on-accent: #ffffff;
-    --sx-line: #ccd4e2;
-    --sx-line-strong: #a8b5c9;
-    --sx-line-soft: rgba(15, 23, 42, 0.10);
-    --sx-brand-a: #0a6f68;
-    --sx-brand-a-ink: #0a6f68;
-    --sx-deck-a: #0a6f68;
-    --sx-deck-a-ink: #0a6f68;
-    --sx-brand-b: #8f5a00;
-    --sx-brand-b-ink: #8f5a00;
-    --sx-deck-b: #d63a56;
-    --sx-deck-b-ink: #b02843;
-    --sx-accent: #4b56d6;
-    --sx-accent-ink: #3b45b8;
-    --sx-cyan: #0e8f89;
-    --sx-cyan-ink: #0a6b66;
-    --sx-purple: #7a45d6;
-    --sx-purple-ink: #6032b8;
-    --sx-lane-chords: #1668c4;
-    --sx-lane-chords-ink: #12539c;
-    --sx-lane-bass: #0a8f79;
-    --sx-lane-bass-ink: #07705f;
-    --sx-lane-drums: #c8324c;
-    --sx-lane-drums-ink: #a3283e;
-    --sx-ok: #1a8f4c;
-    --sx-ok-ink: #136b39;
-    --sx-warn: #a37a00;
-    --sx-warn-ink: #7a5c00;
-    --sx-hot: #c25a12;
-    --sx-hot-ink: #96450e;
-    --sx-danger: #c2183c;
-    --sx-focus: #0f172a;
-    --sx-meter-low: #1f9d55;
-    --sx-meter-mid: #a08400;
-    --sx-meter-high: #d1442a;
-    --sx-hilite: rgba(255, 255, 255, 0.92);
-    --sx-shade: rgba(15, 23, 42, 0.09);
-    --sx-wash-1: rgba(15, 23, 42, 0.045);
-    --sx-wash-2: rgba(15, 23, 42, 0.085);
-    --sx-shadow-1: 0 1px 2px rgba(15, 23, 42, 0.08);
-    --sx-shadow-2: 0 4px 14px rgba(15, 23, 42, 0.10);
-    --sx-shadow-3: 0 14px 38px rgba(15, 23, 42, 0.14);
-    --sx-glow-a: 0 0 0 2px rgba(13, 143, 134, 0.45);
-    --sx-glow-b: 0 0 0 2px rgba(185, 116, 0, 0.42);
-    --sx-glow-danger: 0 0 0 2px rgba(194, 24, 60, 0.45);
-    --sx-lighten: #475569;
-    --sx-darken: #0f172a;
-    --sx-metal-hi: #ffffff;
-    --sx-metal-mid: #c3ccd8;
-    --sx-metal-lo: #8f9bab;
-    --sx-metal-edge: #8f9bab;
-    --sx-chrome: #5a6779;
-    --sx-marker: #3a4453;
-    --sx-rim: #a8b5c9;
-    --sx-key-ink: #3c4a63;
-    --sx-key-line: #b8c0cc;
-    --sx-key-black-hi: #3a4658;
-    --sx-key-black-lo: #121a26;
-    --sx-key-black-edge: #1b2432;
-    --sx-glow-lane: 0 0 0 2px color-mix(in srgb, var(--lane) 45%, transparent);
-    --sx-wave-body: #3c4a63;
-    --sx-wave-grid-beat: rgba(15, 23, 42, 0.30);
-    --sx-wave-grid-bar: rgba(15, 23, 42, 0.12);
-    --sx-wave-label: rgba(15, 23, 42, 0.6);
-    --sx-wave-centre: rgba(15, 23, 42, 0.12);
-    --sx-wave-cue-ink: #ffffff;
-    --sx-patch-hi: #0e7490;
-    --sx-btn-hi: #ffffff;
-    --sx-btn-lo: #eef1f7;
-    --sx-btn-hover-hi: #ffffff;
-    --sx-btn-hover-lo: #e6ebf4;
-    --sx-amber-hi: #8a5a00;
-    --sx-amber-lo: #6f4600;
-    --sx-cue-1: #8a6408;
-    --sx-cue-5: #9c4e0a;
-    --sx-cue-6: #2f6b23;
-    --sx-cue-7: #7a3fc4;
-    --sx-cue-8: #0f6f9c;
-  }
-  
-}
-
-/* An explicit choice wins over the OS preference, in both directions. */
 :root[data-theme="light"] {
   color-scheme: light;
   --sx-bg: #eceff6;
