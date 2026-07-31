@@ -21,6 +21,9 @@
 // in all Chromium browsers; the production build inlines this file, so any
 // engine that lags on worklet imports only affects unbundled dev serving.
 
+/** One ceiling for the live AudioWorklet and every offline finalization path. */
+export const LIMITER_CEILING = 0.965;
+
 /**
  * @param {number} sampleRate
  * @param {{ lookaheadMs?: number, releaseMs?: number }} [opts]

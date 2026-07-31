@@ -5,10 +5,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createLimiterKernel } from "../js/limiter-kernel.js";
+import { createLimiterKernel, LIMITER_CEILING } from "../js/limiter-kernel.js";
+import { masterFinalize } from "../js/synth.js";
 
 const SR = 48000;
-const CEIL = 0.965;
+const CEIL = LIMITER_CEILING;
 
 const peakOf = (x) => { let m = 0; for (let i = 0; i < x.length; i++) { const a = Math.abs(x[i]); if (a > m) m = a; } return m; };
 const finiteAll = (x) => { for (let i = 0; i < x.length; i++) if (!Number.isFinite(x[i])) return false; return true; };
@@ -124,4 +125,33 @@ test("kernel: channels are gain-linked (stereo image preserved)", () => {
   const ratioIn = Math.abs(L[6050] / (R[6050] || 1e-9));
   const ratioOut = Math.abs(outL[i] / (outR[i] || 1e-9));
   assert.ok(Math.abs(ratioIn - ratioOut) / ratioIn < 0.05, `image shifted: ${ratioIn} -> ${ratioOut}`);
+});
+
+test("masterFinalize limiter-only mode is exactly the shared kernel", () => {
+  const n = 8192;
+  const sourceL = sine(n, 330, 0.7);
+  const sourceR = sine(n, 220, 0.45);
+  for (let i = 600; i < n; i += 1100) {
+    sourceL[i] = 2.4;
+    sourceR[i + 1] = -1.8;
+  }
+
+  const expectedL = new Float32Array(sourceL);
+  const expectedR = new Float32Array(sourceR);
+  const kernel = createLimiterKernel(SR);
+  kernel.process([expectedL, expectedR], [expectedL, expectedR], 0, n, CEIL);
+
+  const actualL = new Float32Array(sourceL);
+  const actualR = new Float32Array(sourceR);
+  const result = masterFinalize([actualL, actualR], SR, {
+    ceiling: CEIL,
+    maxBoost: 1,
+    maxCut: 1,
+  });
+
+  assert.equal(result.gain, 1);
+  for (let i = 0; i < n; i++) {
+    assert.equal(actualL[i], expectedL[i], `left divergence at ${i}`);
+    assert.equal(actualR[i], expectedR[i], `right divergence at ${i}`);
+  }
 });

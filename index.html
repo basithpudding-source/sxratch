@@ -427,7 +427,8 @@
   <script type="module" src="js/app.js"></script>
   <script>
     // Register the service worker (no-ops on insecure origins, e.g. plain-http LAN).
-    if ("serviceWorker" in navigator) {
+    const isLocalDev = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+    if ("serviceWorker" in navigator && !isLocalDev) {
       window.addEventListener("load", () => {
         navigator.serviceWorker.register("/sw.js")
           .then((reg) => { reg.update(); })

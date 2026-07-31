@@ -6,11 +6,11 @@
 // exercises — what ships live is what's tested. Gain is channel-linked to
 // keep the stereo image intact.
 
-import { createLimiterKernel } from "./limiter-kernel.js";
+import { createLimiterKernel, LIMITER_CEILING } from "./limiter-kernel.js";
 
 class LimiterProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
-    return [{ name: "ceiling", defaultValue: 0.97, minValue: 0.05, maxValue: 1, automationRate: "k-rate" }];
+    return [{ name: "ceiling", defaultValue: LIMITER_CEILING, minValue: 0.05, maxValue: 1, automationRate: "k-rate" }];
   }
 
   constructor() {

@@ -1215,6 +1215,7 @@ function setupDemoChips() {
  * .coach-target highlight. Runs once per flagKey (localStorage); "Skip" and
  * Esc both end it. One generic runner serves the deck tour AND the PAD tour.
  */
+let activeQuickTourEnd = null;
 function runTour(flagKey, steps) {
   try { if (localStorage.getItem(flagKey)) return; } catch {}
   if (document.getElementById("tour-tip")) return; // one tour at a time
@@ -1234,7 +1235,9 @@ function runTour(flagKey, steps) {
     target?.classList.remove("coach-target");
     tip.remove();
     window.removeEventListener("keydown", onKey, true);
+    if (activeQuickTourEnd === end) activeQuickTourEnd = null;
   };
+  activeQuickTourEnd = end;
   const show = () => {
     i++;
     target?.classList.remove("coach-target");
@@ -2163,6 +2166,9 @@ function setupPractice() {
 let studioReady = false;
 function showView(view) {
   const studio = view === "studio";
+  // A coach mark anchored to the other view is no longer useful, and would
+  // otherwise overlap the Studio's resumable tour.
+  activeQuickTourEnd?.();
   document.body.classList.toggle("view-studio", studio);
   // Keep the REAL hidden attributes truthful: two <main>s are only valid when
   // at most one is non-hidden. (#console's visual hiding is the CSS class —
@@ -2180,7 +2186,7 @@ function showView(view) {
   if (studio) {
     if (!studioReady) {
       studioReady = true;
-      DAW.init({
+      const studioInit = DAW.init({
         getCtx: () => engine.ctx,
         getOutput: () => engine.masterBus,
         toast: (m, o) => ui.toast(m, o),
@@ -2201,8 +2207,9 @@ function showView(view) {
         },
         getSampler: () => sampler,
       });
+      Promise.resolve(studioInit).then(() => DAW.maybeStartTour?.());
     }
-    maybeStartPadTour();
+    else DAW.maybeStartTour?.();
   } else {
     DAW.stopPreview();
   }

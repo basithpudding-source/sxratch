@@ -41,10 +41,11 @@ function trackChunk(events) {
  *   tempoBpm        — single fixed tempo (used when `tempos` is absent)
  *   tempos          — [{tick, bpm}] tempo-change list (per-section BPM)
  *   timeSigs        — [{tick, num, den}] (den must be a power of two)
+ *   markers         — [{tick, name}] conductor-track marker events
  *   tracks          — [{name, channel (0-15, 9 = drums), notes:[{tick,dur,note,vel}]}]
  * @returns {Uint8Array} the .mid file bytes
  */
-export function encodeMidi({ ticksPerQuarter = 480, tempoBpm = 120, tempos = null, timeSigs = [], tracks = [] }) {
+export function encodeMidi({ ticksPerQuarter = 480, tempoBpm = 120, tempos = null, timeSigs = [], markers = [], tracks = [] }) {
   const chunks = [];
 
   // Track 0 — conductor: tempo(s) + time signatures.
@@ -57,6 +58,13 @@ export function encodeMidi({ ticksPerQuarter = 480, tempoBpm = 120, tempos = nul
   for (const ts of timeSigs) {
     const dd = Math.max(0, Math.round(Math.log2(ts.den || 4)));
     meta.push({ tick: Math.max(0, Math.round(ts.tick)), bytes: [0xff, 0x58, 0x04, ts.num & 255, dd, 24, 8] });
+  }
+  for (const marker of markers || []) {
+    const name = str(String(marker.name || "Marker")).slice(0, 60);
+    meta.push({
+      tick: Math.max(0, Math.round(marker.tick)),
+      bytes: [0xff, 0x06, name.length, ...name],
+    });
   }
   chunks.push(trackChunk(meta));
 

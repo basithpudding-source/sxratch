@@ -12,13 +12,23 @@ globalThis.localStorage = {
   removeItem: (k) => { mem.delete(k); },
 };
 
-const { readVersioned, writeVersioned } = await import("../js/store.js");
+const { readVersioned, readVersionedRecord, writeVersioned } = await import("../js/store.js");
 
 beforeEach(() => mem.clear());
 
 test("round trip: write then read returns the data", () => {
   assert.ok(writeVersioned("k", 1, { a: 1, list: [1, 2] }));
   assert.deepEqual(readVersioned("k", 1), { a: 1, list: [1, 2] });
+});
+
+test("optional envelope metadata round trips without leaking into data", () => {
+  const metadata = { dawFallback: { failedAt: 1234, baseRevision: 7 } };
+  assert.ok(writeVersioned("k", 1, { bpm: 120 }, { metadata }));
+  assert.deepEqual(readVersioned("k", 1), { bpm: 120 });
+  assert.deepEqual(readVersionedRecord("k", 1), {
+    data: { bpm: 120 },
+    metadata,
+  });
 });
 
 test("legacy raw value is treated as v0 and migrated forward", () => {

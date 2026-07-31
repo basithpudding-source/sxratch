@@ -1571,47 +1571,12 @@ body.pad-dock-closed .pad-dock { display: none; }
   }
 }
 
-/* ===================== DAW Extended FX & Velocity Editor ===================== */
+/* ===================== DAW editor header tools ===================== */
 .daw-roll-header-tools {
   display: flex;
   align-items: center;
   gap: 4px;
   margin-left: auto;
-}
-.daw-velocity-lane {
-  display: flex;
-  height: 52px;
-  background: var(--sx-surface-3);
-  border-top: 1px solid var(--sx-line);
-  padding: 4px 8px;
-  gap: 8px;
-}
-.daw-vel-grid {
-  flex: 1;
-  display: grid;
-  grid-template-columns: repeat(var(--cols, 16), minmax(0, 1fr));
-  gap: 2px;
-  height: 100%;
-}
-.daw-vel-col {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  align-items: center;
-  cursor: ns-resize;
-  background: color-mix(in srgb, var(--sx-surface-1) 50%, transparent);
-  border-radius: 2px;
-  padding: 0 1px;
-}
-.daw-vel-bar {
-  width: 100%;
-  background: var(--sx-amber-hi);
-  border-radius: 2px 2px 0 0;
-  min-height: 2px;
-  pointer-events: none;
-}
-.daw-vel-col:hover {
-  background: color-mix(in srgb, var(--sx-brand-b) 20%, transparent);
 }
 .daw-mon.active {
   background: var(--sx-hot) !important;

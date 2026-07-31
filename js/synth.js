@@ -18,7 +18,7 @@
 // Pure-math helpers (masterFinalize, reverbIRData, drumSampleData, biquadApply,
 // mulberry32) never touch Web Audio, so they run under node:test.
 
-import { createLimiterKernel } from "./limiter-kernel.js";
+import { createLimiterKernel, LIMITER_CEILING } from "./limiter-kernel.js";
 
 export const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
 
@@ -1648,7 +1648,7 @@ export function glueCompressor(ctx) {
  * Returns { gain, rms } for diagnostics.
  */
 export function masterFinalize(channels, sr, {
-  targetRms = 0.14, ceiling = 0.965, lookaheadMs = 3, releaseMs = 120,
+  targetRms = 0.14, ceiling = LIMITER_CEILING, lookaheadMs = 3, releaseMs = 120,
   maxBoost = 3, maxCut = 0.3,
 } = {}) {
   if (!channels.length || !channels[0].length) return { gain: 1, rms: 0 };
