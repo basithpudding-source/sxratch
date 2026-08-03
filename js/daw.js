@@ -213,7 +213,10 @@ export const DAW = (() => {
   // last non-editor panel so closing the editor restores it.
   const PANELS_KEY = "sxratch.dawpanels";
   const BOTTOM_MIN = 132, BOTTOM_DEF = 156, BOTTOM_MAX = 480;
-  let bottom = { active: "keys", h: BOTTOM_DEF, prev: "keys", reopen: null };
+  // `active` is the exclusive content panel (editor/chain/mixer); `keys` is a
+  // PIN — the keyboard strip coexists with whatever is active so you can
+  // audition the sound you are editing. `headsW` = track-header column width.
+  let bottom = { active: null, h: BOTTOM_DEF, prev: "chain", reopen: null, keys: true, headsW: 0 };
   let heldKeys = new Map();                // code → {trackId, midi, tOn}
   let inputDevices = [];
   let rafId = null;
@@ -910,6 +913,24 @@ export const DAW = (() => {
       fbtn("New song", newSong),
     );
     file.append(fileSum, fileBody);
+    // The transport scrolls horizontally, so an absolutely-positioned dropdown
+    // gets CLIPPED by its overflow. Re-anchor as a fixed layer on open, with a
+    // max-height + scroll so every option stays reachable on short screens.
+    file.addEventListener("toggle", () => {
+      if (!file.open) { fileBody.removeAttribute("style"); return; }
+      const r = fileSum.getBoundingClientRect();
+      Object.assign(fileBody.style, {
+        position: "fixed",
+        top: Math.round(r.bottom + 4) + "px",
+        right: Math.max(8, Math.round(innerWidth - r.right)) + "px",
+        left: "auto",
+        maxHeight: Math.max(120, innerHeight - r.bottom - 16) + "px",
+        overflowY: "auto",
+      });
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (file.open && !file.contains(e.target)) file.open = false;
+    });
 
     const kbToggle = iconBtn("daw-tbtn daw-panel-toggle", "🎹", "Show / hide the keyboard");
     kbToggle.addEventListener("click", () => toggleBottomPanel("keys"));
@@ -960,6 +981,10 @@ export const DAW = (() => {
     });
     addWrap.appendChild(addSel);
     heads.append(headsTop, headsScroll, addWrap);
+    const headsHandle = el("div", "daw-heads-resize");
+    headsHandle.title = "Drag to resize the track list";
+    heads.appendChild(headsHandle);
+    attachHeadsResize(headsHandle, heads);
 
     const tl = el("div", "daw-timeline");
     tl.id = "daw-timeline";
@@ -1055,6 +1080,7 @@ export const DAW = (() => {
       zoomRead, followBtn, selectionRead, duplicateBtn, deleteBtn, audioRead, saveRead,
     };
 
+    if (bottom.headsW) shell.style.setProperty("--daw-heads-w", bottom.headsW + "px");
     attachRulerInteractions(ruler);
     attachLaneInteractions(lanes);
     attachTimelineDrop(tl);
@@ -1075,20 +1101,34 @@ export const DAW = (() => {
     try {
       const s = JSON.parse(localStorage.getItem(PANELS_KEY));
       if (!s || typeof s !== "object") return;
-      if (["keys", "chain", "mixer"].includes(s.prev)) bottom.prev = s.prev;
+      if (typeof s.keys === "boolean") bottom.keys = s.keys;
+      if (["chain", "mixer"].includes(s.prev)) bottom.prev = s.prev;
       // Never restore "editor" across loads — its region no longer exists.
-      if ([null, "keys", "chain", "mixer"].includes(s.active)) bottom.active = s.active;
+      // Legacy saves used active:"keys"; that maps onto the pin.
+      if ([null, "chain", "mixer"].includes(s.active)) bottom.active = s.active;
+      else if (s.active === "keys") { bottom.keys = true; bottom.active = null; }
       else if (s.active === "editor") bottom.active = bottom.prev;
       bottom.h = Math.max(BOTTOM_MIN, Math.min(BOTTOM_MAX, +s.h || BOTTOM_DEF));
+      const hw = Math.round(+s.headsW || 0);
+      bottom.headsW = hw >= 140 && hw <= 420 ? hw : 0;
     } catch {}
   }
   function saveBottomState() {
     try {
-      localStorage.setItem(PANELS_KEY, JSON.stringify({ active: bottom.active, h: bottom.h, prev: bottom.prev }));
+      localStorage.setItem(PANELS_KEY, JSON.stringify({
+        active: bottom.active, h: bottom.h, prev: bottom.prev,
+        keys: bottom.keys, headsW: bottom.headsW || 0,
+      }));
     } catch {}
   }
 
   function toggleBottomPanel(id) {
+    if (id === "keys") {
+      // The keyboard is a pin, not an exclusive panel.
+      bottom.keys = !bottom.keys;
+      applyPanels(); saveBottomState();
+      return;
+    }
     if (id === "editor" && !editRegion) {
       _toast("Double-click a region to edit it");
       return;
@@ -1117,18 +1157,21 @@ export const DAW = (() => {
     const editorWasHidden = el_.editor.hidden;
     const mixerWasHidden = el_.mixer.hidden;
     el_.editor.hidden = bottom.active !== "editor";
-    el_.keys.hidden = bottom.active !== "keys";
+    el_.keys.hidden = !bottom.keys;
     el_.chain.hidden = bottom.active !== "chain";
     el_.mixer.hidden = bottom.active !== "mixer";
     // Display-clamp only — the user's preferred height survives window shrinks.
     // shellH 0 means the studio view is hidden (no real measurement to clamp
     // against); any real height clamps, even short landscape-phone shells.
+    // The pinned keyboard strip has its own (content) height, so the active
+    // panel's budget shrinks by it.
     const shellH = el_.shell.clientHeight;
-    const maxH = shellH > 0 ? Math.max(56, shellH - 300) : BOTTOM_MAX;
+    const keysH = bottom.keys ? (el_.keys.offsetHeight || 150) : 0;
+    const maxH = shellH > 0 ? Math.max(56, shellH - 300 - keysH) : BOTTOM_MAX;
     el_.shell.style.setProperty("--daw-bh", Math.min(bottom.h, maxH) + "px");
-    el_.shell.classList.toggle("bottom-collapsed", !bottom.active);
+    el_.shell.classList.toggle("bottom-collapsed", !bottom.active && !bottom.keys);
     el_.tabs.querySelectorAll(".daw-tab").forEach((b) => {
-      const active = b.dataset.panel === bottom.active;
+      const active = b.dataset.panel === "keys" ? bottom.keys : b.dataset.panel === bottom.active;
       b.classList.toggle("active", active);
       b.setAttribute("aria-selected", active ? "true" : "false");
       if (b.dataset.panel === "editor") {
@@ -1136,7 +1179,7 @@ export const DAW = (() => {
         b.setAttribute("aria-disabled", editRegion ? "false" : "true");
       }
     });
-    el_.kbToggle?.setAttribute("aria-pressed", bottom.active === "keys" ? "true" : "false");
+    el_.kbToggle?.setAttribute("aria-pressed", bottom.keys ? "true" : "false");
     el_.chToggle?.setAttribute("aria-pressed", bottom.active === "chain" ? "true" : "false");
     // The editor DOM is only valid while visible: model edits made while it was
     // hidden (quantize, snap change) skip its re-render, so a reopen — via tab,
@@ -1145,6 +1188,36 @@ export const DAW = (() => {
     // Rebuild the mixer only when it BECOMES visible — applyPanels runs on
     // every resize drag frame, and unconditional rebuilds reset scroll/focus.
     if (mixerWasHidden && !el_.mixer.hidden) renderMixer();
+  }
+
+  /** Drag the heads/timeline divider; double-click resets. */
+  function attachHeadsResize(handle, heads) {
+    let drag = null;
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      drag = { x: e.clientX, w: heads.getBoundingClientRect().width };
+      handle.classList.add("dragging");
+      try { handle.setPointerCapture(e.pointerId); } catch {}
+      e.preventDefault();
+    });
+    handle.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      bottom.headsW = Math.max(140, Math.min(420, Math.round(drag.w + e.clientX - drag.x)));
+      el_.shell.style.setProperty("--daw-heads-w", bottom.headsW + "px");
+    });
+    const up = () => {
+      if (!drag) return;
+      drag = null;
+      handle.classList.remove("dragging");
+      saveBottomState();
+    };
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+    handle.addEventListener("dblclick", () => {
+      bottom.headsW = 0;
+      el_.shell.style.removeProperty("--daw-heads-w");
+      saveBottomState();
+    });
   }
 
   function attachBottomResize(gutter) {
@@ -1162,7 +1235,7 @@ export const DAW = (() => {
       } else {
         if (!bottom.active) {
           const back = bottom.reopen && (bottom.reopen !== "editor" || editRegion) ? bottom.reopen : bottom.prev;
-          bottom.active = back || "keys";
+          bottom.active = back || "chain";
         }
         bottom.h = Math.max(BOTTOM_MIN, Math.min(BOTTOM_MAX, raw));
       }
@@ -1173,7 +1246,7 @@ export const DAW = (() => {
     gutter.addEventListener("pointercancel", up);
     gutter.addEventListener("dblclick", () => {
       bottom.h = BOTTOM_DEF;
-      if (!bottom.active) bottom.active = bottom.prev || "keys";
+      if (!bottom.active) bottom.active = bottom.prev || "chain";
       applyPanels(); saveBottomState();
     });
     gutter.addEventListener("keydown", (e) => {
@@ -1181,7 +1254,7 @@ export const DAW = (() => {
       if (e.key === "ArrowUp") bottom.h = Math.min(BOTTOM_MAX, bottom.h + step);
       else if (e.key === "ArrowDown") bottom.h = Math.max(BOTTOM_MIN, bottom.h - step);
       else if (e.key === "Enter" || e.key === " ") {
-        toggleBottomPanel(bottom.active || bottom.prev || "keys");
+        toggleBottomPanel(bottom.active || bottom.prev || "chain");
         e.preventDefault();
         return;
       } else return;

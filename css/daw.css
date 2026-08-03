@@ -155,10 +155,11 @@
 /* ------------------------------ body ------------------------------ */
 .daw-body {
   display: grid;
-  grid-template-columns: 238px minmax(0, 1fr);
+  grid-template-columns: var(--daw-heads-w, 238px) minmax(0, 1fr);
   min-height: 0;
 }
 .daw-heads {
+  position: relative;
   display: grid;
   grid-template-rows: 30px minmax(0, 1fr) auto;
   border-right: 1px solid var(--sx-line);
@@ -675,6 +676,29 @@
 }
 /* display:grid above would defeat the UA's [hidden]{display:none} — restore it. */
 .daw-bottom .daw-panel[hidden] { display: none; }
+/* The pinned keyboard strip sizes to its content and always sits LAST, below
+   whichever exclusive panel is open. */
+.daw-bottom .daw-keys {
+  order: 5;
+  height: auto;
+  border-top: 1px solid var(--sx-line);
+}
+
+/* draggable divider between the track list and the timeline */
+.daw-heads-resize {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 8px;
+  z-index: 6;
+  cursor: col-resize;
+  touch-action: none;
+}
+.daw-heads-resize:hover,
+.daw-heads-resize.dragging {
+  background: color-mix(in srgb, var(--sx-brand-a) 35%, transparent);
+}
 /* Two classes so this outranks .daw-bottom .daw-panel above (velocity lane
    needs its own row or it is clipped by the panel's overflow:hidden). */
 .daw-bottom .daw-editor { grid-template-rows: auto minmax(0, 1fr) auto; }
@@ -1411,7 +1435,7 @@
   outline-offset: 2px;
 }
 @media (max-width: 900px) {
-  .daw-body { grid-template-columns: 176px minmax(0, 1fr); }
+  .daw-body { grid-template-columns: var(--daw-heads-w, 176px) minmax(0, 1fr); }
   .daw-head { padding-left: 8px; }
   .daw-time { min-width: 70px; font-size: var(--sx-fs-lg); }
   .daw-keys-body { grid-template-columns: 1fr; }
@@ -1450,6 +1474,7 @@
     border-radius: 0;
   }
   .daw-body { grid-template-columns: 148px minmax(0, 1fr); }
+  .daw-heads-resize { display: none; }
   .daw-head { padding-left: 7px; }
   .daw-head-name { font-size: var(--sx-fs-base); }
   .daw-head-kind { display: none; }
