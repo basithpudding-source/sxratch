@@ -155,7 +155,7 @@
 /* ------------------------------ body ------------------------------ */
 .daw-body {
   display: grid;
-  grid-template-columns: var(--daw-heads-w, 238px) minmax(0, 1fr);
+  grid-template-columns: min(var(--daw-heads-w, 238px), 40vw) minmax(0, 1fr);
   min-height: 0;
 }
 .daw-heads {
@@ -681,6 +681,10 @@
 .daw-bottom .daw-keys {
   order: 5;
   height: auto;
+  /* The strip must never blow the shell's height budget on short screens —
+     scroll internally instead of pushing the status bar out. */
+  max-height: 30vh;
+  overflow-y: auto;
   border-top: 1px solid var(--sx-line);
 }
 
@@ -688,13 +692,14 @@
 .daw-heads-resize {
   position: absolute;
   top: 0;
-  right: -4px;
+  right: 0;      /* never overhang the timeline or cover the colour strip */
   bottom: 0;
-  width: 8px;
+  width: 6px;
   z-index: 6;
   cursor: col-resize;
   touch-action: none;
 }
+.daw-heads-resize:focus-visible { outline: 2px solid var(--sx-focus); outline-offset: -2px; }
 .daw-heads-resize:hover,
 .daw-heads-resize.dragging {
   background: color-mix(in srgb, var(--sx-brand-a) 35%, transparent);
@@ -1435,7 +1440,7 @@
   outline-offset: 2px;
 }
 @media (max-width: 900px) {
-  .daw-body { grid-template-columns: var(--daw-heads-w, 176px) minmax(0, 1fr); }
+  .daw-body { grid-template-columns: min(var(--daw-heads-w, 176px), 40vw) minmax(0, 1fr); }
   .daw-head { padding-left: 8px; }
   .daw-time { min-width: 70px; font-size: var(--sx-fs-lg); }
   .daw-keys-body { grid-template-columns: 1fr; }

@@ -916,8 +916,14 @@ export const DAW = (() => {
     // The transport scrolls horizontally, so an absolutely-positioned dropdown
     // gets CLIPPED by its overflow. Re-anchor as a fixed layer on open, with a
     // max-height + scroll so every option stays reachable on short screens.
+    const closeFileOnMove = () => { file.open = false; };
     file.addEventListener("toggle", () => {
-      if (!file.open) { fileBody.removeAttribute("style"); return; }
+      if (!file.open) {
+        fileBody.removeAttribute("style");
+        window.removeEventListener("resize", closeFileOnMove);
+        window.removeEventListener("scroll", closeFileOnMove, true);
+        return;
+      }
       const r = fileSum.getBoundingClientRect();
       Object.assign(fileBody.style, {
         position: "fixed",
@@ -927,6 +933,10 @@ export const DAW = (() => {
         maxHeight: Math.max(120, innerHeight - r.bottom - 16) + "px",
         overflowY: "auto",
       });
+      // A fixed layer cannot follow its anchor: close instead of floating
+      // detached when the window resizes or anything scrolls.
+      window.addEventListener("resize", closeFileOnMove);
+      window.addEventListener("scroll", closeFileOnMove, true);
     });
     document.addEventListener("pointerdown", (e) => {
       if (file.open && !file.contains(e.target)) file.open = false;
@@ -983,6 +993,10 @@ export const DAW = (() => {
     heads.append(headsTop, headsScroll, addWrap);
     const headsHandle = el("div", "daw-heads-resize");
     headsHandle.title = "Drag to resize the track list";
+    headsHandle.setAttribute("role", "separator");
+    headsHandle.setAttribute("aria-orientation", "vertical");
+    headsHandle.setAttribute("aria-label", "Resize the track list — drag or arrow keys, Enter resets");
+    headsHandle.tabIndex = 0;
     heads.appendChild(headsHandle);
     attachHeadsResize(headsHandle, heads);
 
@@ -1011,7 +1025,7 @@ export const DAW = (() => {
     const gutter = el("div", "daw-bottom-gutter");
     gutter.setAttribute("role", "separator");
     gutter.setAttribute("aria-orientation", "horizontal");
-    gutter.setAttribute("aria-label", "Resize the bottom panel — drag, arrow keys, Enter collapses");
+    gutter.setAttribute("aria-label", "Resize the bottom panel — drag, arrow keys, Enter toggles the panel");
     gutter.tabIndex = 0;
     const tabs = el("div", "daw-bottom-tabs");
     tabs.setAttribute("role", "tablist");
@@ -1020,7 +1034,9 @@ export const DAW = (() => {
       const b = el("button", "daw-tab", label);
       b.type = "button";
       b.dataset.panel = id;
-      b.setAttribute("role", "tab");
+      // KEYS is a PIN (toggle), not a member of the single-selection tablist.
+      if (id === "keys") b.setAttribute("aria-pressed", "false");
+      else b.setAttribute("role", "tab");
       b.addEventListener("click", () => toggleBottomPanel(id));
       tabs.appendChild(b);
     }
@@ -1101,7 +1117,9 @@ export const DAW = (() => {
     try {
       const s = JSON.parse(localStorage.getItem(PANELS_KEY));
       if (!s || typeof s !== "object") return;
-      if (typeof s.keys === "boolean") bottom.keys = s.keys;
+      // Legacy saves have no `keys` field: derive the pin from the old
+      // exclusive-panel shape so a deliberately hidden keyboard stays hidden.
+      bottom.keys = typeof s.keys === "boolean" ? s.keys : s.active === "keys";
       if (["chain", "mixer"].includes(s.prev)) bottom.prev = s.prev;
       // Never restore "editor" across loads — its region no longer exists.
       // Legacy saves used active:"keys"; that maps onto the pin.
@@ -1110,7 +1128,7 @@ export const DAW = (() => {
       else if (s.active === "editor") bottom.active = bottom.prev;
       bottom.h = Math.max(BOTTOM_MIN, Math.min(BOTTOM_MAX, +s.h || BOTTOM_DEF));
       const hw = Math.round(+s.headsW || 0);
-      bottom.headsW = hw >= 140 && hw <= 420 ? hw : 0;
+      bottom.headsW = hw >= 156 && hw <= 420 ? hw : 0;
     } catch {}
   }
   function saveBottomState() {
@@ -1171,7 +1189,12 @@ export const DAW = (() => {
     el_.shell.style.setProperty("--daw-bh", Math.min(bottom.h, maxH) + "px");
     el_.shell.classList.toggle("bottom-collapsed", !bottom.active && !bottom.keys);
     el_.tabs.querySelectorAll(".daw-tab").forEach((b) => {
-      const active = b.dataset.panel === "keys" ? bottom.keys : b.dataset.panel === bottom.active;
+      if (b.dataset.panel === "keys") {
+        b.classList.toggle("active", bottom.keys);
+        b.setAttribute("aria-pressed", bottom.keys ? "true" : "false");
+        return;
+      }
+      const active = b.dataset.panel === bottom.active;
       b.classList.toggle("active", active);
       b.setAttribute("aria-selected", active ? "true" : "false");
       if (b.dataset.panel === "editor") {
@@ -1202,7 +1225,7 @@ export const DAW = (() => {
     });
     handle.addEventListener("pointermove", (e) => {
       if (!drag) return;
-      bottom.headsW = Math.max(140, Math.min(420, Math.round(drag.w + e.clientX - drag.x)));
+      bottom.headsW = Math.max(156, Math.min(420, Math.round(drag.w + e.clientX - drag.x)));
       el_.shell.style.setProperty("--daw-heads-w", bottom.headsW + "px");
     });
     const up = () => {
@@ -1213,9 +1236,21 @@ export const DAW = (() => {
     };
     handle.addEventListener("pointerup", up);
     handle.addEventListener("pointercancel", up);
-    handle.addEventListener("dblclick", () => {
+    const reset = () => {
       bottom.headsW = 0;
       el_.shell.style.removeProperty("--daw-heads-w");
+      saveBottomState();
+    };
+    handle.addEventListener("dblclick", reset);
+    handle.addEventListener("keydown", (e) => {
+      const step = e.shiftKey ? 40 : 12;
+      const current = bottom.headsW || Math.round(heads.getBoundingClientRect().width);
+      if (e.key === "ArrowRight") bottom.headsW = Math.min(420, current + step);
+      else if (e.key === "ArrowLeft") bottom.headsW = Math.max(156, current - step);
+      else if (e.key === "Enter") { reset(); e.preventDefault(); return; }
+      else return;
+      el_.shell.style.setProperty("--daw-heads-w", bottom.headsW + "px");
+      e.preventDefault();
       saveBottomState();
     });
   }
