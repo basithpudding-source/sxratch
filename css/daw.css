@@ -687,6 +687,14 @@
   overflow-y: auto;
   border-top: 1px solid var(--sx-line);
 }
+/* The device chain is a content-height row of cards. Never stretch it to the
+   shared panel height (that height is remembered from the mixer/editor and
+   would leave big blank card bottoms) — treat it as a MAX and hand the spare
+   space back to the timeline; scroll inside when the cards are taller. */
+.daw-bottom .daw-chain {
+  height: auto;
+  max-height: var(--daw-bh, 156px);
+}
 
 /* draggable divider between the track list and the timeline */
 .daw-heads-resize {
