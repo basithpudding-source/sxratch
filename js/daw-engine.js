@@ -229,9 +229,14 @@ export function createDawEngine({ getCtx, getOutput, getSong, getClip, onPlayhea
       predelay: 0.016,
       damp: settings.damp,
     });
+    // Each processor rides its own crossfade gain so a size/damp rebuild can
+    // hand over smoothly instead of hard-cutting the ringing tail.
+    const xfade = c.createGain();
     bus.input.connect(verb.in);
-    verb.out.connect(bus.returnGain);
+    verb.out.connect(xfade);
+    xfade.connect(bus.returnGain);
     bus.processor = verb;
+    bus.xfade = xfade;
     bus.signature = reverbSignature(settings);
   }
 
@@ -296,9 +301,30 @@ export function createDawEngine({ getCtx, getOutput, getSong, getClip, onPlayhea
     if (!graph?.sends?.reverb) return;
     const settings = busSettings(sg).reverb;
     const bus = graph.sends.reverb;
+    const old = { processor: bus.processor, xfade: bus.xfade };
+    // Stop feeding the old convolver but let what is already inside it ring
+    // out through its own crossfade gain while the new room fades in.
     try { bus.input.disconnect(); } catch {}
-    try { bus.processor?.out?.disconnect(); } catch {}
     attachReverbProcessor(graph.context, bus, settings);
+    const c = graph.context;
+    const now = c.currentTime;
+    const XF = 0.35;
+    if (old.xfade?.gain) {
+      try {
+        old.xfade.gain.setValueAtTime(old.xfade.gain.value, now);
+        old.xfade.gain.linearRampToValueAtTime(0.0001, now + XF);
+      } catch {}
+    }
+    if (bus.xfade?.gain) {
+      try {
+        bus.xfade.gain.setValueAtTime(0.0001, now);
+        bus.xfade.gain.linearRampToValueAtTime(1, now + XF);
+      } catch {}
+    }
+    setTimeout(() => {
+      try { old.processor?.out?.disconnect(); } catch {}
+      try { old.xfade?.disconnect(); } catch {}
+    }, XF * 1000 + 150);
   }
 
   function applyBusParams(graph, sg, { rebuildReverb = false } = {}) {

@@ -3952,9 +3952,33 @@ export const DAW = (() => {
     p.innerHTML = "";
     const head = el("div", "daw-panel-head");
     head.append(el("span", "daw-panel-title", "MIXER"), el("span", "daw-mixer-note", "Post-fader shared sends · DAW master → safety limiter"));
+    const learnBtn = el("button", "daw-channel-btn daw-midi-learn" + (midiLearnMode ? " active" : ""), "MIDI LEARN");
+    learnBtn.type = "button";
+    learnBtn.setAttribute("aria-pressed", midiLearnMode ? "true" : "false");
+    learnBtn.title = "Bind controller knobs to faders, pans and sends";
+    learnBtn.addEventListener("click", () => {
+      midiLearnMode = !midiLearnMode;
+      if (!midiLearnMode) midiLearnTarget = null;
+      renderMixer();
+      if (midiLearnMode) _toast("Click a fader, pan or send — then move a knob on your controller");
+    });
+    head.appendChild(learnBtn);
+    if (Object.keys(midiMap).length) {
+      const clearBtn = el("button", "daw-channel-btn daw-midi-clear", `MIDI ×${Object.keys(midiMap).length}`);
+      clearBtn.type = "button";
+      clearBtn.title = "Clear all MIDI mappings";
+      clearBtn.addEventListener("click", () => {
+        midiMap = {};
+        saveMidiMap();
+        renderMixer();
+        _toast("MIDI mappings cleared");
+      });
+      head.appendChild(clearBtn);
+    }
     const close = iconBtn("daw-hbtn", "×", "Hide mixer");
     close.addEventListener("click", () => toggleBottomPanel("mixer"));
     head.appendChild(close);
+    p.classList.toggle("midi-learn", midiLearnMode);
     const body = el("div", "daw-mixer-body");
     for (const track of song.tracks) body.appendChild(mixerTrackStrip(track));
     body.append(
@@ -3969,6 +3993,7 @@ export const DAW = (() => {
   }
 
   function mixerTrackStrip(track) {
+    const trackIndex = song.tracks.indexOf(track);
     const strip = el("section", "daw-channel" + (track.id === activeTrackId ? " active" : ""));
     strip.style.setProperty("--tc", TRACK_COLORS[track.color % TRACK_COLORS.length]);
     strip.addEventListener("pointerdown", () => setActiveTrack(track.id));
@@ -3999,23 +4024,33 @@ export const DAW = (() => {
     );
     const fader = mixerSlider("Fader", track.gain, 0, 1.4, 0.01, (value) => {
       track.gain = value; engine.refreshMixParams?.() || engine.refreshTrackParams();
-    }, true, `t${track.id}`);
+    }, true, `t${track.id}`, { target: "gain", trackIndex });
     const pan = mixerSlider("Pan", track.pan, -1, 1, 0.01, (value) => {
       track.pan = value; engine.refreshMixParams?.() || engine.refreshTrackParams();
-    }, false, `t${track.id}`);
+    }, false, `t${track.id}`, { target: "pan", trackIndex });
     const reverb = mixerSlider("Verb", track.sends.reverb, 0, 1, 0.01, (value) => {
       track.sends.reverb = value; engine.refreshMixParams?.() || engine.refreshTrackParams();
-    }, false, `t${track.id}`);
+    }, false, `t${track.id}`, { target: "reverb", trackIndex });
     const delay = mixerSlider("Delay", track.sends.delay, 0, 1, 0.01, (value) => {
       track.sends.delay = value; engine.refreshMixParams?.() || engine.refreshTrackParams();
-    }, false, `t${track.id}`);
+    }, false, `t${track.id}`, { target: "delay", trackIndex });
     strip.append(name, meter, fader, pan, reverb, delay, buttons);
     return strip;
   }
 
-  function mixerSlider(label, value, min, max, step, set, vertical = false, id = "") {
+  function mixerSlider(label, value, min, max, step, set, vertical = false, id = "", midiTarget = null) {
     const gestureKey = `mixer:${id}:${label}`;
     const wrap = el("label", `daw-mixer-control${vertical ? " vertical" : ""}`);
+    if (midiTarget) {
+      wrap.classList.add("midi-mappable");
+      // Capture phase: in learn mode a press ARMS the control instead of
+      // starting a slider drag.
+      wrap.addEventListener("pointerdown", (e) => {
+        if (!midiLearnMode) return;
+        e.preventDefault(); e.stopPropagation();
+        armMidiLearn(midiTarget, wrap);
+      }, true);
+    }
     const title = el("span", null, label);
     const input = el("input");
     input.type = "range";
@@ -4109,7 +4144,7 @@ export const DAW = (() => {
     strip.append(
       masterHead,
       meter,
-      mixerSlider("Fader", master.gain, 0, 1.4, 0.01, (v) => { master.gain = v; engine?.refreshMixParams?.(); }, true, "master"),
+      mixerSlider("Fader", master.gain, 0, 1.4, 0.01, (v) => { master.gain = v; engine?.refreshMixParams?.(); }, true, "master", { target: "masterGain" }),
       mixerSlider("Low EQ", master.eq.low, -18, 18, 0.5, (v) => { master.eq.low = v; engine?.refreshMixParams?.(); }, false, "master"),
       mixerSlider("Mid EQ", master.eq.mid, -18, 18, 0.5, (v) => { master.eq.mid = v; engine?.refreshMixParams?.(); }, false, "master"),
       mixerSlider("High EQ", master.eq.high, -18, 18, 0.5, (v) => { master.eq.high = v; engine?.refreshMixParams?.(); }, false, "master"),
@@ -4648,7 +4683,8 @@ export const DAW = (() => {
 
     // Debug handle (same convention as window.sxratch on the deck side) —
     // used by tests/automation, harmless in production.
-    window.sxdaw = { get engine() { return engine; }, get song() { return song; }, get clips() { return clips; } };
+    loadMidiMap();
+    window.sxdaw = { get engine() { return engine; }, get song() { return song; }, get clips() { return clips; }, midi: (cc, v) => midiCC(cc, v) };
     return true;
   }
 
@@ -4666,10 +4702,90 @@ export const DAW = (() => {
     else engine.noteOff(t, note);
   }
 
+  /* ---------------- hardware MIDI CC → mixer controls ----------------
+   * Learn-based: LEARN in the mixer head arms a control, the next CC binds
+   * to it. Track targets bind by strip POSITION (index), matching how
+   * controller fader banks are laid out. Persisted per browser.
+   */
+  const MIDI_MAP_KEY = "sxratch.dawmidi";
+  let midiMap = {};                 // cc -> { target, trackIndex? }
+  let midiLearnMode = false;
+  let midiLearnTarget = null;       // armed target awaiting its CC
+  const MIDI_TARGET_LABEL = { gain: "Fader", pan: "Pan", reverb: "Verb", delay: "Delay", masterGain: "Fader" };
+
+  function loadMidiMap() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(MIDI_MAP_KEY));
+      if (parsed && typeof parsed === "object") {
+        for (const [cc, m] of Object.entries(parsed)) {
+          if (m && MIDI_TARGET_LABEL[m.target]) midiMap[+cc] = { target: m.target, trackIndex: m.trackIndex };
+        }
+      }
+    } catch {}
+  }
+  function saveMidiMap() {
+    try { localStorage.setItem(MIDI_MAP_KEY, JSON.stringify(midiMap)); } catch {}
+  }
+
+  function armMidiLearn(target, wrap) {
+    midiLearnTarget = target;
+    el_.mixer?.querySelectorAll(".midi-armed").forEach((x) => x.classList.remove("midi-armed"));
+    wrap?.classList.add("midi-armed");
+    _toast("Move a knob or fader on your controller to bind it");
+  }
+
+  /** Returns true when the CC was consumed by the studio. */
+  function midiCC(cc, value) {
+    if (midiLearnTarget) {
+      // One CC drives one control: drop any previous binding for this CC.
+      midiMap[cc] = midiLearnTarget;
+      midiLearnTarget = null;
+      midiLearnMode = false;
+      saveMidiMap();
+      _toast(`Mapped CC ${cc}`, { severity: "ok" });
+      if (bottom.active === "mixer") renderMixer();
+      return true;
+    }
+    const m = midiMap[cc];
+    if (!m) return false;
+    applyMidiTarget(m, Math.max(0, Math.min(1, value)));
+    return true;
+  }
+
+  function applyMidiTarget(m, v) {
+    let sliderId = null;
+    if (m.target === "masterGain") {
+      pushStateGesture("midicc:master");
+      song.master.gain = v * 1.4;
+      engine?.refreshMixParams?.();
+      sliderId = "master";
+    } else {
+      const t = song.tracks[m.trackIndex];
+      if (!t) return;
+      pushStateGesture(`midicc:${m.target}:${m.trackIndex}`);
+      if (m.target === "gain") t.gain = v * 1.4;
+      else if (m.target === "pan") t.pan = v * 2 - 1;
+      else { t.sends ||= {}; t.sends[m.target] = v; }
+      engine?.refreshTrackParams?.();
+      sliderId = `t${t.id}`;
+    }
+    save();
+    // Mirror onto the on-screen slider when the mixer is visible.
+    if (bottom.active === "mixer" && sliderId) {
+      const key = `mixer:${sliderId}:${MIDI_TARGET_LABEL[m.target]}`;
+      const input = el_.mixer?.querySelector(`[data-focus-key="${CSS.escape(key)}"]`);
+      if (input) {
+        input.value = m.target === "masterGain" || m.target === "gain" ? v * 1.4
+          : m.target === "pan" ? v * 2 - 1 : v;
+        input.dispatchEvent(new Event("input"));
+      }
+    }
+  }
+
   function maybeStartTour() {
     const tour = ensureDawTour();
     if (tour.getState().status === "idle") requestAnimationFrame(() => tour.start());
   }
 
-  return { init, stopPreview, midiNote, maybeStartTour, startTour: () => startDawTour(true) };
+  return { init, stopPreview, midiNote, midiCC, maybeStartTour, startTour: () => startDawTour(true) };
 })();

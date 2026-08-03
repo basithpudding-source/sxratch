@@ -1956,6 +1956,8 @@ function handleMidiCC(cc, value) {
     ui.toast(`Mapped CC ${cc}`);
     return;
   }
+  // Studio-first: when the PAD view is up, learned DAW mixer mappings win.
+  if (document.body.classList.contains("view-studio") && DAW.midiCC?.(cc, value)) return;
   const map = config.midi.map;
   if (map.jogA && map.jogA.cc === cc) return midiJog("A", value);
   if (map.jogB && map.jogB.cc === cc) return midiJog("B", value);

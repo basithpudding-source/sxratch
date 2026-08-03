@@ -1119,6 +1119,24 @@
   width: 68px;
   transform: rotate(-90deg);
 }
+
+/* MIDI learn mode: mappable controls advertise themselves; the armed one pulses */
+.daw-mixer.midi-learn .daw-mixer-control.midi-mappable {
+  outline: 1px dashed var(--sx-brand-b);
+  outline-offset: 1px;
+  border-radius: var(--sx-radius-2xs);
+  cursor: copy;
+}
+.daw-mixer.midi-learn .daw-mixer-control.midi-mappable input { pointer-events: none; }
+.daw-mixer-control.midi-armed {
+  outline: 2px solid var(--sx-hot) !important;
+  animation: dawRecPulse 1.1s infinite;
+}
+.daw-midi-learn.active {
+  background: var(--sx-brand-b);
+  color: var(--sx-ink-on-accent);
+  border-color: var(--sx-brand-b);
+}
 .daw-channel-buttons {
   grid-column: 1 / -1;
   display: flex;
@@ -1403,14 +1421,13 @@
   .daw-kbd { height: 70px; }
 }
 
-@media (max-width: 680px) {
-  #studio { padding: 0; }
-  .daw {
-    border-inline: 0;
-    border-radius: 0;
-  }
+/* Narrow-but-tall screens (phones portrait, tablets portrait): wrap the
+   transport into rows — hidden horizontal scroll is undiscoverable on touch.
+   Short-landscape screens are excluded; there, rows would eat the timeline,
+   and the thin scrollbar remains. */
+@media (max-width: 900px) and (min-height: 501px) {
   .daw-transport {
-    flex-wrap: wrap;       /* wrapping rows beat 600px of hidden horizontal scroll */
+    flex-wrap: wrap;
     row-gap: 4px;
     gap: 5px;
     padding-inline: 6px;
@@ -1424,6 +1441,14 @@
   .daw-pos { display: none; }
   .daw-panel-toggle { display: none; }   /* the bottom tab strip covers these */
   .daw-tbtn { min-width: 44px; min-height: 44px; }
+}
+
+@media (max-width: 680px) {
+  #studio { padding: 0; }
+  .daw {
+    border-inline: 0;
+    border-radius: 0;
+  }
   .daw-body { grid-template-columns: 148px minmax(0, 1fr); }
   .daw-head { padding-left: 7px; }
   .daw-head-name { font-size: var(--sx-fs-base); }
