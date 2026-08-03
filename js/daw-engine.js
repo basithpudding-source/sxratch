@@ -28,6 +28,8 @@ import {
   wrapBeat,
 } from "./daw-model.js";
 
+export const RENDER_LEAD_SEC = 0.03;  // silence prepended to offline bounces
+
 const LOOKAHEAD_MS = 30;      // scheduler tick
 const HORIZON_SEC = 0.18;     // how far ahead events are committed to WebAudio
 const STOP_RAMP = 0.04;       // fade applied to a session bus on stop
@@ -75,9 +77,17 @@ export function scheduleAutomationParam(
     }
     return true;
   } catch {
-    // A malformed imported lane must never take down the audio scheduler.
-    try { param.setValueAtTime?.(samples[0], start); } catch {}
-    return false;
+    // Usually FP jitter at a window seam: our start lands a hair inside the
+    // previous curve's tail. Cancel from our start and retry once; a truly
+    // malformed lane still falls through without taking down the scheduler.
+    try {
+      param.cancelScheduledValues?.(start);
+      param.setValueCurveAtTime(samples, start, end - start);
+      return true;
+    } catch {
+      try { param.setValueAtTime?.(samples[0], start); } catch {}
+      return false;
+    }
   }
 }
 
@@ -85,6 +95,7 @@ export function createDawEngine({ getCtx, getOutput, getSong, getClip, onPlayhea
   let ctx = null;
   let master = null, glue = null, meterTap = null;
   let liveMix = null;
+  let clickBus = null;        // metronome/count-in output, post-master
   let noise = null;           // shared noise buffer for the synth voices
   let buses = new Map();      // trackId -> live bus (see buildTrackChain)
   let sessions = new Map();   // trackId -> per-play gain the voices feed
@@ -310,10 +321,15 @@ export function createDawEngine({ getCtx, getOutput, getSong, getClip, onPlayhea
   function ensureCtx() {
     if (ctx) return ctx;
     ctx = getCtx();
-    liveMix = buildMixGraph(ctx, getOutput?.() || ctx.destination, song(), { meters: true });
+    const destination = getOutput?.() || ctx.destination;
+    liveMix = buildMixGraph(ctx, destination, song(), { meters: true });
     master = liveMix.input;
     glue = liveMix.glue;
     meterTap = liveMix.meter;
+    // Metronome/count-in clicks go straight to the output: they are a timing
+    // reference, not program material for the master EQ/glue/fader to shape.
+    clickBus = ctx.createGain();
+    clickBus.connect(destination);
     noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     noise.getChannelData(0).set(noiseData(ctx.sampleRate, 1));
     return ctx;
@@ -432,13 +448,20 @@ export function createDawEngine({ getCtx, getOutput, getSong, getClip, onPlayhea
       chain.shaper.curve = makeDistortionCurve(dist.drive ?? 0.2);
     }
 
-    if (chain.pan) chain.pan.pan.value = Math.max(-1, Math.min(1, track.pan || 0));
+    // While the transport runs, populated automation lanes OWN their params:
+    // writing .value into an active setValueCurveAtTime region throws
+    // NotSupportedError in Chrome, which would abort this refresh mid-loop
+    // (mute/solo silently failing on later tracks). Automation wins during
+    // playback; the static value returns on stop/seek via resetTrackAutomation.
+    const autoOwned = (key) => playing && automationPoints(track, key).length > 0;
+    const write = (param, v) => { if (param) { try { param.value = v; } catch {} } };
+    if (chain.pan && !autoOwned("pan")) write(chain.pan.pan, Math.max(-1, Math.min(1, track.pan || 0)));
     const silent = !forceAudible && (!!track.mute || (soloActive && !track.solo));
-    chain.fader.gain.value = Math.max(0, Math.min(1.4, track.gain ?? 0.9));
-    chain.muteGain.gain.value = silent ? 0 : 1;
+    if (!autoOwned("gain")) write(chain.fader.gain, Math.max(0, Math.min(1.4, track.gain ?? 0.9)));
+    write(chain.muteGain.gain, silent ? 0 : 1);
     const sends = trackSendSettings(track);
-    chain.reverbSend.gain.value = sends.reverb * REVERB_SEND_SCALE;
-    chain.delaySend.gain.value = sends.delay * DELAY_SEND_SCALE;
+    if (!autoOwned("reverb")) write(chain.reverbSend.gain, sends.reverb * REVERB_SEND_SCALE);
+    if (!autoOwned("delay")) write(chain.delaySend.gain, sends.delay * DELAY_SEND_SCALE);
   }
 
   /** Re-apply mute/solo/fader/pan/inserts/sends live (no rebuild). */
@@ -534,42 +557,23 @@ export function createDawEngine({ getCtx, getOutput, getSong, getClip, onPlayhea
 
   function scheduleTrackAutomation(chain, track, fromBeat, toBeat, timeAt) {
     if (!chain) return;
-    scheduleAutomationParam(
-      chain.fader?.gain,
-      automationPoints(track, "gain"),
-      staticAutomationValue(track, "gain"),
-      fromBeat,
-      toBeat,
-      timeAt,
-      { curve: chain.automationCurves?.gain },
-    );
-    scheduleAutomationParam(
-      chain.pan?.pan,
-      automationPoints(track, "pan"),
-      staticAutomationValue(track, "pan"),
-      fromBeat,
-      toBeat,
-      timeAt,
-      { curve: chain.automationCurves?.pan },
-    );
-    scheduleAutomationParam(
-      chain.reverbSend?.gain,
-      automationPoints(track, "reverb"),
-      staticAutomationValue(track, "reverb"),
-      fromBeat,
-      toBeat,
-      timeAt,
-      { scale: REVERB_SEND_SCALE, curve: chain.automationCurves?.reverb },
-    );
-    scheduleAutomationParam(
-      chain.delaySend?.gain,
-      automationPoints(track, "delay"),
-      staticAutomationValue(track, "delay"),
-      fromBeat,
-      toBeat,
-      timeAt,
-      { scale: DELAY_SEND_SCALE, curve: chain.automationCurves?.delay },
-    );
+    chain.autoWas ||= {};
+    const lane = (key, param, scale, curve) => {
+      const points = automationPoints(track, key);
+      if (points.length) {
+        scheduleAutomationParam(param, points, staticAutomationValue(track, key), fromBeat, toBeat, timeAt, { scale, curve });
+        chain.autoWas[key] = true;
+      } else if (chain.autoWas[key]) {
+        // The lane was emptied while playing: without this reset the param
+        // stays frozen at the last curve sample indefinitely.
+        resetAutomationParam(param, staticAutomationValue(track, key) * scale, timeAt(fromBeat));
+        chain.autoWas[key] = false;
+      }
+    };
+    lane("gain", chain.fader?.gain, 1, chain.automationCurves?.gain);
+    lane("pan", chain.pan?.pan, 1, chain.automationCurves?.pan);
+    lane("reverb", chain.reverbSend?.gain, REVERB_SEND_SCALE, chain.automationCurves?.reverb);
+    lane("delay", chain.delaySend?.gain, DELAY_SEND_SCALE, chain.automationCurves?.delay);
   }
 
   function resetAutomationParam(param, value, at) {
@@ -650,7 +654,7 @@ export function createDawEngine({ getCtx, getOutput, getSong, getClip, onPlayhea
     if (metronomeOn && !opts.offline) {
       const num = sg.ts?.num || 4;
       for (let b = Math.ceil(fromBeat - 1e-6); b < toBeat; b++) {
-        click(c, master, timeAt(b), b % num === 0);
+        click(c, clickBus || master, timeAt(b), b % num === 0);
       }
     }
   }
@@ -700,13 +704,21 @@ export function createDawEngine({ getCtx, getOutput, getSong, getClip, onPlayhea
 
     if (slice.fadeInSec > 0 && elapsedSource < slice.fadeInSec) {
       const remFadeIn = (slice.fadeInSec - elapsedSource) / playbackRate;
-      g.gain.setValueAtTime(0.0001, startTime);
+      // Entering mid-fade (seek/loop re-entry) resumes at the interpolated
+      // envelope level — restarting from silence would audibly duck.
+      const entryLevel = Math.max(0.0001, baseGain * (elapsedSource / slice.fadeInSec));
+      g.gain.setValueAtTime(entryLevel, startTime);
       g.gain.linearRampToValueAtTime(baseGain, startTime + Math.min(outputDuration, remFadeIn));
     }
     if (slice.fadeOutSec > 0) {
       const fadeOutDuration = slice.fadeOutSec / playbackRate;
       const fadeOutStart = startTime + Math.max(0, outputDuration - fadeOutDuration);
-      g.gain.setValueAtTime(baseGain, fadeOutStart);
+      // Entering INSIDE the fade-out (seek/loop wrap): resume at the
+      // interpolated level, not full gain, or every pass starts with a jump.
+      const startLevel = outputDuration >= fadeOutDuration
+        ? baseGain
+        : Math.max(0.0001, baseGain * (outputDuration / fadeOutDuration));
+      g.gain.setValueAtTime(startLevel, fadeOutStart);
       g.gain.linearRampToValueAtTime(0.0001, startTime + outputDuration);
     }
 
@@ -1090,7 +1102,7 @@ registerProcessor("sx-cap", SxCap);`;
         const countBeats = countInBars * bpb;
         const startAt = ctx.currentTime + 0.05;
         for (let b = 0; b < countBeats; b++) {
-          token.voices.push(click(ctx, master, startAt + b * spb, b % bpb === 0));
+          token.voices.push(click(ctx, clickBus || master, startAt + b * spb, b % bpb === 0));
         }
         await new Promise((resolve) => setTimeout(resolve, countBeats * spb * 1000));
         // A second ● during the count-in cancels; stopRecord already cleaned up.
@@ -1209,7 +1221,7 @@ registerProcessor("sx-cap", SxCap);`;
     ensureCtx();
     const sr = ctx.sampleRate;
     const sg = song();
-    const renderLead = 0.03;
+    const renderLead = RENDER_LEAD_SEC;
     const tail = offlineTailSeconds(sg);
     const totalSec = renderLead + beatsToSec(toBeat - fromBeat) + tail;
     const oc = new OfflineAudioContext(2, Math.max(1, Math.ceil(totalSec * sr)), sr);
@@ -1263,26 +1275,13 @@ registerProcessor("sx-cap", SxCap);`;
       stems.set(t.id, await renderOffline(fromBeat, toBeat, { onlyTrackId: t.id, finalize: false }));
     }
     if (!stems.size) return stems;
-    const first = stems.values().next().value;
-    const sr = first.sampleRate, len = first.length;
-    const sum = [new Float32Array(len), new Float32Array(len)];
-    for (const buf of stems.values()) {
-      // Clamp per stem: a bpm/length edit between the sequential renders can
-      // change buffer sizes, and reading past the end would NaN-poison the sum.
-      const n = Math.min(len, buf.length);
-      for (let c = 0; c < 2; c++) {
-        const d = buf.getChannelData(Math.min(c, buf.numberOfChannels - 1));
-        const s = sum[c];
-        for (let i = 0; i < n; i++) s[i] += d[i];
-      }
-    }
-    const { gain } = masterFinalize(sum, sr);   // measure on the throwaway sum
+    // The master bounce is NOT loudness-normalized (unity gain + limiter), so
+    // stems must not be either — any other gain and they cannot sum back to
+    // the mix. maxBoost === maxCut === 1 pins the gain and keeps the limiter.
     for (const buf of stems.values()) {
       const chans = [];
       for (let c = 0; c < buf.numberOfChannels; c++) chans.push(buf.getChannelData(c));
-      // maxBoost === maxCut pins masterFinalize's gain to exactly `gain`,
-      // so this applies the shared gain plus the true-peak limiter only.
-      masterFinalize(chans, sr, { maxBoost: gain, maxCut: gain });
+      masterFinalize(chans, buf.sampleRate, { maxBoost: 1, maxCut: 1 });
     }
     return stems;
   }

@@ -425,12 +425,21 @@
   bottom: 32px;
 }
 .daw-region.take-alt {
-  top: calc(36px + (var(--take-row, 0) * 14px));
+  top: calc(36px + (var(--take-row, 0) * var(--take-row-h, 13px)));
   bottom: auto;
-  height: 13px;
+  height: calc(var(--take-row-h, 13px) - 1px);
   z-index: 4;
   opacity: .72;
   border-style: dashed;
+}
+.daw-region.thin-take .daw-region-name { display: none; }
+.daw-region.thin-take .daw-take-use {
+  min-height: 0;
+  height: 100%;
+  top: 0;
+  padding: 0 3px;
+  font-size: 8px;
+  line-height: 1;
 }
 .daw-take-use {
   position: absolute;

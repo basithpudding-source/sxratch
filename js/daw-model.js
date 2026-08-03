@@ -187,8 +187,18 @@ export function audioRegionSlice(region, playBeat, secondsPerBeat, stopBeat = In
   const available = Math.max(0, Number(clipDuration) - offsetSec);
   const durationSec = Math.min(Math.max(0, (endBeat - startBeat) * spb), available);
   if (!(durationSec > 0) || !Number.isFinite(offsetSec)) return null;
-  const fadeInSec = Math.max(0, Number(region?.fadeIn || 0) * spb);
-  const fadeOutSec = Math.max(0, Number(region?.fadeOut || 0) * spb);
+  // The UI's clampedFade only guarantees fadeIn + fadeOut <= region LENGTH.
+  // A slice truncated by a loop boundary or by the clip running out can be
+  // shorter than that sum, which would place fadeOutStart before the fade-in
+  // ends (held silence, then a pop). Scale both fades into the audible slice.
+  let fadeInSec = Math.max(0, Number(region?.fadeIn || 0) * spb);
+  let fadeOutSec = Math.max(0, Number(region?.fadeOut || 0) * spb);
+  const totalFade = fadeInSec + fadeOutSec;
+  if (totalFade > durationSec && totalFade > 0) {
+    const k = durationSec / totalFade;
+    fadeInSec *= k;
+    fadeOutSec *= k;
+  }
   return { offsetSec, durationSec, fadeInSec, fadeOutSec };
 }
 

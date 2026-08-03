@@ -18,7 +18,7 @@
 // Audio clip buffers live OUTSIDE the model in `clips` (id → AudioBuffer),
 // persisted to IndexedDB, so undo snapshots stay small.
 
-import { createDawEngine, DRUM_KEYS } from "./daw-engine.js";
+import { createDawEngine, DRUM_KEYS, RENDER_LEAD_SEC } from "./daw-engine.js";
 import { FACTORY_PATCHES } from "./synth.js";
 import { bufferToWav } from "./wav.js";
 import { encodeMidi } from "./midiexport.js";
@@ -348,6 +348,18 @@ export const DAW = (() => {
     clearTimeout(_saveTimer);
     _saveTimer = null;
     const snapshot = JSON.parse(JSON.stringify(song));
+    // Synchronous localStorage FIRST: during pagehide the continuation after
+    // an await may never run (and unload-time IDB commits aren't guaranteed),
+    // so the only write certain to survive tab close is this one.
+    let localOk = writeVersioned(STORE_KEY, SCHEMA_V, snapshot, {
+      onQuota: () => {},
+      metadata: {
+        dawFallback: {
+          failedAt: Date.now(),
+          baseRevision: Number.isInteger(lastIdbRevision) ? lastIdbRevision : null,
+        },
+      },
+    });
     let idbOk = false;
     let savedRecord = null;
     try {
@@ -355,18 +367,13 @@ export const DAW = (() => {
       idbOk = !!savedRecord;
       if (Number.isInteger(savedRecord?.revision)) lastIdbRevision = savedRecord.revision;
     } catch {}
-    const metadata = idbOk
-      ? null
-      : {
-          dawFallback: {
-            failedAt: Date.now(),
-            baseRevision: Number.isInteger(lastIdbRevision) ? lastIdbRevision : null,
-          },
-        };
-    const localOk = writeVersioned(STORE_KEY, SCHEMA_V, snapshot, {
-      onQuota: () => {},
-      metadata,
-    });
+    if (idbOk) {
+      // IDB landed: clear the fallback tag so boot prefers the IDB record.
+      localOk = writeVersioned(STORE_KEY, SCHEMA_V, snapshot, {
+        onQuota: () => {},
+        metadata: null,
+      }) || localOk;
+    }
     saveState = idbOk ? "saved" : localOk ? "fallback" : "error";
     syncSaveStatus();
     if (!idbOk && !localOk) {
@@ -1108,6 +1115,7 @@ export const DAW = (() => {
   function applyPanels() {
     if (bottom.active === "editor" && !editRegion) bottom.active = bottom.prev;
     const editorWasHidden = el_.editor.hidden;
+    const mixerWasHidden = el_.mixer.hidden;
     el_.editor.hidden = bottom.active !== "editor";
     el_.keys.hidden = bottom.active !== "keys";
     el_.chain.hidden = bottom.active !== "chain";
@@ -1134,7 +1142,9 @@ export const DAW = (() => {
     // hidden (quantize, snap change) skip its re-render, so a reopen — via tab,
     // gutter drag or dblclick — must rebuild it, whatever path un-hid it.
     if (editorWasHidden && !el_.editor.hidden && editRegion) renderEditor();
-    if (bottom.active === "mixer") renderMixer();
+    // Rebuild the mixer only when it BECOMES visible — applyPanels runs on
+    // every resize drag frame, and unconditional rebuilds reset scroll/focus.
+    if (mixerWasHidden && !el_.mixer.hidden) renderMixer();
   }
 
   function attachBottomResize(gutter) {
@@ -1270,15 +1280,11 @@ export const DAW = (() => {
         mk("daw-solo", "S", `Solo ${t.name}`, t.solo, () => { pushState(); t.solo = !t.solo; engine.refreshTrackParams(); renderHeads(); save(); }),
         mk("daw-arm", "⏺", `Arm ${t.name} for recording`, t.armed, () => armTrack(t)),
         mk("daw-auto-toggle", "A", `Show automation for ${t.name}`, t.automationVisible, () => {
+          // A pure VIEW toggle: never seed points here. A seeded 1-point lane
+          // would permanently pin the parameter (automationValueAt returns a
+          // constant), silently disabling the mixer fader for that param.
           pushState();
           t.automationVisible = !t.automationVisible;
-          if (t.automationVisible && !(t.automation[t.automationParam] || []).length) {
-            t.automation[t.automationParam] = [{
-              id: idc++,
-              b: 0,
-              v: staticAutomationValue(t, t.automationParam),
-            }];
-          }
           renderHeads(); renderTimeline(); save();
         }),
       );
@@ -1296,13 +1302,9 @@ export const DAW = (() => {
           e.stopPropagation();
           pushState();
           t.automationParam = autoSel.value;
-          if (!(t.automation[t.automationParam] || []).length) {
-            t.automation[t.automationParam] = [{
-              id: idc++,
-              b: 0,
-              v: staticAutomationValue(t, t.automationParam),
-            }];
-          }
+          // No lane seeding: an empty lane renders as a flat line and the
+          // engine falls back to the live track value. Points are created
+          // explicitly via "+" or lane clicks.
           renderTimeline(); save();
         });
         const addAuto = mk("daw-auto-add", "+", `Add ${AUTO_SPEC[t.automationParam].label} point at playhead`, false, () => {
@@ -1465,18 +1467,34 @@ export const DAW = (() => {
       lane.style.backgroundSize = `${bpb * pxPerBeat}px 100%, ${pxPerBeat}px 100%`;
       const takesOpen = song.view.openTakeTrackIds.includes(t.id);
       lane.classList.toggle("takes-open", takesOpen);
+      // Row slots are for INACTIVE takes only (the active take keeps the full
+      // strip). Slot height scales so any number of takes stays distinct
+      // inside the fixed 68px lane — variable lane heights would break every
+      // Y-based hit test (laneIndexAt, marquee, head sync).
+      const inactiveCounts = new Map();
+      if (takesOpen) {
+        for (const r of t.regions) {
+          if (r.takeGroup != null && r.takeActive === false) {
+            const key = String(r.takeGroup);
+            inactiveCounts.set(key, (inactiveCounts.get(key) || 0) + 1);
+          }
+        }
+      }
+      const maxInactive = Math.max(1, ...inactiveCounts.values());
+      const takeRowH = Math.max(6, Math.min(13, Math.floor(28 / maxInactive)));
+      lane.style.setProperty("--take-row-h", takeRowH + "px");
       const regionTakeRows = new Map();
       for (const r of t.regions) {
         if (r.start + r.len < viewA || r.start > viewB) continue;
         if (r.takeGroup != null && r.takeActive === false && !takesOpen) continue;
         let takeRow = 0;
-        if (r.takeGroup != null) {
+        if (r.takeGroup != null && r.takeActive === false) {
           const key = String(r.takeGroup);
           const n = regionTakeRows.get(key) || 0;
           regionTakeRows.set(key, n + 1);
           takeRow = n;
         }
-        lane.appendChild(regionEl(t, r, takeRow));
+        lane.appendChild(regionEl(t, r, takeRow, takeRowH));
       }
       if (t.automationVisible) lane.appendChild(renderAutomationLayer(t, width, viewA, viewB));
       lanes.appendChild(lane);
@@ -1485,10 +1503,15 @@ export const DAW = (() => {
     syncStatus();
   }
 
+  let pointersDown = 0;     // live pointer gestures anywhere in the studio
   function scheduleTimelineRefresh() {
     if (timelineRefreshFrame) return;
     timelineRefreshFrame = requestAnimationFrame(() => {
       timelineRefreshFrame = 0;
+      // NEVER rebuild the timeline DOM mid-pointer-gesture: a follow-scroll
+      // rebuild would destroy the captured marker/point/region element and
+      // kill the drag. Re-queue until the gesture ends.
+      if (pointersDown > 0) { scheduleTimelineRefresh(); return; }
       renderTimeline();
     });
   }
@@ -1581,6 +1604,9 @@ export const DAW = (() => {
       beginMarkerRename(marker, button);
     });
     button.addEventListener("keydown", (e) => {
+      // The rename <input> lives INSIDE this button — its keys must never
+      // reach here (Backspace while typing would delete the marker).
+      if (e.target !== button) return;
       if (e.key === "F2" || e.key === "Enter") {
         e.preventDefault(); beginMarkerRename(marker, button);
       } else if (e.key === "Delete" || e.key === "Backspace") {
@@ -1606,6 +1632,7 @@ export const DAW = (() => {
       renderTimeline();
     };
     input.addEventListener("keydown", (e) => {
+      e.stopPropagation();   // typing must not trigger marker/studio shortcuts
       if (e.key === "Enter") { e.preventDefault(); input.blur(); }
       if (e.key === "Escape") { e.preventDefault(); input.value = marker.name; input.blur(); }
     });
@@ -1625,13 +1652,14 @@ export const DAW = (() => {
     return true;
   }
 
-  function regionEl(t, r, takeRow = 0) {
+  function regionEl(t, r, takeRow = 0, takeRowH = 13) {
     const isTake = r.takeGroup != null;
     const isInactiveTake = isTake && r.takeActive === false;
     const d = el("div", "daw-region" + (selHas(r.id) ? " sel" : "")
       + (t.kind === "audio" ? " audio" : "")
       + (isTake ? " is-take" : "")
-      + (isInactiveTake ? " take-alt" : " take-active"));
+      + (isInactiveTake ? " take-alt" : " take-active")
+      + (isInactiveTake && takeRowH < 11 ? " thin-take" : ""));
     d.dataset.region = r.id;
     d.tabIndex = 0;
     d.setAttribute("role", "group");
@@ -1643,7 +1671,7 @@ export const DAW = (() => {
     const cv = el("canvas", "daw-region-cv");
     d.append(label, cv, el("div", "daw-region-edge left"), el("div", "daw-region-edge right"));
     if (isTake) {
-      d.style.setProperty("--take-row", String(Math.max(0, takeRow - 1) % 2));
+      d.style.setProperty("--take-row", String(Math.max(0, takeRow)));
       const takeButton = el("button", "daw-take-use", isInactiveTake ? `USE ${r.takeNo || ""}` : `TAKE ${r.takeNo || ""}`);
       takeButton.type = "button";
       takeButton.setAttribute("aria-label", isInactiveTake ? `Use take ${r.takeNo}` : `Active take ${r.takeNo}`);
@@ -1790,17 +1818,27 @@ export const DAW = (() => {
         if (e.key === "Delete" || e.key === "Backspace") {
           e.preventDefault(); e.stopPropagation(); pushState();
           points.splice(points.indexOf(point), 1);
-        } else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
-          e.preventDefault(); e.stopPropagation(); pushStateGesture(`automation:${track.id}:${point.id}`);
-          if (e.key === "ArrowLeft") point.b = Math.max(0, point.b - gridStep());
-          if (e.key === "ArrowRight") point.b += gridStep();
-          const dv = (spec.max - spec.min) / (e.shiftKey ? 10 : 50);
-          if (e.key === "ArrowUp") point.v = Math.min(spec.max, point.v + dv);
-          if (e.key === "ArrowDown") point.v = Math.max(spec.min, point.v - dv);
-        } else return;
+          points.sort((a, b) => a.b - b.b);
+          engine?.refreshMixParams?.();
+          renderTimeline(); save();     // the element must go away — rebuild
+          return;
+        }
+        if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+        e.preventDefault(); e.stopPropagation();
+        pushStateGesture(`automation:${track.id}:${point.id}`);
+        if (e.key === "ArrowLeft") point.b = Math.max(0, point.b - gridStep());
+        if (e.key === "ArrowRight") point.b += gridStep();
+        const dv = (spec.max - spec.min) / (e.shiftKey ? 10 : 50);
+        if (e.key === "ArrowUp") point.v = Math.min(spec.max, point.v + dv);
+        if (e.key === "ArrowDown") point.v = Math.max(spec.min, point.v - dv);
+        // Update in place, mirroring the drag path — renderTimeline here would
+        // destroy the focused circle and drop focus to <body> after one press.
         points.sort((a, b) => a.b - b.b);
+        circle.setAttribute("cx", String(point.b * pxPerBeat));
+        circle.setAttribute("cy", String(yFor(point.v)));
+        updateLabel(); paintPath();
         engine?.refreshMixParams?.();
-        renderTimeline(); save();
+        save();
       });
       svg.appendChild(circle);
     }
@@ -2159,7 +2197,10 @@ export const DAW = (() => {
         const picked = [];
         song.tracks.forEach((t, i) => {
           if (i < r0 || i > r1) return;
+          const takesOpen = song.view.openTakeTrackIds.includes(t.id);
           for (const reg of t.regions || []) {
+            // Never select what renderTimeline would not draw.
+            if (reg.takeGroup != null && reg.takeActive === false && !takesOpen) continue;
             if (reg.start < b1 && reg.start + reg.len > b0) picked.push({ trackId: t.id, regionId: reg.id });
           }
         });
@@ -2335,10 +2376,15 @@ export const DAW = (() => {
     const items = selectedRegions();
     if (!items.length) return;
     pushState();
+    const touchedTracks = new Set();
     for (const it of items) {
       it.track.regions = it.track.regions.filter((x) => x !== it.region);
       if (editRegion === it.region) closeEditor();
+      touchedTracks.add(it.track);
     }
+    // Deleting the ACTIVE take must promote a survivor, or the whole group
+    // goes silent (the engine skips takeActive === false regions).
+    for (const track of touchedTracks) normalizeTakeGroups(track);
     sel = [];
     renderTimeline(); save();
     _toast(items.length > 1 ? `${items.length} regions deleted — Ctrl+Z to undo.` : "Region deleted — Ctrl+Z to undo.");
@@ -2723,31 +2769,59 @@ export const DAW = (() => {
     return Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
   }
 
+  /** Meter node registry — rebuilt lazily; per-frame querySelectorAll is not
+   *  acceptable inside rafLoop. Any render that replaces meter DOM must set
+   *  meterEls = null (renderMixer does). */
+  let meterEls = null;
+  function collectMeterEls() {
+    const entry = (meter) => ({
+      meter,
+      bar: meter.querySelector("i"),
+      vertical: meter.classList.contains("daw-channel-meter"),
+      lastPct: -1,
+      lastClip: false,
+    });
+    meterEls = {
+      tracks: [...root.querySelectorAll("[data-meter-track]")].map((m) => ({ ...entry(m), id: +m.dataset.meterTrack })),
+      masters: [...root.querySelectorAll("[data-meter-master]")].map(entry),
+      legacy: root.querySelector("#daw-meter i"),
+      lastLegacyPct: -1,
+    };
+  }
   function paintMeters() {
     if (!root || !engine) return;
+    // Nothing to paint while the studio view itself is hidden.
+    if (!document.body.classList.contains("view-studio")) return;
+    if (!meterEls) collectMeterEls();
     const snapshot = engine.meterSnapshot?.();
     const fallback = snapshot ? 0 : (engine.masterLevel?.() || 0);
     const tracks = snapshot?.tracks;
-    root.querySelectorAll("[data-meter-track]").forEach((meter) => {
-      const id = +meter.dataset.meterTrack;
-      const level = tracks instanceof Map ? tracks.get(id) : tracks?.[id];
-      const pct = meterPercent(level);
-      const bar = meter.querySelector("i");
-      if (bar) {
-        if (meter.classList.contains("daw-channel-meter")) bar.style.height = pct + "%";
-        else bar.style.width = pct + "%";
+    const apply = (e, level) => {
+      const pct = Math.round(meterPercent(level) * 2) / 2;
+      if (e.bar && pct !== e.lastPct) {
+        if (e.vertical) e.bar.style.height = pct + "%";
+        else e.bar.style.width = pct + "%";
+        e.lastPct = pct;
       }
-      meter.classList.toggle("clip", (+level?.peak || 0) >= 0.995);
-    });
-    root.querySelectorAll("[data-meter-master]").forEach((meter) => {
-      const level = snapshot?.master ?? fallback;
-      const pct = meterPercent(level);
-      const bar = meter.querySelector("i");
-      if (bar) bar.style.height = pct + "%";
-      meter.classList.toggle("clip", (+level?.peak || +level || 0) >= 0.995);
-    });
-    const legacy = root.querySelector("#daw-meter i");
-    if (legacy) legacy.style.width = meterPercent(snapshot?.master ?? fallback) + "%";
+      const clip = (+level?.peak || +level || 0) >= 0.995;
+      if (clip !== e.lastClip) {
+        e.meter.classList.toggle("clip", clip);
+        e.lastClip = clip;
+      }
+    };
+    for (const e of meterEls.tracks) {
+      if (!e.meter.isConnected) { meterEls = null; return; }
+      apply(e, tracks instanceof Map ? tracks.get(e.id) : tracks?.[e.id]);
+    }
+    for (const e of meterEls.masters) apply(e, snapshot?.master ?? fallback);
+    if (meterEls.legacy) {
+      if (!meterEls.legacy.isConnected) { meterEls = null; return; }
+      const pct = Math.round(meterPercent(snapshot?.master ?? fallback) * 2) / 2;
+      if (pct !== meterEls.lastLegacyPct) {
+        meterEls.legacy.style.width = pct + "%";
+        meterEls.lastLegacyPct = pct;
+      }
+    }
   }
 
   /* ---------------- recording ---------------- */
@@ -2871,6 +2945,7 @@ export const DAW = (() => {
       if (take.loop) registerLoopTake(t, newest);
       sel = [{ trackId: t.id, regionId: newest.id }];
     }
+    renderHeads();   // the TAKES chip lives on the track head
     renderTimeline(); save();
     if (stored) {
       _toast("Take captured", { severity: "ok" });
@@ -3021,7 +3096,12 @@ export const DAW = (() => {
     if ((e.ctrlKey || e.metaKey) && e.code === "KeyV") { e.preventDefault(); e.stopPropagation(); pasteClipboard(); return; }
     if ((e.ctrlKey || e.metaKey) && e.code === "KeyA") {
       e.preventDefault(); e.stopPropagation();
-      sel = song.tracks.flatMap((t) => (t.regions || []).map((r) => ({ trackId: t.id, regionId: r.id })));
+      sel = song.tracks.flatMap((t) => {
+        const takesOpen = song.view.openTakeTrackIds.includes(t.id);
+        return (t.regions || [])
+          .filter((r) => !(r.takeGroup != null && r.takeActive === false && !takesOpen))
+          .map((r) => ({ trackId: t.id, regionId: r.id }));
+      });
       syncSelClasses();
       return;
     }
@@ -3072,7 +3152,10 @@ export const DAW = (() => {
       // must never delete the arrangement behind them.
       if (e.target.closest?.(".daw-roll2-note, .daw-automation-point, button, a[href], [role='button']")) return;
       e.stopPropagation();
-      if (!deleteSelectedMarker()) deleteSelected();
+      // A live region selection wins over a marker clicked minutes ago —
+      // otherwise Ctrl+A → Delete surprises by removing the stale marker.
+      if (sel.length) deleteSelected();
+      else if (!deleteSelectedMarker()) deleteSelected();
       return;
     }
     if (e.code === "Escape") {
@@ -3859,6 +3942,13 @@ export const DAW = (() => {
   function renderMixer() {
     const p = el_.mixer;
     if (!p) return;
+    // A rebuild must not cost the user their place: keep the horizontal
+    // scroll position and, when a control had focus, refocus its replacement.
+    const prevBody = p.querySelector(".daw-mixer-body");
+    const prevScroll = prevBody?.scrollLeft ?? 0;
+    const focusKey = document.activeElement?.closest?.(".daw-mixer")
+      ? document.activeElement.dataset?.focusKey
+      : null;
     p.innerHTML = "";
     const head = el("div", "daw-panel-head");
     head.append(el("span", "daw-panel-title", "MIXER"), el("span", "daw-mixer-note", "Post-fader shared sends · DAW master → safety limiter"));
@@ -3873,6 +3963,9 @@ export const DAW = (() => {
       mixerMasterStrip(),
     );
     p.append(head, body);
+    body.scrollLeft = prevScroll;
+    if (focusKey) p.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus();
+    meterEls = null;   // meter nodes were just replaced
   }
 
   function mixerTrackStrip(track) {
@@ -3890,6 +3983,10 @@ export const DAW = (() => {
       b.type = "button";
       b.classList.toggle("active", !!pressed);
       b.setAttribute("aria-pressed", pressed ? "true" : "false");
+      // Without this, pressing M/S/FX on an INACTIVE strip bubbles pointerdown
+      // to the strip → setActiveTrack → renderMixer rebuild mid-press, and the
+      // detached button never receives its click (first press does nothing).
+      b.addEventListener("pointerdown", (e) => e.stopPropagation());
       b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
       return b;
     };
@@ -3902,27 +3999,29 @@ export const DAW = (() => {
     );
     const fader = mixerSlider("Fader", track.gain, 0, 1.4, 0.01, (value) => {
       track.gain = value; engine.refreshMixParams?.() || engine.refreshTrackParams();
-    }, true);
+    }, true, `t${track.id}`);
     const pan = mixerSlider("Pan", track.pan, -1, 1, 0.01, (value) => {
       track.pan = value; engine.refreshMixParams?.() || engine.refreshTrackParams();
-    });
+    }, false, `t${track.id}`);
     const reverb = mixerSlider("Verb", track.sends.reverb, 0, 1, 0.01, (value) => {
       track.sends.reverb = value; engine.refreshMixParams?.() || engine.refreshTrackParams();
-    });
+    }, false, `t${track.id}`);
     const delay = mixerSlider("Delay", track.sends.delay, 0, 1, 0.01, (value) => {
       track.sends.delay = value; engine.refreshMixParams?.() || engine.refreshTrackParams();
-    });
+    }, false, `t${track.id}`);
     strip.append(name, meter, fader, pan, reverb, delay, buttons);
     return strip;
   }
 
-  function mixerSlider(label, value, min, max, step, set, vertical = false) {
+  function mixerSlider(label, value, min, max, step, set, vertical = false, id = "") {
+    const gestureKey = `mixer:${id}:${label}`;
     const wrap = el("label", `daw-mixer-control${vertical ? " vertical" : ""}`);
     const title = el("span", null, label);
     const input = el("input");
     input.type = "range";
     input.min = min; input.max = max; input.step = step; input.value = value;
     input.setAttribute("aria-label", label);
+    input.dataset.focusKey = gestureKey;
     const output = el("output");
     const paint = () => {
       const v = +input.value;
@@ -3938,13 +4037,23 @@ export const DAW = (() => {
               ? fmtHz(v)
           : `${Math.round(v * 100)}%`;
     };
-    let pushed = false;
-    input.addEventListener("pointerdown", (e) => { e.stopPropagation(); pushState(); pushed = true; });
+    // The snapshot is DEFERRED to the first input event: a bare click on the
+    // thumb must not wipe the redo stack with a no-op snapshot. At that first
+    // input the song has not been mutated yet (set() below does that), so the
+    // snapshot is still pre-mutation.
+    let pushed = false, pending = false;
+    input.addEventListener("pointerdown", (e) => { e.stopPropagation(); pending = true; });
+    const endGesture = () => { pending = false; };
+    input.addEventListener("pointerup", endGesture);
+    input.addEventListener("pointercancel", endGesture);
     input.addEventListener("keydown", (e) => {
-      if (/^(Arrow|Home$|End$|Page)/.test(e.key)) pushStateGesture(`mixer:${label}`);
+      if (/^(Arrow|Home$|End$|Page)/.test(e.key)) pushStateGesture(gestureKey);
     });
-    input.addEventListener("input", () => { set(+input.value); paint(); });
-    input.addEventListener("change", () => { if (!pushed) pushStateGesture(`mixer:${label}`); pushed = false; save(); });
+    input.addEventListener("input", () => {
+      if (pending) { pushState(); pending = false; pushed = true; }
+      set(+input.value); paint();
+    });
+    input.addEventListener("change", () => { if (!pushed) pushStateGesture(gestureKey); pushed = false; save(); });
     paint();
     wrap.append(title, input, output);
     return wrap;
@@ -3958,16 +4067,16 @@ export const DAW = (() => {
     on.classList.toggle("active", bus.on !== false);
     on.setAttribute("aria-pressed", bus.on !== false ? "true" : "false");
     on.addEventListener("click", () => { pushState(); bus.on = bus.on === false; refresh(); renderMixer(); save(); });
-    strip.append(title, mixerSlider("Fader", bus[key] ?? 1, 0, 1.4, 0.01, (v) => { bus[key] = v; refresh(); }, true));
+    strip.append(title, mixerSlider("Fader", bus[key] ?? 1, 0, 1.4, 0.01, (v) => { bus[key] = v; refresh(); }, true, `bus:${name}`));
     if (name === "REVERB") {
       strip.append(
-        mixerSlider("Size", bus.size ?? 0.4, 0, 1, 0.01, (v) => { bus.size = v; queueReverbRebuild(); refresh(); }),
-        mixerSlider("Damp", bus.damp ?? 0.5, 0, 1, 0.01, (v) => { bus.damp = v; queueReverbRebuild(); refresh(); }),
+        mixerSlider("Size", bus.size ?? 0.4, 0, 1, 0.01, (v) => { bus.size = v; queueReverbRebuild(); refresh(); }, false, `bus:${name}`),
+        mixerSlider("Damp", bus.damp ?? 0.5, 0, 1, 0.01, (v) => { bus.damp = v; queueReverbRebuild(); refresh(); }, false, `bus:${name}`),
       );
     } else {
       strip.append(
-        mixerSlider("Time", bus.time ?? 0.25, 0.0625, 2, 0.0625, (v) => { bus.time = v; refresh(); }),
-        mixerSlider("Feedback", bus.feedback ?? 0.3, 0, 0.88, 0.01, (v) => { bus.feedback = v; refresh(); }),
+        mixerSlider("Time", bus.time ?? 0.25, 0.0625, 2, 0.0625, (v) => { bus.time = v; refresh(); }, false, `bus:${name}`),
+        mixerSlider("Feedback", bus.feedback ?? 0.3, 0, 0.72, 0.01, (v) => { bus.feedback = v; refresh(); }, false, `bus:${name}`),
       );
     }
     strip.append(on);
@@ -4000,10 +4109,10 @@ export const DAW = (() => {
     strip.append(
       masterHead,
       meter,
-      mixerSlider("Fader", master.gain, 0, 1.4, 0.01, (v) => { master.gain = v; engine?.refreshMixParams?.(); }, true),
-      mixerSlider("Low EQ", master.eq.low, -18, 18, 0.5, (v) => { master.eq.low = v; engine?.refreshMixParams?.(); }),
-      mixerSlider("Mid EQ", master.eq.mid, -18, 18, 0.5, (v) => { master.eq.mid = v; engine?.refreshMixParams?.(); }),
-      mixerSlider("High EQ", master.eq.high, -18, 18, 0.5, (v) => { master.eq.high = v; engine?.refreshMixParams?.(); }),
+      mixerSlider("Fader", master.gain, 0, 1.4, 0.01, (v) => { master.gain = v; engine?.refreshMixParams?.(); }, true, "master"),
+      mixerSlider("Low EQ", master.eq.low, -18, 18, 0.5, (v) => { master.eq.low = v; engine?.refreshMixParams?.(); }, false, "master"),
+      mixerSlider("Mid EQ", master.eq.mid, -18, 18, 0.5, (v) => { master.eq.mid = v; engine?.refreshMixParams?.(); }, false, "master"),
+      mixerSlider("High EQ", master.eq.high, -18, 18, 0.5, (v) => { master.eq.high = v; engine?.refreshMixParams?.(); }, false, "master"),
       eqToggle,
     );
     return strip;
@@ -4035,11 +4144,20 @@ export const DAW = (() => {
     const fader = el("input", "daw-fader");
     fader.type = "range"; fader.min = 0; fader.max = 1.4; fader.step = 0.01; fader.value = t.gain;
     fader.setAttribute("aria-label", `${t.name} volume`);
-    fader.addEventListener("pointerdown", pushState);
+    // Snapshot deferred to the first input — a bare thumb click must not
+    // wipe the redo stack with a no-op undo entry.
+    let faderPending = false;
+    fader.addEventListener("pointerdown", () => { faderPending = true; });
+    const faderEnd = () => { faderPending = false; };
+    fader.addEventListener("pointerup", faderEnd);
+    fader.addEventListener("pointercancel", faderEnd);
     fader.addEventListener("keydown", (e) => {
       if (/^(Arrow|Home$|End$|Page)/.test(e.key)) pushStateGesture("fader:" + t.id);
     });
-    fader.addEventListener("input", () => { t.gain = +fader.value; engine.refreshTrackParams(); save(); });
+    fader.addEventListener("input", () => {
+      if (faderPending) { pushState(); faderPending = false; }
+      t.gain = +fader.value; engine.refreshTrackParams(); save();
+    });
     const meter = el("div", "daw-meter"); meter.id = "daw-meter"; meter.appendChild(el("i"));
     const mrow = el("div", "daw-mix-btns");
     mrow.append(
@@ -4239,7 +4357,7 @@ export const DAW = (() => {
         ? song.markers.map((m) => m.beat)
         : song.tracks.flatMap((t) => t.regions.map((r) => r.start));
       const cues = [...new Set(cueBeats)].sort((a, b) => a - b)
-        .slice(0, 8).map((b) => (b * (60 / song.bpm)) / buf.duration);
+        .slice(0, 8).map((b) => (RENDER_LEAD_SEC + b * (60 / song.bpm)) / buf.duration);
       _onUse(buf, `daw · ${song.bpm} BPM`, deck, song.bpm, cues);
       _toast(`Loaded onto Deck ${deck}.`, { severity: "ok" });
     } catch (e) {
@@ -4513,6 +4631,10 @@ export const DAW = (() => {
     renderAll();
     await loadClips();
 
+    root.addEventListener("pointerdown", () => { pointersDown++; }, true);
+    const gestureEnd = () => { pointersDown = Math.max(0, pointersDown - 1); };
+    window.addEventListener("pointerup", gestureEnd, true);
+    window.addEventListener("pointercancel", gestureEnd, true);
     window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("keyup", onKeyUp, true);
     window.addEventListener("resize", applyPanels);
