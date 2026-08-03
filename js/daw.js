@@ -1835,8 +1835,12 @@ export const DAW = (() => {
       const data = clip.getChannelData(0);
       const start = Math.floor((r.offset || 0) * clip.sampleRate);
       const sourceSpb = r.tempoMode === "repitch" ? 60 / (r.sourceBpm || song.bpm) : 60 / song.bpm;
-      const span = Math.min(data.length - start, Math.floor(r.len * sourceSpb * clip.sampleRate));
-      const step = Math.max(1, Math.floor(span / w));
+      // Map the FULL region span onto the canvas: where the clip runs out the
+      // engine goes silent, so the drawing must too — never stretch the audio.
+      const regionSamples = Math.max(1, Math.floor(r.len * sourceSpb * clip.sampleRate));
+      const available = Math.max(0, data.length - start);
+      const step = Math.max(1, Math.floor(regionSamples / w));
+      const audioEndX = Math.min(w, (available / regionSamples) * w);
       const rGain = Math.max(0.05, Math.min(2, r.gain ?? 1));
       g.beginPath();
       for (let x = 0; x < w; x++) {
@@ -1847,7 +1851,8 @@ export const DAW = (() => {
         g.moveTo(x, h / 2 - y); g.lineTo(x, h / 2 + y + 0.5);
       }
       g.stroke();
-      // Fade ramps: diagonal from silence to full at each faded end.
+      // Fade ramps. The fade-out anchors at the end of the AUDIBLE audio
+      // (audioRegionSlice clamps durationSec the same way), not the region edge.
       const fi = px(Math.max(0, Math.min(r.len, r.fadeIn || 0)));
       const fo = px(Math.max(0, Math.min(r.len, r.fadeOut || 0)));
       if (fi > 1 || fo > 1) {
@@ -1855,7 +1860,7 @@ export const DAW = (() => {
         g.lineWidth = 1.4;
         g.beginPath();
         if (fi > 1) { g.moveTo(0, h - 1); g.lineTo(fi, 1); }
-        if (fo > 1) { g.moveTo(w, h - 1); g.lineTo(w - fo, 1); }
+        if (fo > 1) { g.moveTo(audioEndX, h - 1); g.lineTo(Math.max(0, audioEndX - fo), 1); }
         g.stroke();
         g.lineWidth = 1;
       }
@@ -3008,7 +3013,7 @@ export const DAW = (() => {
     // runs in capture, so it must yield before the target handler sees Ctrl+A.
     if ((e.ctrlKey || e.metaKey) && e.code === "KeyA" && e.target.closest?.(".daw-roll2-note")) return;
     // Studio-global shortcuts.
-    if ((e.ctrlKey || e.metaKey) && e.code === "KeyZ") { e.preventDefault(); e.stopPropagation(); undo(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.code === "KeyZ" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); undo(); return; }
     if ((e.ctrlKey || e.metaKey) && (e.code === "KeyY" || (e.shiftKey && e.code === "KeyZ"))) { e.preventDefault(); e.stopPropagation(); redo(); return; }
     if ((e.ctrlKey || e.metaKey) && e.code === "KeyD") { e.preventDefault(); e.stopPropagation(); duplicateSelected(); return; }
     if ((e.ctrlKey || e.metaKey) && e.code === "KeyC") { e.preventDefault(); e.stopPropagation(); copySelected(); return; }
@@ -3769,8 +3774,13 @@ export const DAW = (() => {
     const data = clip.getChannelData(0);
     const start = Math.floor((r.offset || 0) * clip.sampleRate);
     const sourceSpb = r.tempoMode === "repitch" ? 60 / (r.sourceBpm || song.bpm) : 60 / song.bpm;
-    const span = Math.max(1, Math.min(data.length - start, Math.floor(r.len * sourceSpb * clip.sampleRate)));
-    const step = Math.max(1, Math.floor(span / w));
+    // Full region span on the canvas — silence past the clip end, no stretch;
+    // fade-out anchored where the audio actually ends (audioRegionSlice clamps
+    // durationSec to the available samples the same way).
+    const regionSamples = Math.max(1, Math.floor(r.len * sourceSpb * clip.sampleRate));
+    const available = Math.max(0, data.length - start);
+    const step = Math.max(1, Math.floor(regionSamples / w));
+    const audioEndX = Math.min(w, (available / regionSamples) * w);
     const gain = Math.max(0.05, Math.min(2, r.gain ?? 1));
     const fiX = (Math.max(0, r.fadeIn || 0) / r.len) * w;
     const foX = (Math.max(0, r.fadeOut || 0) / r.len) * w;
@@ -3783,7 +3793,7 @@ export const DAW = (() => {
       // show the fade's effect on the drawn envelope
       let env = 1;
       if (fiX > 0 && x < fiX) env = x / fiX;
-      if (foX > 0 && x > w - foX) env = Math.min(env, (w - x) / foX);
+      if (foX > 0 && x > audioEndX - foX) env = Math.min(env, Math.max(0, (audioEndX - x) / foX));
       const y = Math.min(1, peak * gain * env) * (h / 2 - 3);
       g.moveTo(x, h / 2 - y);
       g.lineTo(x, h / 2 + y + 0.5);
@@ -3794,7 +3804,7 @@ export const DAW = (() => {
       g.lineWidth = 1.4;
       g.beginPath();
       if (fiX > 1) { g.moveTo(0, h - 2); g.lineTo(fiX, 2); }
-      if (foX > 1) { g.moveTo(w, h - 2); g.lineTo(w - foX, 2); }
+      if (foX > 1) { g.moveTo(audioEndX, h - 2); g.lineTo(Math.max(0, audioEndX - foX), 2); }
       g.stroke();
     }
   }
