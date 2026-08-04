@@ -64,6 +64,7 @@ export const DAW = (() => {
   let _toast = () => {};
   let _onUse = () => {};
   let _getSampler = () => null;
+  let _refreshSamplerPad = null;   // app-side pad re-render after setBuffer
 
   /* ---------------- constants ---------------- */
   const STORE_KEY = "sxratch.daw";
@@ -2721,9 +2722,12 @@ export const DAW = (() => {
       const end = songEnd();
       const buf = await engine.renderOffline(0, end, { onlyTrackId: tr.id });
       if (!buf) { _toast("Could not render track audio", { severity: "error" }); return; }
-      const padId = (tr.id % 8) + 1;
-      sampler.setPadSample(padId, buf, tr.name);
-      _toast(`Loaded ${tr.name} onto Sampler Pad ${padId}`, { severity: "ok" });
+      // Sampler API is setBuffer(slotIndex 0-based, buffer, name); slot by
+      // track POSITION so pad 1 is always the first track.
+      const slot = Math.max(0, song.tracks.indexOf(tr)) % 8;
+      sampler.setBuffer(slot, buf, `${tr.name} (bounce)`);
+      _refreshSamplerPad?.(slot);
+      _toast(`Loaded ${tr.name} onto Sampler Pad ${slot + 1}`, { severity: "ok" });
     } catch (e) {
       console.warn(e);
       _toast("Could not bounce track to sampler", { severity: "error" });
@@ -2766,7 +2770,7 @@ export const DAW = (() => {
 
   function updateLiveRecordingRegion() {
     const rec = engine.rec;
-    if (!rec || rec.kind !== "audio" || !rec.cap) {
+    if (!rec || (rec.kind === "audio" && !rec.cap)) {
       removeLiveRecordingRegion();
       return;
     }
@@ -2785,13 +2789,78 @@ export const DAW = (() => {
       lane.appendChild(liveRecEl);
     }
 
+    // MIDI loop takes pin to the loop range (notes land at wrapped positions);
+    // everything else grows with the playhead.
     const currentBeat = engine.beatNow();
-    const lenBeats = Math.max(0.1, currentBeat - rec.startBeat);
-    liveRecEl.style.left = (rec.startBeat * pxPerBeat) + "px";
+    let start, lenBeats;
+    if (rec.kind !== "audio" && rec.loop) {
+      start = rec.loop.a;
+      lenBeats = rec.loop.b - rec.loop.a;
+    } else {
+      start = rec.startBeat;
+      lenBeats = Math.max(0.1, currentBeat - rec.startBeat);
+    }
+    liveRecEl.style.left = (start * pxPerBeat) + "px";
     liveRecEl.style.width = Math.max(6, lenBeats * pxPerBeat) + "px";
 
     const cv = liveRecEl.querySelector(".daw-region-cv");
-    if (cv) drawLiveWaveform(cv, rec.cap.chunks, lenBeats);
+    if (!cv) return;
+    if (rec.kind === "audio") drawLiveWaveform(cv, rec.cap.chunks, lenBeats);
+    else drawLiveMidi(cv, rec, lenBeats, currentBeat);
+  }
+
+  /** Live paint of a MIDI/drum take: completed notes, plus held notes growing
+   *  under the playhead — the same picture the region will show when it lands. */
+  function drawLiveMidi(cv, rec, lenBeats, currentBeat) {
+    const w = Math.max(2, Math.round(lenBeats * pxPerBeat));
+    const h = PREVIEW_H;
+    const dpr = devicePixelRatio || 1;
+    if (cv.width !== w * dpr || cv.height !== h * dpr) {
+      cv.width = w * dpr;
+      cv.height = h * dpr;
+    }
+    const g = cv.getContext("2d");
+    if (!g) return;
+    g.save();
+    g.scale(dpr, dpr);
+    g.clearRect(0, 0, w, h);
+    const ink = getComputedStyle(cv.closest(".daw-lane") || cv.parentElement)?.getPropertyValue("--tc") || "#ff4081";
+    g.fillStyle = ink;
+    g.globalAlpha = 0.95;
+    const px = (b) => Math.max(0, Math.min(w, (b / lenBeats) * w));
+    // Recording-local "now": inside a loop, beatNow() already wraps.
+    const nowLocal = rec.loop
+      ? Math.max(0, currentBeat - rec.loop.a)
+      : Math.max(0, currentBeat - rec.startBeat);
+
+    // Drum hits: one dot per hit on its kit row.
+    for (const hit of rec.hits || []) {
+      const row = DRUM_KEYS.indexOf(hit.k);
+      if (row < 0) continue;
+      g.fillRect(px(hit.b), 2 + (row / DRUM_KEYS.length) * (h - 6), 2.5, 2.5);
+    }
+
+    // Melodic notes: completed + in-flight (held) ones.
+    const active = [...(rec.activeNotes?.values() || [])];
+    const all = [...(rec.notes || []), ...active];
+    if (!all.length) { g.restore(); return; }
+    let lo = 127, hi = 0;
+    for (const n of all) { lo = Math.min(lo, n.m); hi = Math.max(hi, n.m); }
+    const span = Math.max(12, hi - lo + 1);
+    const yFor = (m) => h - 3 - ((m - lo) / span) * (h - 6);
+    const bar = (b, d, m) => {
+      if (d <= 0) return;
+      g.fillRect(px(b), yFor(m), Math.max(2, px(b + d) - px(b) - 1), 2);
+    };
+    for (const n of rec.notes || []) bar(n.b, n.d || 0.1, n.m);
+    for (const n of active) {
+      // A held note grows from its start to "now"; if the loop wrapped while
+      // it is still down, it shows as tail + head segments.
+      const dur = nowLocal - n.b;
+      if (dur >= 0) bar(n.b, Math.max(0.05, dur), n.m);
+      else { bar(n.b, lenBeats - n.b, n.m); bar(0, Math.max(0.05, nowLocal), n.m); }
+    }
+    g.restore();
   }
 
   function removeLiveRecordingRegion() {
@@ -2861,7 +2930,7 @@ export const DAW = (() => {
       const tl = el_.tl;
       if (x < tl.scrollLeft || x > tl.scrollLeft + tl.clientWidth - 80) tl.scrollLeft = Math.max(0, x - 80);
     }
-    if (engine.recording && engine.rec && engine.rec.kind === "audio") {
+    if (engine.recording && engine.rec) {
       updateLiveRecordingRegion();
     } else {
       removeLiveRecordingRegion();
@@ -4695,6 +4764,7 @@ export const DAW = (() => {
     _toast = deps.toast || _toast;
     _onUse = deps.onUse || _onUse;
     _getSampler = deps.getSampler || _getSampler;
+    _refreshSamplerPad = deps.refreshSamplerPad || _refreshSamplerPad;
     root = document.getElementById("song-builder");
     root.replaceChildren(el("div", "daw-loading", "Loading Studio…"));
 
@@ -4792,7 +4862,7 @@ export const DAW = (() => {
     // Debug handle (same convention as window.sxratch on the deck side) —
     // used by tests/automation, harmless in production.
     loadMidiMap();
-    window.sxdaw = { get engine() { return engine; }, get song() { return song; }, get clips() { return clips; }, midi: (cc, v) => midiCC(cc, v) };
+    window.sxdaw = { get engine() { return engine; }, get song() { return song; }, get clips() { return clips; }, midi: (cc, v) => midiCC(cc, v), liveFrame: () => updateLiveRecordingRegion() };
     return true;
   }
 

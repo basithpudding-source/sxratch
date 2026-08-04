@@ -2208,6 +2208,7 @@ function showView(view) {
           showView("decks");
         },
         getSampler: () => sampler,
+        refreshSamplerPad: (i) => renderPad(i),
       });
       Promise.resolve(studioInit).then(() => DAW.maybeStartTour?.());
     }
