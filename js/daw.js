@@ -1149,7 +1149,13 @@ export const DAW = (() => {
       return;
     }
     if (id === "editor" && !editRegion) {
-      _toast("Double-click a region to edit it");
+      // No region open in the roll yet — open the selected one, so a plain
+      // "select region, hit EDITOR" flow works for recorded takes too.
+      const p = primarySel();
+      const track = p && trackById(p.trackId);
+      const region = p && regionById(track, p.regionId);
+      if (track && region) { openEditor(track, region); return; }
+      _toast("Select or double-click a region to edit it");
       return;
     }
     if (bottom.active === id) {
@@ -1199,8 +1205,9 @@ export const DAW = (() => {
       b.classList.toggle("active", active);
       b.setAttribute("aria-selected", active ? "true" : "false");
       if (b.dataset.panel === "editor") {
-        b.classList.toggle("is-disabled", !editRegion);
-        b.setAttribute("aria-disabled", editRegion ? "false" : "true");
+        const editable = !!editRegion || !!primarySel();
+        b.classList.toggle("is-disabled", !editable);
+        b.setAttribute("aria-disabled", editable ? "false" : "true");
       }
     });
     el_.kbToggle?.setAttribute("aria-pressed", bottom.keys ? "true" : "false");
@@ -1317,6 +1324,12 @@ export const DAW = (() => {
 
   function syncStatus() {
     if (!el_.status) return;
+    const edTab = el_.tabs?.querySelector('.daw-tab[data-panel="editor"]');
+    if (edTab) {
+      const editable = !!editRegion || !!primarySel();
+      edTab.classList.toggle("is-disabled", !editable);
+      edTab.setAttribute("aria-disabled", editable ? "false" : "true");
+    }
     el_.zoomRead.textContent = `ZOOM ${Math.round((pxPerBeat / 26) * 100)}%`;
     el_.snapSel.value = String(snapStep);
     el_.followBtn.classList.toggle("active", followPlayhead);
@@ -2130,7 +2143,10 @@ export const DAW = (() => {
       // NEVER rebuild the timeline mid-gesture: the pointer's target node
       // would be replaced under it, and if capture failed the rest of the
       // gesture dies with the detached element. Mutate in place instead.
-      if (tool === "draw") {
+      // The draw tool only DRAWS on empty lane space. A press on an existing
+      // region falls through to the select behavior (move/resize/edit) — the
+      // grab cursor the region shows must mean what it says.
+      if (tool === "draw" && !h.region) {
         if (h.track.kind === "audio") { _toast("Draw works on synth and drum tracks — record or import audio instead"); return; }
         pushState();
         const start = snap(h.beat);
