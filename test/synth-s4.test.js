@@ -219,9 +219,10 @@ test("randomPhaseHarmonics: deterministic", () => {
 
 /* ------------------- drum round-robin + band-limiting -------------------- */
 
-import { drumSampleData, DRUM_VARIANTS, chokeSchedule } from "../js/synth.js";
+import { drumSampleData, DRUM_VARIANTS, DRUM_KIT_IDS, chokeSchedule } from "../js/synth.js";
 
-const KITS = ["acoustic", "808", "electronic", "lofi", "bossa"];
+// Every implemented kit — new kits automatically inherit every gate below.
+const KITS = DRUM_KIT_IDS;
 
 /**
  * Spectral centroid over the AUDIBLE band, via a naive DFT.

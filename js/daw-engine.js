@@ -983,6 +983,7 @@ class SxCap extends AudioWorkletProcessor {
     super();
     this.bufs = [];
     this.len = 0;
+    this.startTime = -1;
     this.port.onmessage = (e) => {
       if (e.data === "flush") {
         this.flush();
@@ -1005,6 +1006,12 @@ class SxCap extends AudioWorkletProcessor {
       }
     }
     if (ch && ch.length && ch[0].length) {
+      if (this.startTime < 0) {
+        // Context time of the buffer's very first sample. Reported once so the
+        // main thread can anchor the take to the transport sample-accurately.
+        this.startTime = currentTime;
+        this.port.postMessage({ start: this.startTime });
+      }
       this.bufs.push(ch.map((c) => c.slice(0)));
       this.len += ch[0].length;
       if (this.len >= 8192) this.flush();
@@ -1031,6 +1038,10 @@ registerProcessor("sx-cap", SxCap);`;
     }
     const source = ctx.createMediaStreamSource(stream);
     const chunks = [];   // arrays of per-channel Float32Arrays
+    // Context time of the first captured sample (worklet-reported). Without it
+    // the take can only be positioned by ESTIMATE; with it the buffer can be
+    // anchored to the transport exactly.
+    const meta = { startCtxTime: null };
     let node = null, isWorklet = false;
     try {
       if (!capModuleReady) {
@@ -1047,6 +1058,7 @@ registerProcessor("sx-cap", SxCap);`;
         } else if (Array.isArray(e.data?.blocks)) {
           for (const blk of e.data.blocks) chunks.push(blk);
         }
+        if (typeof e.data?.start === "number") meta.startCtxTime = e.data.start;
         if (e.data?.flushed) flushResolve?.();
       };
       node.flush = () => new Promise((resolve) => {
@@ -1059,6 +1071,15 @@ registerProcessor("sx-cap", SxCap);`;
       // ScriptProcessor fallback (deprecated but universal).
       node = ctx.createScriptProcessor(4096, 2, 1);
       node.onaudioprocess = (e) => {
+        if (meta.startCtxTime == null) {
+          // playbackTime is when this block's OUTPUT plays; the input block was
+          // captured at least one buffer earlier, so subtract its duration to
+          // anchor the first captured sample.
+          const due = typeof e.playbackTime === "number" && e.playbackTime > 0
+            ? e.playbackTime
+            : ctx.currentTime;
+          meta.startCtxTime = due - e.inputBuffer.duration;
+        }
         const chs = [];
         for (let c = 0; c < e.inputBuffer.numberOfChannels; c++) chs.push(e.inputBuffer.getChannelData(c).slice(0));
         chunks.push(chs);
@@ -1080,7 +1101,7 @@ registerProcessor("sx-cap", SxCap);`;
       node.connect(sink);
       sink.connect(ctx.destination);
     }
-    return { stream, source, node, sink, chunks, isWorklet };
+    return { stream, source, node, sink, chunks, isWorklet, meta };
   }
 
   async function finishAudioRecording(cap) {
@@ -1106,6 +1127,40 @@ registerProcessor("sx-cap", SxCap);`;
     const out = c.outputLatency || 0.015;
     const cap = 0.045;
     return base + out + cap;
+  }
+
+  /** Time from scheduling a sound to it leaving the speakers. */
+  function outputLatencySec(c) {
+    return (c.baseLatency || 0.005) + (c.outputLatency || 0.015);
+  }
+
+  /** Time from sound at the mic to its samples entering the capture node. */
+  function inputLatencySec(cap) {
+    try {
+      const s = cap?.stream?.getAudioTracks?.()[0]?.getSettings?.();
+      const v = Number(s?.latency);
+      if (Number.isFinite(v) && v > 0 && v < 0.5) return v;
+    } catch {}
+    return 0.01; // typical device/driver input buffering when unreported
+  }
+
+  /**
+   * Seconds to trim from the front of a captured buffer so that the trimmed
+   * start lands exactly on the take's start beat.
+   *
+   * The capture node starts BEFORE the transport (worklet load, node connect,
+   * play()'s own 60 ms scheduling offset), so the buffer carries a pre-roll
+   * that used to reach playback as a constant "recorded late" drag. With the
+   * worklet-reported first-sample time and the transport anchor the pre-roll
+   * is measured, not guessed; the residual physical latency (hearing the click
+   * late + the mic pipeline) is added on top.
+   */
+  function recordedTrimSec(r) {
+    const capStart = r.cap?.meta?.startCtxTime;
+    if (typeof capStart === "number" && typeof r.anchorTime === "number") {
+      return Math.max(0, (r.anchorTime - capStart) + outputLatencySec(ctx) + inputLatencySec(r.cap));
+    }
+    return getRecordingLatencySec(ctx); // legacy estimate when unanchored
   }
 
   /**
@@ -1147,6 +1202,9 @@ registerProcessor("sx-cap", SxCap);`;
         const loop = lp?.on && lp.b > lp.a && startBeat >= lp.a && startBeat < lp.b ? { a: lp.a, b: lp.b } : null;
         rec = { kind: "audio", trackId: track.id, startBeat, startEngineBeat: startBeat, loop, cap };
         play(startBeat);
+        // play() just set the transport anchor: beat startBeat sounds at ctx
+        // time t0. Recording alignment measures the capture pre-roll from it.
+        rec.anchorTime = t0;
       } else {
         const startBeat = beatNow();
         const lp = song().loop;
@@ -1192,7 +1250,7 @@ registerProcessor("sx-cap", SxCap);`;
     if (r.kind === "audio") {
       const buffer = await finishAudioRecording(r.cap);
       if (!buffer || buffer.duration < 0.05) return null;
-      const lat = getRecordingLatencySec(ctx);
+      const lat = recordedTrimSec(r);
       return {
         kind: "audio",
         trackId: r.trackId,

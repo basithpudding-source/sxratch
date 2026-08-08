@@ -19,7 +19,7 @@
 // persisted to IndexedDB, so undo snapshots stay small.
 
 import { createDawEngine, DRUM_KEYS, RENDER_LEAD_SEC } from "./daw-engine.js";
-import { FACTORY_PATCHES } from "./synth.js";
+import { FACTORY_PATCHES, DRUM_KIT_IDS } from "./synth.js";
 import { bufferToWav } from "./wav.js";
 import { encodeMidi } from "./midiexport.js";
 import { readVersioned, readVersionedRecord, writeVersioned } from "./store.js";
@@ -128,6 +128,13 @@ export const DAW = (() => {
       brass_section: "Orchestral brass",
       supersaw_pad: "7-Voice supersaw pad",
       glass_keys: "Crystal glass keys",
+      harpsichord: "Baroque harpsichord",
+      harp: "Concert harp",
+      marimba: "Wooden marimba",
+      music_box: "Music box",
+      pipe_organ: "Church pipe organ",
+      accordion: "Musette accordion",
+      synth_strings: "80s string machine",
     },
     bass: {
       electric: "Vintage precision bass",
@@ -138,6 +145,10 @@ export const DAW = (() => {
       slap_bass: "Funk slap bass",
       wobble_bass: "Dubstep wobble bass",
       fm_lately: "FM Lately bass",
+      picked_bass: "Picked rock bass",
+      reese_bass: "DnB reese bass",
+      fretless_bass: "Fretless mwah bass",
+      synthwave_bass: "80s square chug bass",
     },
     lead: {
       synth: "Classic saw lead",
@@ -149,6 +160,11 @@ export const DAW = (() => {
       soft_lead: "Warm solo lead",
       brass_lead: "Synth brass lead",
       whistle: "Synth whistle",
+      trance_pluck: "Trance pluck stab",
+      violin: "Solo violin",
+      harmonica: "Blues harmonica",
+      theremin: "Theremin sine",
+      vocal_lead: "Talky wah lead",
     },
     chorus: {
       choir_vox: "Vocal choir ensemble",
@@ -156,6 +172,10 @@ export const DAW = (() => {
       ambient_space: "Cinematic space sweep",
       celestial: "Celestial bell choir",
       lush_strings: "Chamber string ensemble",
+      dark_pad: "Dark analog pad",
+      shimmer_bells: "Shimmer bell pad",
+      breath_pad: "Airy breath pad",
+      brass_pad: "Cinematic brass pad",
     },
   };
   const TRACK_COLORS = ["var(--sx-lane-bass)", "var(--sx-lane-chords)", "var(--sx-brand-b)", "var(--sx-hot)", "var(--sx-lane-drums)", "var(--sx-purple)"];
@@ -207,6 +227,7 @@ export const DAW = (() => {
   let tool = "select";
   let pxPerBeat = 26;
   let snapStep = DEFAULT_SNAP;
+  let snapOn = true;                       // magnet toggle — off = free fine positioning
   let followPlayhead = true;
   let octave = 4;                          // virtual keyboard base octave (C4=60)
   // One bottom panel at a time (editor | keys | chain | null=collapsed) with a
@@ -242,10 +263,36 @@ export const DAW = (() => {
     ...song.tracks.flatMap((t) => Object.values(t.automation || {}).flatMap((points) => (points || []).map((p) => p.b))),
     ...(song.markers || []).map((m) => m.beat)
   );
-  const snap = (b, mode = "round") => quantizeBeat(b, snapStep, mode);
+  // With the magnet off, every gesture keeps its raw (pixel-fine) position —
+  // quantizeBeat with step 0 only clamps to >= 0 without touching the value.
+  const snap = (b, mode = "round") => quantizeBeat(b, snapOn ? snapStep : 0, mode);
   const snapBar = (b) => Math.round(b / beatsPerBar()) * beatsPerBar();
+  const snapActive = () => snapOn && snapStep > 0;
   const gridStep = () => (snapStep > 0 ? snapStep : DEFAULT_SNAP);  // for default lengths
-  const minLen = () => (snapStep > 0 ? snapStep : MIN_SNAP);        // resize/draw floor
+  const minLen = () => (snapActive() ? snapStep : MIN_SNAP);        // resize/draw floor
+
+  function setSnapOn(on, { quiet = false } = {}) {
+    snapOn = !!on;
+    if (song?.view) song.view.snapOn = snapOn;
+    // Arming the magnet while the grid dropdown says "Off" would light the
+    // button with nothing to snap to — restore the default grid alongside it.
+    if (snapOn && !(snapStep > 0)) {
+      snapStep = DEFAULT_SNAP;
+      if (song?.view) song.view.snap = snapStep;
+      if (el_.snapSel) el_.snapSel.value = String(snapStep);
+    }
+    syncSnapButton();
+    save();
+    if (!quiet) {
+      _toast(snapOn ? "Snap to grid ON" : "Snap OFF — drag for fine free positioning", { severity: "ok" });
+    }
+  }
+
+  function syncSnapButton() {
+    if (!el_.snapBtn) return;
+    el_.snapBtn.classList.toggle("active", snapOn);
+    el_.snapBtn.setAttribute("aria-pressed", snapOn ? "true" : "false");
+  }
 
   /* ---------------- region selection (multi) ---------------- */
   const selHas = (regionId) => sel.some((s) => s.regionId === regionId);
@@ -321,6 +368,11 @@ export const DAW = (() => {
   function afterHistoryJump() {
     _lastGesture.key = null;   // a wheel right after undo must snapshot again
     idc = Math.max(idc, maxSongId(song) + 1);
+    // The restored/imported song carries its own view state — re-sync the
+    // module variables so the magnet and grid dropdown never contradict it.
+    snapStep = nearestSnap(song.view?.snap);
+    snapOn = song.view?.snapOn !== false;
+    syncSnapButton();
     if (!trackById(activeTrackId)) activeTrackId = song.tracks[0]?.id ?? null;
     pruneSelection();
     rollSel = new Set();       // note identities do not survive the JSON round trip
@@ -417,7 +469,7 @@ export const DAW = (() => {
     };
     if (kind === "midi") { base.family = opts.family || "chord"; base.sound = opts.sound || Object.keys(FACTORY_PATCHES[base.family])[0]; base.patch = {}; }
     if (kind === "drums") base.kit = opts.kit || "acoustic";
-    if (kind === "audio") base.inputId = null;
+    if (kind === "audio") { base.inputId = null; base.recOffsetMs = 0; }
     return base;
   }
   function makeRegion(track, start, len, opts = {}) {
@@ -444,7 +496,7 @@ export const DAW = (() => {
       master: DEFAULT_MASTER(),
       buses: DEFAULT_BUSES(),
       markers: [],
-      view: { snap: DEFAULT_SNAP, zoom: 26, follow: true, openTakeTrackIds: [] },
+      view: { snap: DEFAULT_SNAP, snapOn: true, zoom: 26, follow: true, openTakeTrackIds: [] },
       tracks: [],
     };
     return s;
@@ -464,6 +516,7 @@ export const DAW = (() => {
     sg.loop.b = Math.max(sg.loop.a + MIN_SNAP, +sg.loop.b || sg.loop.a + 16);
     sg.view = {
       snap: nearestSnap(sg.view?.snap),
+      snapOn: sg.view?.snapOn !== false,
       zoom: Math.max(6, Math.min(160, +sg.view?.zoom || 26)),
       follow: sg.view?.follow !== false,
       openTakeTrackIds: Array.isArray(sg.view?.openTakeTrackIds)
@@ -503,7 +556,8 @@ export const DAW = (() => {
         if (!FACTORY_PATCHES[t.family]) t.family = "chord";
         if (!FACTORY_PATCHES[t.family][t.sound]) t.sound = Object.keys(FACTORY_PATCHES[t.family])[0];
       }
-      if (t.kind === "drums" && !KIT_LABELS[t.kit]) t.kit = "acoustic";
+      if (t.kind === "drums" && !DRUM_KIT_IDS.includes(t.kit)) t.kit = "acoustic";
+      if (t.kind === "audio") t.recOffsetMs = Math.round(clampFinite(t.recOffsetMs, -150, 150, 0));
       t.id = +t.id || idc++;
       t.name = String(t.name || t.kind).slice(0, 24);
       t.color = (+t.color || 0) % TRACK_COLORS.length;
@@ -886,6 +940,14 @@ export const DAW = (() => {
       tools.appendChild(b);
     }
 
+    // Magnet: one-click snap on/off. The SNAP dropdown keeps choosing the grid
+    // SIZE; this toggles whether moves/resizes/draws follow it at all.
+    const snapBtn = iconBtn("daw-tbtn daw-snap-toggle", "🧲", "Snap to grid — off = free fine positioning (N)");
+    snapBtn.id = "daw-snap-toggle";
+    snapBtn.classList.toggle("active", snapOn);
+    snapBtn.setAttribute("aria-pressed", snapOn ? "true" : "false");
+    snapBtn.addEventListener("click", () => setSnapOn(!snapOn));
+
     const zoomOut = iconBtn("daw-tbtn", "−", "Zoom out");
     zoomOut.addEventListener("click", () => setZoom(pxPerBeat / 1.4));
     const zoomIn = iconBtn("daw-tbtn", "＋", "Zoom in");
@@ -962,7 +1024,7 @@ export const DAW = (() => {
     const playbackGroup = el("div", "daw-transport-group");
     playbackGroup.append(toStart, playBtn, recBtn, loopBtn, metroBtn, countInBtn);
     const editGroup = el("div", "daw-transport-group");
-    editGroup.append(tools, zoomOut, zoomIn);
+    editGroup.append(tools, snapBtn, zoomOut, zoomIn);
     const utilityGroup = el("div", "daw-transport-group daw-transport-utility");
     utilityGroup.append(undoBtn, redoBtn, markerBtn, file, kbToggle, chToggle, guideBtn, shortcutsBtn);
     tp.append(timingGroup, playbackGroup, editGroup, el("span", "daw-flex"), utilityGroup);
@@ -1058,6 +1120,9 @@ export const DAW = (() => {
     snapSel.addEventListener("change", () => {
       snapStep = nearestSnap(+snapSel.value);
       song.view.snap = snapStep;
+      // Picking a grid size is an intent to snap to it — re-arm the magnet so
+      // the dropdown never looks dead while the toggle is off.
+      if (!snapOn && snapStep > 0) setSnapOn(true, { quiet: true });
       renderAll();
       save();
     });
@@ -1093,7 +1158,7 @@ export const DAW = (() => {
     root.appendChild(shell);
     el_ = {
       shell, tp, time, pos, playBtn, recBtn, ruler, lanes, playhead, tl, headsScroll,
-      editor, keys, chain, mixer, tabs, gutter, kbToggle, chToggle, status, snapSel,
+      editor, keys, chain, mixer, tabs, gutter, kbToggle, chToggle, status, snapSel, snapBtn,
       zoomRead, followBtn, selectionRead, duplicateBtn, deleteBtn, audioRead, saveRead,
     };
 
@@ -2255,7 +2320,7 @@ export const DAW = (() => {
         // One horizontal delta for the whole group, snapped relative to the
         // primary region so grid alignment of every member is preserved.
         const rawDelta = beat - drag.grab - drag.primary.orig;
-        let db = snapStep > 0 ? Math.round(rawDelta / snapStep) * snapStep : rawDelta;
+        let db = snapActive() ? Math.round(rawDelta / snapStep) * snapStep : rawDelta;
         db = Math.max(db, -Math.min(...drag.items.map((it) => it.orig)));
         const changed = drag.items.some((it) => it.orig + db !== it.region.start);
         // Vertical: single-region drags may cross onto a same-kind track.
@@ -2527,7 +2592,7 @@ export const DAW = (() => {
   }
 
   function quantizeSelected() {
-    if (snapStep <= 0) { _toast("Turn snap on to quantize"); return; }
+    if (!snapActive()) { _toast("Turn snap on to quantize"); return; }
     const items = noteTargets();
     if (!items.length) { _toast("Select a region to quantize"); return; }
     pushState();
@@ -3066,8 +3131,15 @@ export const DAW = (() => {
         stored = false;
       }
       const startBeat = snap(take.startBeat);
-      const startDeltaSec = (take.startBeat - startBeat) * (60 / song.bpm);
-      const inputLatencySec = Math.max(0, take.latencySec || 0);
+      // Buffer position of beat b is latency + (b - take.startBeat)*spb, so a
+      // region snapped LATER than the true start must skip more of the buffer
+      // and one snapped earlier must skip less (its head replays the pre-roll,
+      // which the capture genuinely contains).
+      const startDeltaSec = (startBeat - take.startBeat) * (60 / song.bpm);
+      // Engine-measured capture alignment plus the user's fine-trim for
+      // devices whose input latency cannot be read from the browser.
+      const recOffsetSec = (Number(t.recOffsetMs) || 0) / 1000;
+      const inputLatencySec = Math.max(0, (take.latencySec || 0) + recOffsetSec);
       const latencySec = Math.max(0, inputLatencySec + startDeltaSec);
       const validDurationSec = Math.max(0.1, take.buffer.duration - latencySec);
       const lenBeats = Math.max(minLen(), snap(validDurationSec * (song.bpm / 60)));
@@ -3301,6 +3373,9 @@ export const DAW = (() => {
     if (e.code === "KeyQ" && !(e.ctrlKey || e.metaKey || e.altKey)) { e.preventDefault(); e.stopPropagation(); quantizeSelected(); return; }
     if (e.code === "KeyM" && !(e.ctrlKey || e.metaKey || e.altKey)) {
       e.preventDefault(); e.stopPropagation(); addMarkerAt(engine.beatNow()); return;
+    }
+    if (e.code === "KeyN" && !(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)) {
+      e.preventDefault(); e.stopPropagation(); setSnapOn(!snapOn); return;
     }
     if (e.code === "Slash" && e.shiftKey && !(e.ctrlKey || e.metaKey || e.altKey)) {
       e.preventDefault(); e.stopPropagation(); showShortcutOverlay(); return;
@@ -3784,7 +3859,7 @@ export const DAW = (() => {
       }
       if (rdrag.mode === "movenotes") {
         const rawDb = beat - rdrag.startBeat;
-        let db = snapStep > 0 ? Math.round(rawDb / snapStep) * snapStep : rawDb;
+        let db = snapActive() ? Math.round(rawDb / snapStep) * snapStep : rawDb;
         let dr = rowAt(e) - rdrag.startRow;
         for (const o of rdrag.origs) {
           db = Math.max(db, -o.b0);
@@ -3839,7 +3914,7 @@ export const DAW = (() => {
       }
       if (rdrag.mode === "resize") {
         const rawDd = beat - rdrag.startBeat;
-        const dd = snapStep > 0 ? Math.round(rawDd / snapStep) * snapStep : rawDd;
+        const dd = snapActive() ? Math.round(rawDd / snapStep) * snapStep : rawDd;
         const wouldChange = rdrag.origs.some((o) =>
           o.n.d !== Math.max(MIN_SNAP, Math.min((o.d0 || MIN_SNAP) + dd, r.len - o.b0)));
         if (!wouldChange) return;
@@ -4416,7 +4491,9 @@ export const DAW = (() => {
       instBody.appendChild(sel);
     } else if (t.kind === "drums") {
       const sel = el("select", "daw-dev-sel");
-      Object.entries(KIT_LABELS).forEach(([id, l]) => { const o = el("option", null, l); o.value = id; if (id === t.kit) o.selected = true; sel.appendChild(o); });
+      // Offer exactly the kits the drum synth implements — a label without
+      // params would silently play the acoustic kit.
+      DRUM_KIT_IDS.forEach((id) => { const o = el("option", null, KIT_LABELS[id] || id); o.value = id; if (id === t.kit) o.selected = true; sel.appendChild(o); });
       sel.setAttribute("aria-label", "Drum kit");
       sel.addEventListener("change", () => { pushState(); t.kit = sel.value; renderHeads(); save(); });
       instBody.appendChild(sel);
@@ -4433,7 +4510,13 @@ export const DAW = (() => {
       const imp = el("button", "daw-fbtn", "Import audio file");
       imp.type = "button";
       imp.addEventListener("click", () => importAudioFile(t));
-      instBody.append(sel, monBtn, imp);
+      // Fine calibration on top of the automatic alignment: positive shifts
+      // future takes earlier (more latency trimmed), negative later.
+      const offKnob = knob("Rec Offset", () => Number(t.recOffsetMs) || 0, (v) => { t.recOffsetMs = Math.round(v); }, {
+        min: -150, max: 150, fmt: (v) => (v > 0 ? "+" : "") + Math.round(v) + " ms",
+      });
+      offKnob.title = "Recording offset — nudge if takes still land early/late on your device";
+      instBody.append(sel, monBtn, imp, offKnob);
     }
     inst.appendChild(instBody);
     body.appendChild(inst);
@@ -4714,6 +4797,9 @@ export const DAW = (() => {
     activeTrackId = t.id;
     sel = [];
     closeEditor();
+    snapStep = nearestSnap(song.view.snap);
+    snapOn = song.view.snapOn !== false;
+    syncSnapButton();
     renderAll(); save();
     _toast("New song — Ctrl+Z brings the old one back.");
   }
@@ -4843,6 +4929,7 @@ export const DAW = (() => {
       }
     }
     snapStep = nearestSnap(song.view?.snap);
+    snapOn = song.view?.snapOn !== false;
     pxPerBeat = Math.max(6, Math.min(160, +song.view?.zoom || 26));
     followPlayhead = song.view?.follow !== false;
     loadBottomState();

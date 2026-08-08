@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   mulberry32, stepRand, mtof, driveCurve, biquadApply,
-  drumSampleData, reverbIRData, masterFinalize,
+  drumSampleData, DRUM_KIT_IDS, reverbIRData, masterFinalize,
   resolvePatch, factoryValue, FACTORY_PATCHES, ENGINE_SCHEMA, WAVES, FILTER_TYPES,
 } from "../js/synth.js";
 
@@ -67,7 +67,7 @@ test("biquadApply highpass: mirror behaviour", () => {
 });
 
 test("drumSampleData: every kit/key renders finite, bounded, non-silent audio", () => {
-  const kits = ["acoustic", "808", "electronic", "bossa", "lofi"];
+  const kits = DRUM_KIT_IDS;
   const keys = ["kick", "snare", "hat", "open", "crash", "tomH", "tomM", "tomL"];
   for (const kit of kits) for (const key of keys) {
     const d = drumSampleData(SR, kit, key);

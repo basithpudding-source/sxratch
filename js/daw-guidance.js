@@ -49,6 +49,7 @@ export const DAW_SHORTCUT_GROUPS = Object.freeze([
     shortcut("edit.open", "Open selected region", [binding("Enter")]),
     shortcut("edit.clear", "Close editor / clear selection", [binding("Escape")]),
     shortcut("edit.quantize", "Quantize selection", [binding("KeyQ")]),
+    shortcut("edit.snap", "Toggle snap to grid", [binding("KeyN")]),
     shortcut("edit.nudgeLeft", "Nudge left by grid", [binding("ArrowLeft", { alt: true })]),
     shortcut("edit.nudgeRight", "Nudge right by grid", [binding("ArrowRight", { alt: true })]),
     shortcut("edit.nudgeBarLeft", "Nudge left by bar", [binding("ArrowLeft", { alt: true, shift: true })]),

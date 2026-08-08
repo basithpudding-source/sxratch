@@ -574,6 +574,69 @@ export const FACTORY_PATCHES = {
       attack: 0.002, decay: 2.5, decayAdd: 0.5, sustain: 0.2, release: 0.8, level: 0.15, velCurve: 1,
       panSpread: 0.3, chorus: 0.4,
     }),
+    // Baroque pluck: bright, bodiless quill snap — nothing like the warm
+    // strummed nylon guitar.
+    harpsichord: PLK({
+      ring: 0.9985, brightness: 0.85, brightVel: 0.1, tone: 6500, toneVel: 500, pick: 0.3, thump: 0,
+      strum: 0.008, panSpread: 0.15, durAdd: 0.3, durMax: 2,
+      level: 0.34, body: 0, seed: 11, chorus: 0.05,
+    }),
+    // Concert harp: soft attack, long singing ring, rolled chords.
+    harp: PLK({
+      ring: 0.9988, brightness: 0.5, brightVel: 0.3, tone: 5200, toneVel: 800, pick: 0.04, thump: 0.03,
+      strum: 0.03, panSpread: 0.35, durAdd: 1.2, durMax: 4,
+      level: 0.45, body: 1, seed: 21, chorus: 0.15,
+    }),
+    // Wooden bars: near-instant decay to silence with a strong 4th-partial
+    // knock — the woody opposite of the sustained keys.
+    marimba: FM({
+      ratio: 4, index: 1.8, indexDecay: 0.03, indexVel: 1.2,
+      otRatio: 9.2, otLevel: 0.12, otDecay: 0.05,
+      attack: 0.001, decay: 0.35, decayAdd: 0, sustain: 0.03, release: 0.15, level: 0.2, velCurve: 1.3,
+      panSpread: 0.2, chorus: 0.05,
+    }),
+    // Tine tinkle: very high inharmonic partials, faster and thinner than
+    // celesta or glass keys.
+    music_box: FM({
+      ratio: 8.02, index: 2.2, indexDecay: 0.08, indexVel: 0.9,
+      otRatio: 12, otLevel: 0.15, otDecay: 0.3,
+      attack: 0.001, decay: 0.9, decayAdd: 0.2, sustain: 0.05, release: 0.5, level: 0.16, velCurve: 0.9,
+      panSpread: 0.25, chorus: 0.2,
+    }),
+    // Church principal chorus with upper mixtures — bright and breathy where
+    // the B3 is dark, percussive and clicky.
+    pipe_organ: ORG({
+      d1: 0.85, d2: 0, d3: 1, d4: 0.8, d5: 0.35, d6: 0.6, d7: 0.25, d8: 0.3, d9: 0.4,
+      percLevel: 0, percRatio: 2, percDecay: 0.2, clickLevel: 0.015, vibRate: 0, vibCents: 0,
+      attack: 0.06, decay: 0.05, sustain: 1, release: 0.3, level: 0.15,
+      chorus: 0.2,
+    }),
+    // Musette accordion: two square-ish reeds detuned against each other with
+    // slow bellows vibrato and a hint of breath.
+    accordion: SUB({
+      wave1: 3, level1: 1, wave2: 3, level2: 0.55, detune2: 18, sub: 0, noise: 0.006, noiseTone: 2600, drive: 1,
+      voices: 2, detune: 8, spread: 0.3,
+      type: 0, cutoff: 3200, keyTrack: 0.4, q: 0.9, envAmount: 250, envTime: 0.06, velToCutoff: 500, envVel: 0.6,
+      lfoRate: 0, lfoDepth: 0,
+      // 0.055, not the family's usual 0.1: two barely-filtered squares carry
+      // roughly double the RMS of a filtered saw stack at the same level.
+      attack: 0.035, attackKey: 0, decay: 0.1, sustain: 0.95, release: 0.12, level: 0.055,
+      vibRate: 5.6, vibCents: 3, vibDelay: 0.35,
+      trLevel: 0.02, trHp: 1200, trLp: 5000, trDecay: 0.004,
+      chorus: 0.25,
+    }),
+    // Vintage JX/Juno string machine: heavy ensemble chorus, soft top, slow
+    // bloom — hazier and darker than the symphonic strings.
+    synth_strings: SUB({
+      wave1: 2, level1: 1, wave2: 3, level2: 0.25, detune2: -7, sub: 0.15, noise: 0, noiseTone: 1900, drive: 1,
+      voices: 6, detune: 22, spread: 0.9,
+      type: 0, cutoff: 1750, keyTrack: 0.3, q: 0.5, envAmount: -450, envTime: 0.5, velToCutoff: 500, envVel: 0.6,
+      lfoRate: 0.25, lfoDepth: 120,
+      attack: 0.22, attackKey: 0, decay: 0.6, sustain: 0.9, release: 0.9, level: 0.09,
+      vibRate: 0, vibCents: 0, vibDelay: 0.2,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.8,
+    }),
   },
   bass: {
     electric: SUB({
@@ -642,6 +705,49 @@ export const FACTORY_PATCHES = {
       otRatio: 3, otLevel: 0.15, otDecay: 0.15,
       attack: 0.002, decay: 0.6, decayAdd: 0.1, sustain: 0.45, release: 0.15, level: 0.26, velCurve: 1.2,
       panSpread: 0, chorus: 0.1,
+    }),
+    // Plectrum on roundwounds: real string decay with a hard pick edge —
+    // brighter and snappier than the fingered electric.
+    picked_bass: PLK({
+      ring: 0.994, brightness: 0.6, brightVel: 0.3, tone: 2600, toneVel: 900, pick: 0.22, thump: 0.06,
+      strum: 0, panSpread: 0, durAdd: 0.1, durMax: 2.2,
+      level: 0.55, body: 1, seed: 7, chorus: 0,
+    }),
+    // DnB reese: two saws beating hard against each other through a mildly
+    // resonant lowpass — the growl lives in the 26-cent clash.
+    reese_bass: SUB({
+      wave1: 2, level1: 1, wave2: 2, level2: 0.9, detune2: 26, sub: 0.35, noise: 0, noiseTone: 1900, drive: 1.5,
+      voices: 2, detune: 12, spread: 0.25,
+      type: 0, cutoff: 520, keyTrack: 0.2, q: 2.2, envAmount: 0, envTime: 0.1, velToCutoff: 300, envVel: 0.4,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.008, attackKey: 0, decay: 0.3, sustain: 0.85, release: 0.2, level: 0.24,
+      vibRate: 0, vibCents: 0, vibDelay: 0.2,
+      trLevel: 0, trHp: 700, trLp: 3000, trDecay: 0.002,
+      chorus: 0.2,
+    }),
+    // Fretless: soft triangle attack blooming into a filter "mwah" with a
+    // singing delayed vibrato.
+    fretless_bass: SUB({
+      wave1: 1, level1: 1, wave2: 2, level2: 0.18, detune2: 0, sub: 0.2, noise: 0, noiseTone: 1900, drive: 1.3,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 480, keyTrack: 0.3, q: 0.8, envAmount: 600, envTime: 0.25, velToCutoff: 500, envVel: 0.7,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.012, attackKey: 0, decay: 0.3, sustain: 0.75, release: 0.22, level: 0.3,
+      vibRate: 5.5, vibCents: 9, vibDelay: 0.28,
+      trLevel: 0.02, trHp: 500, trLp: 2500, trDecay: 0.004,
+      chorus: 0,
+    }),
+    // 80s sequencer bass: bright square chug with a sine an octave below and
+    // a fast plucky filter envelope.
+    synthwave_bass: SUB({
+      wave1: 3, level1: 1, wave2: 0, level2: 0.4, detune2: -1200, sub: 0, noise: 0, noiseTone: 1900, drive: 1.4,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 900, keyTrack: 0.2, q: 1.6, envAmount: 1800, envTime: 0.07, velToCutoff: 800, envVel: 0.7,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.002, attackKey: 0, decay: 0.16, sustain: 0.35, release: 0.1, level: 0.3,
+      vibRate: 0, vibCents: 0, vibDelay: 0.2,
+      trLevel: 0.03, trHp: 900, trLp: 2400, trDecay: 0.002,
+      chorus: 0.1,
     }),
   },
   lead: {
@@ -726,6 +832,63 @@ export const FACTORY_PATCHES = {
       trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
       chorus: 0.1,
     }),
+    // Trance pluck: detuned saw stack that decays to (almost) nothing with a
+    // big snapping filter envelope — a stab, not a sustained lead.
+    trance_pluck: SUB({
+      wave1: 2, level1: 1, wave2: 2, level2: 0.5, detune2: 9, sub: 0.1, noise: 0, noiseTone: 1900, drive: 1.1,
+      voices: 4, detune: 14, spread: 0.6,
+      type: 0, cutoff: 1000, keyTrack: 0.5, q: 1.8, envAmount: 4200, envTime: 0.09, velToCutoff: 1500, envVel: 0.7,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.001, attackKey: 0, decay: 0.28, sustain: 0.05, release: 0.25, level: 0.14,
+      vibRate: 0, vibCents: 0, vibDelay: 0.2,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.35,
+    }),
+    // Solo violin: slow bow speech, bow-noise bed, wide expressive vibrato,
+    // strong key-tracked brightness.
+    violin: SUB({
+      wave1: 2, level1: 1, wave2: 1, level2: 0.2, detune2: 0, sub: 0, noise: 0.008, noiseTone: 3200, drive: 1,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 3100, keyTrack: 0.9, q: 1.6, envAmount: -900, envTime: 0.3, velToCutoff: 1200, envVel: 0.6,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.09, attackKey: 0.25, decay: 0.25, sustain: 0.9, release: 0.35, level: 0.14,
+      vibRate: 5.6, vibCents: 14, vibDelay: 0.35,
+      trLevel: 0.015, trHp: 2400, trLp: 8000, trDecay: 0.01,
+      chorus: 0.12,
+    }),
+    // Blues harp: reedy odd-partial cluster with fast breath vibrato and a
+    // chuffy attack — the organ engine as a free-reed instrument.
+    harmonica: ORG({
+      d1: 0, d2: 0.3, d3: 1, d4: 0.25, d5: 0.55, d6: 0.15, d7: 0.35, d8: 0.1, d9: 0.12,
+      percLevel: 0, percRatio: 2, percDecay: 0.1, clickLevel: 0.03, vibRate: 4.6, vibCents: 9,
+      attack: 0.02, decay: 0.05, sustain: 1, release: 0.09, level: 0.15,
+      chorus: 0.1,
+    }),
+    // Theremin: a pure sine with wide slow vibrato from almost the first
+    // moment — no breath, no transient, just the singing tone.
+    theremin: SUB({
+      wave1: 0, level1: 1, wave2: 0, level2: 0, detune2: 0, sub: 0, noise: 0, noiseTone: 1900, drive: 1,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 9000, keyTrack: 1, q: 0.5, envAmount: 0, envTime: 0.1, velToCutoff: 0, envVel: 0,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.09, attackKey: 0, decay: 0.1, sustain: 0.95, release: 0.25, level: 0.17,
+      vibRate: 5, vibCents: 22, vibDelay: 0.05,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.05,
+    }),
+    // Talky wah lead: a BANDPASS voice whose slow filter LFO sweeps the vowel.
+    // No sub — the bandpass would swallow it — and the level is raised to
+    // repay the energy the narrow band rejects.
+    vocal_lead: SUB({
+      wave1: 2, level1: 1, wave2: 3, level2: 0.3, detune2: 5, sub: 0, noise: 0, noiseTone: 1900, drive: 1,
+      voices: 2, detune: 7, spread: 0.3,
+      type: 2, cutoff: 1100, keyTrack: 0.4, q: 2.2, envAmount: 900, envTime: 0.18, velToCutoff: 600, envVel: 0.5,
+      lfoRate: 3.2, lfoDepth: 350,
+      attack: 0.03, attackKey: 0, decay: 0.2, sustain: 0.85, release: 0.2, level: 0.34,
+      vibRate: 5, vibCents: 6, vibDelay: 0.3,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.2,
+    }),
   },
   chorus: {
     choir_vox: SUB({
@@ -773,6 +936,50 @@ export const FACTORY_PATCHES = {
       vibRate: 5.2, vibCents: 8, vibDelay: 0.3,
       trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
       chorus: 0.5,
+    }),
+    // Brooding low pad: heavy sub, nearly-closed filter that barely opens —
+    // the sombre counterpart to the warm chorus pad.
+    dark_pad: SUB({
+      wave1: 2, level1: 1, wave2: 3, level2: 0.3, detune2: -12, sub: 0.7, noise: 0, noiseTone: 1900, drive: 1,
+      voices: 4, detune: 12, spread: 0.7,
+      type: 0, cutoff: 420, keyTrack: 0.25, q: 1.1, envAmount: 300, envTime: 1.2, velToCutoff: 300, envVel: 0.3,
+      lfoRate: 0.08, lfoDepth: 120,
+      attack: 0.4, attackKey: 0, decay: 1, sustain: 0.9, release: 1.6, level: 0.1,
+      vibRate: 0, vibCents: 0, vibDelay: 0.2,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.45,
+    }),
+    // Shimmer: barely-inharmonic FM whose index keeps evolving for over a
+    // second, so held chords slowly bloom and beat.
+    shimmer_bells: FM({
+      ratio: 2.005, index: 5.5, indexDecay: 1.2, indexVel: 0.8,
+      otRatio: 5.19, otLevel: 0.22, otDecay: 1.5,
+      attack: 0.2, decay: 3, decayAdd: 1, sustain: 0.5, release: 1.8, level: 0.12, velCurve: 0.8,
+      panSpread: 0.5, chorus: 0.6,
+    }),
+    // Airy breath pad: a strong tuned-noise bed over soft detuned triangles —
+    // the "air" is the instrument.
+    breath_pad: SUB({
+      wave1: 1, level1: 0.7, wave2: 0, level2: 0.5, detune2: 12, sub: 0.2, noise: 0.06, noiseTone: 3400, drive: 1,
+      voices: 3, detune: 10, spread: 0.8,
+      type: 0, cutoff: 1500, keyTrack: 0.4, q: 0.7, envAmount: 600, envTime: 0.6, velToCutoff: 400, envVel: 0.4,
+      lfoRate: 0.12, lfoDepth: 200,
+      attack: 0.25, attackKey: 0, decay: 0.7, sustain: 0.85, release: 1.1, level: 0.1,
+      vibRate: 0, vibCents: 0, vibDelay: 0.2,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.5,
+    }),
+    // Cinematic brass wall: saw stack with drive that swells open over a
+    // quarter second — pad-slow where the chord brass section stabs.
+    brass_pad: SUB({
+      wave1: 2, level1: 1, wave2: 2, level2: 0.7, detune2: 9, sub: 0.25, noise: 0, noiseTone: 1900, drive: 1.25,
+      voices: 5, detune: 16, spread: 0.8,
+      type: 0, cutoff: 1500, keyTrack: 0.6, q: 1, envAmount: 1400, envTime: 0.7, velToCutoff: 900, envVel: 0.5,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.28, attackKey: 0, decay: 0.5, sustain: 0.9, release: 0.8, level: 0.1,
+      vibRate: 0, vibCents: 0, vibDelay: 0.2,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.4,
     }),
   },
 };
@@ -1327,7 +1534,55 @@ const DRUM_PARAMS = {
     crash: { base: 60, hp: 4000, len: 1.2, lp: 6800, peak: 0.4 },
     tom: { dec: 0.26, lp: 3200, peak: 0.58 },
   },
+  // 909: the techno workhorse — punchy solid kick, sizzling noise-forward
+  // snare, and noisy (not metallic-cluster) hats.
+  "909": {
+    kick: { f0: 220, f1: 49, pt: 0.022, dec: 0.34, click: 0.62, drive: 2.1, peak: 0.9 },
+    snare: { tone: 245, hp: 1250, ndec: 0.17, toneAmt: 0.55, noiseAmt: 1.25, peak: 0.8 },
+    hat: { base: 46, bp: 11200, hp: 8800, noiseMix: 0.6, peak: 0.42, peakOpen: 0.4 },
+    crash: { base: 70, hp: 5000, len: 1.7, peak: 0.5 },
+    tom: { dec: 0.38, peak: 0.66 },
+  },
+  // Trap / drill: long saturated 808 sub kick, tight cracking snare, bright
+  // metallic closed hats built for fast rolls, long dark crash.
+  trap: {
+    kick: { f0: 105, f1: 35, pt: 0.06, dec: 0.85, click: 0.22, drive: 3.2, peak: 0.92 },
+    snare: { tone: 210, hp: 2100, ndec: 0.08, toneAmt: 0.45, noiseAmt: 1.15, peak: 0.78 },
+    hat: { base: 48, bp: 12200, hp: 9500, noiseMix: 0.08, peak: 0.4, peakOpen: 0.38 },
+    crash: { base: 64, hp: 5600, len: 2.2, peak: 0.46 },
+    tom: { dec: 0.55, lp: 6000, peak: 0.68 },
+  },
+  // 80s synthwave: punchy gated kick, the huge long noisy snare, and big
+  // rounded hex-pad style toms.
+  synthwave: {
+    kick: { f0: 190, f1: 52, pt: 0.024, dec: 0.24, click: 0.55, drive: 1.8, lp: 9000, peak: 0.88 },
+    snare: { tone: 172, hp: 700, ndec: 0.26, toneAmt: 0.65, noiseAmt: 1.3, lp: 9500, peak: 0.82 },
+    hat: { base: 42, bp: 10200, hp: 7600, noiseMix: 0.35, peak: 0.4, peakOpen: 0.38 },
+    crash: { base: 60, hp: 4400, len: 1.6, peak: 0.48 },
+    tom: { dec: 0.5, lp: 7800, peak: 0.7 },
+  },
+  // Afrobeats / amapiano: round boomy kick, short woody tonal snare (log-drum
+  // adjacent), shaker-like hats, percussion-forward toms.
+  afrobeats: {
+    kick: { f0: 135, f1: 57, pt: 0.03, dec: 0.28, click: 0.18, drive: 1.5, peak: 0.85 },
+    snare: { tone: 240, hp: 1500, ndec: 0.07, toneAmt: 0.85, noiseAmt: 0.6, peak: 0.7 },
+    hat: { base: 39, bp: 9200, hp: 6400, noiseMix: 0.62, peak: 0.36, peakOpen: 0.34 },
+    crash: { base: 56, hp: 4000, len: 1.2, peak: 0.4 },
+    tom: { dec: 0.42, peak: 0.7 },
+  },
+  // Indie rock: dry punchy kick, fat garage-y snare, dark sloshy hats and a
+  // washy crash — looser and roomier than the acoustic kit.
+  indie: {
+    kick: { f0: 150, f1: 50, pt: 0.032, dec: 0.21, click: 0.38, drive: 1.7, peak: 0.86 },
+    snare: { tone: 178, hp: 850, ndec: 0.2, toneAmt: 0.75, noiseAmt: 1.1, peak: 0.8 },
+    hat: { base: 41, bp: 8800, hp: 6200, noiseMix: 0.42, peak: 0.44, peakOpen: 0.42 },
+    crash: { base: 57, hp: 3900, len: 1.85, peak: 0.5 },
+    tom: { dec: 0.33, peak: 0.68 },
+  },
 };
+
+/** Every kit id the drum synth actually implements — the UI's source of truth. */
+export const DRUM_KIT_IDS = Object.freeze(Object.keys(DRUM_PARAMS));
 
 const TOM_FREQS = { tomH: 240, tomM: 170, tomL: 115 };
 
