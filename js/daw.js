@@ -19,9 +19,18 @@
 // persisted to IndexedDB, so undo snapshots stay small.
 
 import { createDawEngine, DRUM_KEYS, RENDER_LEAD_SEC } from "./daw-engine.js";
-import { FACTORY_PATCHES, DRUM_KIT_IDS } from "./synth.js";
-import { bufferToWav } from "./wav.js";
+import { FACTORY_PATCHES, DRUM_KIT_IDS, ENGINE_SCHEMA, FILTER_TYPES, WAVES, resolvePatch, factoryValue } from "./synth.js";
+import { bufferToWavAsync } from "./wav.js";
 import { encodeMidi } from "./midiexport.js";
+import { parseMidiFile, midiImportGroups } from "./midi-import.js";
+import { detectBPM } from "./bpm.js";
+import {
+  audioBufferToBundleAsset,
+  bundleAssetToAudioBuffer,
+  createProjectBundle,
+  parseProjectBundle,
+  referencedProjectAssetIds,
+} from "./project-bundle.js";
 import { readVersioned, readVersionedRecord, writeVersioned } from "./store.js";
 import {
   saveSample,
@@ -68,7 +77,7 @@ export const DAW = (() => {
 
   /* ---------------- constants ---------------- */
   const STORE_KEY = "sxratch.daw";
-  const SCHEMA_V = 4;
+  const SCHEMA_V = 5;
   const MIGRATIONS = [
     (s) => s,
     (s) => ({ ...s, view: { snap: DEFAULT_SNAP, zoom: 26, follow: true, ...(s?.view || {}) } }),
@@ -96,6 +105,14 @@ export const DAW = (() => {
         ...t,
         takeLanes: Array.isArray(t.takeLanes) ? t.takeLanes : [],
         comp: Array.isArray(t.comp) ? t.comp : [],
+      })),
+    }),
+    (s) => ({
+      ...s,
+      title: String(s?.title || "Untitled session").slice(0, 48),
+      tracks: (s?.tracks || []).map((t) => ({
+        ...t,
+        patch: t?.kind === "midi" && t?.patch && typeof t.patch === "object" ? t.patch : {},
       })),
     }),
   ];
@@ -214,7 +231,7 @@ export const DAW = (() => {
   let song = null;
   let clips = new Map();                   // clipId → AudioBuffer
   let engine = null;
-  let root = null;                         // #song-builder
+  let root = null;                         // #daw-root
   let el_ = {};                            // named DOM handles
   let idc = 1;
   let activeTrackId = null;
@@ -238,9 +255,16 @@ export const DAW = (() => {
   // `active` is the exclusive content panel (editor/chain/mixer); `keys` is a
   // PIN — the keyboard strip coexists with whatever is active so you can
   // audition the sound you are editing. `headsW` = track-header column width.
-  let bottom = { active: null, h: BOTTOM_DEF, prev: "chain", reopen: null, keys: true, headsW: 0 };
+  // `open` is a SET (array) of panel ids — editor/keys/chain/mixer combine
+  // freely and can all be closed. `reopen` remembers the last combination so
+  // a gutter collapse can restore it. Legacy saves carried {active, keys}.
+  // The sound/device inspector is the most useful default. The keyboard is a
+  // deliberate performance surface rather than consuming launch-space before
+  // the user has selected an instrument.
+  let bottom = { open: ["chain"], h: BOTTOM_DEF, reopen: ["chain"], headsW: 0 };
   let heldKeys = new Map();                // code → {trackId, midi, tOn}
   let inputDevices = [];
+  let audioInputState = "unknown";         // unknown | ready | blocked | unsupported
   let rafId = null;
   let undoStack = [], redoStack = [], undoBytes = 0;
   const UNDO_BUDGET = 6 * 1024 * 1024;
@@ -487,9 +511,40 @@ export const DAW = (() => {
     return r;
   }
 
+  /** One obvious entry point for every “add a track” surface. */
+  function addTrackFromChoice(kind) {
+    if (!kind) return null;
+    pushState();
+    const track = kind === "drums"
+      ? makeTrack("drums")
+      : kind === "audio"
+        ? makeTrack("audio")
+        : makeTrack("midi", { family: kind });
+    song.tracks.push(track);
+    activeTrackId = track.id;
+    engine?.rebuildTrack(track.id);
+    renderAll();
+    save();
+    _toast(`Added ${track.name} track`, { severity: "ok" });
+    return track;
+  }
+
+  function ensureAudioTrack() {
+    const current = activeTrack();
+    if (current?.kind === "audio") return current;
+    const existing = song.tracks.find((t) => t.kind === "audio");
+    if (existing) {
+      activeTrackId = existing.id;
+      renderHeads(); renderChain();
+      return existing;
+    }
+    return addTrackFromChoice("audio");
+  }
+
   function defaultSong() {
     const s = {
       v: SCHEMA_V,
+      title: "Untitled session",
       bpm: 120,
       ts: { num: 4, den: 4 },
       loop: { on: false, a: 0, b: 16 },
@@ -509,6 +564,7 @@ export const DAW = (() => {
    */
   function normalizeSong(sg) {
     if (!sg || typeof sg !== "object" || !Array.isArray(sg.tracks)) return null;
+    sg.title = String(sg.title || "Untitled session").trim().slice(0, 48) || "Untitled session";
     sg.bpm = clampFinite(sg.bpm, 40, 240, 120);
     if (!sg.ts || !(+sg.ts.num > 0) || !(+sg.ts.den > 0)) sg.ts = { num: 4, den: 4 };
     if (!sg.loop || typeof sg.loop !== "object") sg.loop = { on: false, a: 0, b: 16 };
@@ -555,6 +611,7 @@ export const DAW = (() => {
       if (t.kind === "midi") {
         if (!FACTORY_PATCHES[t.family]) t.family = "chord";
         if (!FACTORY_PATCHES[t.family][t.sound]) t.sound = Object.keys(FACTORY_PATCHES[t.family])[0];
+        t.patch = t.patch && typeof t.patch === "object" && !Array.isArray(t.patch) ? t.patch : {};
       }
       if (t.kind === "drums" && !DRUM_KIT_IDS.includes(t.kit)) t.kit = "acoustic";
       if (t.kind === "audio") t.recOffsetMs = Math.round(clampFinite(t.recOffsetMs, -150, 150, 0));
@@ -880,15 +937,15 @@ export const DAW = (() => {
       if (!updateTimelineClock(() => { song.ts = { num, den }; })) sig.value = `${song.ts.num}/${song.ts.den}`;
     });
 
-    const toStart = iconBtn("daw-tbtn", "⏮", "To start");
+    const toStart = iconBtn("daw-tbtn daw-start", "START", "Return playhead to start");
     toStart.addEventListener("click", () => { engine.seek(0); updateClock(); });
-    const playBtn = iconBtn("daw-tbtn daw-play", "▶", "Play / stop (Space)");
+    const playBtn = iconBtn("daw-tbtn daw-play", "PLAY", "Play / stop (Space)");
     playBtn.id = "daw-play";
     playBtn.addEventListener("click", togglePlay);
-    const recBtn = iconBtn("daw-tbtn daw-rec", "●", "Record onto the armed track");
+    const recBtn = iconBtn("daw-tbtn daw-rec", "REC", "Record onto the armed track");
     recBtn.id = "daw-rec";
     recBtn.addEventListener("click", toggleRecord);
-    const loopBtn = iconBtn("daw-tbtn", "🔁", "Loop — drag on the ruler to set the range");
+    const loopBtn = iconBtn("daw-tbtn", "LOOP", "Loop — drag on the ruler to set the range");
     loopBtn.id = "daw-loop";
     loopBtn.setAttribute("aria-pressed", song.loop.on ? "true" : "false");
     loopBtn.addEventListener("click", () => {
@@ -903,20 +960,20 @@ export const DAW = (() => {
       save(); renderTimeline();
     });
     loopBtn.classList.toggle("active", song.loop.on);
-    const metroBtn = iconBtn("daw-tbtn", "🕰", "Metronome");
+    const metroBtn = iconBtn("daw-tbtn", "CLICK", "Metronome");
     metroBtn.id = "daw-metro";
     metroBtn.addEventListener("click", () => {
       engine.setMetronome(!engine.metronome);
       metroBtn.classList.toggle("active", engine.metronome);
       metroBtn.setAttribute("aria-pressed", engine.metronome ? "true" : "false");
     });
-    const countInBtn = iconBtn("daw-tbtn", "0️⃣", "Count-in bars before recording (0 / 1 / 2)");
+    const countInBtn = iconBtn("daw-tbtn", "COUNT 0", "Count-in bars before recording (0 / 1 / 2)");
     countInBtn.id = "daw-countin";
     countInBtn.setAttribute("aria-pressed", "false");
     countInBtn.addEventListener("click", () => {
       const next = (engine.countIn + 1) % 3;
       engine.setCountIn(next);
-      countInBtn.textContent = next === 0 ? "0️⃣" : next === 1 ? "1️⃣" : "2️⃣";
+      countInBtn.textContent = `COUNT ${next}`;
       countInBtn.classList.toggle("active", next > 0);
       countInBtn.setAttribute("aria-pressed", next > 0 ? "true" : "false");
       _toast(next === 0 ? "Count-in off" : `${next}-bar count-in enabled`);
@@ -970,6 +1027,9 @@ export const DAW = (() => {
       fbtn("Download Master WAV", downloadWav),
       fbtn("Export Stems (WAV)", exportStemsWav),
       fbtn("Export MIDI (.mid)", exportMidiFile),
+      fbtn("Import MIDI (.mid)", importMidiFile),
+      fbtn("Export portable project (.sxpad)", exportProjectBundle),
+      fbtn("Import portable project (.sxpad)", importProjectBundle),
       fbtn("Export JSON", exportJson),
       fbtn("Import JSON", importJson),
       fbtn("Recover previous save…", showRecoveryPicker),
@@ -1005,20 +1065,36 @@ export const DAW = (() => {
       if (file.open && !file.contains(e.target)) file.open = false;
     });
 
-    const kbToggle = iconBtn("daw-tbtn daw-panel-toggle", "🎹", "Show / hide the keyboard");
+    const kbToggle = iconBtn("daw-tbtn daw-panel-toggle", "KEYS", "Show / hide the keyboard");
     kbToggle.addEventListener("click", () => toggleBottomPanel("keys"));
-    const chToggle = iconBtn("daw-tbtn daw-panel-toggle", "🎛", "Show / hide the device chain");
+    const chToggle = iconBtn("daw-tbtn daw-panel-toggle", "DEVICES", "Show / hide the device chain");
     chToggle.addEventListener("click", () => toggleBottomPanel("chain"));
-    const markerBtn = iconBtn("daw-tbtn", "⚑", "Add marker at playhead (M)");
+    const markerBtn = iconBtn("daw-tbtn", "MARK", "Add marker at playhead (M)");
     markerBtn.id = "daw-add-marker";
     markerBtn.addEventListener("click", () => addMarkerAt(engine.beatNow()));
-    const guideBtn = iconBtn("daw-tbtn", "◎", "Start the studio tour");
+    const guideBtn = iconBtn("daw-tbtn", "TOUR", "Start the studio tour");
     guideBtn.id = "daw-tour";
     guideBtn.addEventListener("click", () => startDawTour(true));
-    const shortcutsBtn = iconBtn("daw-tbtn", "?", "Keyboard shortcuts (?)");
+    const shortcutsBtn = iconBtn("daw-tbtn", "HELP", "Keyboard shortcuts (?)");
     shortcutsBtn.id = "daw-shortcuts";
     shortcutsBtn.addEventListener("click", showShortcutOverlay);
 
+    const titleWrap = el("label", "daw-project-title");
+    titleWrap.appendChild(el("span", "daw-project-kicker", "SESSION"));
+    const titleIn = el("input", "daw-project-input");
+    titleIn.id = "daw-project-title";
+    titleIn.value = song.title;
+    titleIn.maxLength = 48;
+    titleIn.setAttribute("aria-label", "Session title");
+    titleIn.addEventListener("change", () => {
+      const next = titleIn.value.trim().slice(0, 48) || "Untitled session";
+      if (next !== song.title) { pushState(); song.title = next; save(); }
+      titleIn.value = song.title;
+    });
+    titleWrap.appendChild(titleIn);
+    const setupBtn = iconBtn("daw-tbtn daw-setup", "SETUP", "Open recording and MIDI setup");
+    setupBtn.id = "daw-setup";
+    setupBtn.addEventListener("click", showStudioSetup);
     const timingGroup = el("div", "daw-transport-group daw-transport-meta");
     timingGroup.append(time, pos, bpmWrap, sig);
     const playbackGroup = el("div", "daw-transport-group");
@@ -1027,7 +1103,7 @@ export const DAW = (() => {
     editGroup.append(tools, snapBtn, zoomOut, zoomIn);
     const utilityGroup = el("div", "daw-transport-group daw-transport-utility");
     utilityGroup.append(undoBtn, redoBtn, markerBtn, file, kbToggle, chToggle, guideBtn, shortcutsBtn);
-    tp.append(timingGroup, playbackGroup, editGroup, el("span", "daw-flex"), utilityGroup);
+    tp.append(titleWrap, timingGroup, playbackGroup, editGroup, setupBtn, el("span", "daw-flex"), utilityGroup);
 
     // --- body: track headers + timeline ---
     const body = el("div", "daw-body");
@@ -1044,13 +1120,7 @@ export const DAW = (() => {
     addSel.addEventListener("change", () => {
       const v = addSel.value; addSel.value = "";
       if (!v) return;
-      pushState();
-      const t = v === "drums" ? makeTrack("drums") : v === "audio" ? makeTrack("audio") : makeTrack("midi", { family: v });
-      song.tracks.push(t);
-      activeTrackId = t.id;
-      engine.rebuildTrack(t.id);
-      renderAll(); save();
-      _toast(`Added ${t.name} track`);
+      addTrackFromChoice(v);
     });
     addWrap.appendChild(addSel);
     heads.append(headsTop, headsScroll, addWrap);
@@ -1079,6 +1149,24 @@ export const DAW = (() => {
     });
     body.append(heads, tl);
 
+    // A persistent “first move” strip keeps the common creation flows visible
+    // instead of hiding them in a dense menu. It is deliberately task-based,
+    // not a second row of unlabeled DAW icons.
+    const quick = el("div", "daw-quickstart");
+    quick.setAttribute("aria-label", "Start creating");
+    quick.appendChild(el("span", "daw-quick-kicker", "START HERE"));
+    const quickBtn = (label, title, handler, primary = false) => {
+      const b = el("button", "daw-quick-btn" + (primary ? " primary" : ""), label);
+      b.type = "button"; b.title = title; b.addEventListener("click", handler); return b;
+    };
+    quick.append(
+      quickBtn("Add synth", "Add a chords and keys synth track", () => addTrackFromChoice("chord"), true),
+      quickBtn("Record audio", "Set up an audio input and record a take", () => { ensureAudioTrack(); showStudioSetup(); }),
+      quickBtn("Import MIDI", "Bring in a Standard MIDI file", importMidiFile),
+      quickBtn("Import audio", "Bring in an audio file onto an audio track", () => importAudioFile(ensureAudioTrack())),
+      quickBtn("Set up devices", "Choose recording and MIDI devices", showStudioSetup),
+    );
+
     // --- bottom area: resize gutter + tab strip + one active panel ---
     const editor = el("div", "daw-panel daw-editor"); editor.id = "daw-editor";
     const keys = el("div", "daw-panel daw-keys"); keys.id = "daw-keys";
@@ -1091,19 +1179,23 @@ export const DAW = (() => {
     gutter.setAttribute("aria-label", "Resize the bottom panel — drag, arrow keys, Enter toggles the panel");
     gutter.tabIndex = 0;
     const tabs = el("div", "daw-bottom-tabs");
-    tabs.setAttribute("role", "tablist");
-    tabs.setAttribute("aria-label", "Studio bottom panel");
+    // Every tab is an independent TOGGLE — any combination of panels can be
+    // open at once (or none), so this is a group of switches, not a tablist.
+    tabs.setAttribute("role", "group");
+    tabs.setAttribute("aria-label", "Studio bottom panels");
     for (const [id, label] of [["editor", "EDITOR"], ["keys", "KEYS"], ["chain", "DEVICES"], ["mixer", "MIXER"]]) {
       const b = el("button", "daw-tab", label);
       b.type = "button";
       b.dataset.panel = id;
-      // KEYS is a PIN (toggle), not a member of the single-selection tablist.
-      if (id === "keys") b.setAttribute("aria-pressed", "false");
-      else b.setAttribute("role", "tab");
+      b.setAttribute("aria-pressed", "false");
       b.addEventListener("click", () => toggleBottomPanel(id));
       tabs.appendChild(b);
     }
-    bottomWrap.append(gutter, tabs, editor, keys, chain, mixer);
+    // The stack wrapper caps the combined panel height (--daw-bmax) and
+    // scrolls internally, so opening everything can never crush the timeline.
+    const panelsWrap = el("div", "daw-panels");
+    panelsWrap.append(editor, keys, chain, mixer);
+    bottomWrap.append(gutter, tabs, panelsWrap);
 
     const status = el("div", "daw-status");
     const snapLabel = el("label", "daw-status-control");
@@ -1154,10 +1246,10 @@ export const DAW = (() => {
     saveRead.id = "daw-save-read";
     status.append(snapLabel, zoomRead, followBtn, selectionRead, quantizeBtn, duplicateBtn, deleteBtn, saveRead, audioRead);
 
-    shell.append(tp, body, bottomWrap, status);
+    shell.append(tp, quick, body, bottomWrap, status);
     root.appendChild(shell);
     el_ = {
-      shell, tp, time, pos, playBtn, recBtn, ruler, lanes, playhead, tl, headsScroll,
+      shell, tp, time, pos, playBtn, recBtn, titleIn, ruler, lanes, playhead, tl, headsScroll,
       editor, keys, chain, mixer, tabs, gutter, kbToggle, chToggle, status, snapSel, snapBtn,
       zoomRead, followBtn, selectionRead, duplicateBtn, deleteBtn, audioRead, saveRead,
     };
@@ -1177,21 +1269,30 @@ export const DAW = (() => {
     syncStatus();
   }
 
-  const editorOpen = () => bottom.active === "editor" && !!editRegion;
+  const panelIsOpen = (id) => bottom.open.includes(id);
+  const editorOpen = () => panelIsOpen("editor") && !!editRegion;
+  // Editor never survives a reload/collapse-restore: its region identity dies
+  // with the session, so restored sets are scrubbed through here.
+  const sanitizeOpen = (list) => [...new Set((Array.isArray(list) ? list : [])
+    .filter((p) => ["keys", "chain", "mixer"].includes(p)))];
 
   function loadBottomState() {
     try {
       const s = JSON.parse(localStorage.getItem(PANELS_KEY));
       if (!s || typeof s !== "object") return;
-      // Legacy saves have no `keys` field: derive the pin from the old
-      // exclusive-panel shape so a deliberately hidden keyboard stays hidden.
-      bottom.keys = typeof s.keys === "boolean" ? s.keys : s.active === "keys";
-      if (["chain", "mixer"].includes(s.prev)) bottom.prev = s.prev;
-      // Never restore "editor" across loads — its region no longer exists.
-      // Legacy saves used active:"keys"; that maps onto the pin.
-      if ([null, "chain", "mixer"].includes(s.active)) bottom.active = s.active;
-      else if (s.active === "keys") { bottom.keys = true; bottom.active = null; }
-      else if (s.active === "editor") bottom.active = bottom.prev;
+      if (Array.isArray(s.open)) {
+        bottom.open = sanitizeOpen(s.open);
+      } else {
+        // Legacy exclusive-panel shape {active, prev, keys}: the pin plus the
+        // active (or the panel behind a transient editor) become the set.
+        const open = [];
+        if (typeof s.keys === "boolean" ? s.keys : s.active === "keys") open.push("keys");
+        if (["chain", "mixer"].includes(s.active)) open.push(s.active);
+        else if (s.active === "editor" && ["chain", "mixer"].includes(s.prev)) open.push(s.prev);
+        bottom.open = [...new Set(open)];
+      }
+      bottom.reopen = sanitizeOpen(s.reopen);
+      if (!bottom.reopen.length) bottom.reopen = ["chain"];
       bottom.h = Math.max(BOTTOM_MIN, Math.min(BOTTOM_MAX, +s.h || BOTTOM_DEF));
       const hw = Math.round(+s.headsW || 0);
       bottom.headsW = hw >= 156 && hw <= 420 ? hw : 0;
@@ -1200,19 +1301,13 @@ export const DAW = (() => {
   function saveBottomState() {
     try {
       localStorage.setItem(PANELS_KEY, JSON.stringify({
-        active: bottom.active, h: bottom.h, prev: bottom.prev,
-        keys: bottom.keys, headsW: bottom.headsW || 0,
+        open: sanitizeOpen(bottom.open), reopen: sanitizeOpen(bottom.reopen),
+        h: bottom.h, headsW: bottom.headsW || 0,
       }));
     } catch {}
   }
 
   function toggleBottomPanel(id) {
-    if (id === "keys") {
-      // The keyboard is a pin, not an exclusive panel.
-      bottom.keys = !bottom.keys;
-      applyPanels(); saveBottomState();
-      return;
-    }
     if (id === "editor" && !editRegion) {
       // No region open in the roll yet — open the selected one, so a plain
       // "select region, hit EDITOR" flow works for recorded takes too.
@@ -1223,60 +1318,58 @@ export const DAW = (() => {
       _toast("Select or double-click a region to edit it");
       return;
     }
-    if (bottom.active === id) {
-      bottom.reopen = id;
-      bottom.active = null;
+    if (panelIsOpen(id)) {
+      bottom.open = bottom.open.filter((p) => p !== id);
+      if (!bottom.open.length) bottom.reopen = [id];
     } else {
-      bottom.active = id;
-      if (id !== "editor") bottom.prev = id;
+      bottom.open = [...bottom.open, id];
       if (id === "mixer") bottom.h = Math.max(bottom.h, 300);
     }
     applyPanels(); saveBottomState();
   }
 
-  /** Close the piano roll and give the space back to the previous panel. */
+  /** Close the piano roll; any other open panels keep their space. */
   function closeEditor() {
     editRegion = null;
-    if (bottom.active === "editor") bottom.active = bottom.prev;
+    bottom.open = bottom.open.filter((p) => p !== "editor");
     if (el_.editor) applyPanels();
     saveBottomState();
   }
 
   function applyPanels() {
-    if (bottom.active === "editor" && !editRegion) bottom.active = bottom.prev;
+    if (!editRegion) bottom.open = bottom.open.filter((p) => p !== "editor");
+    const openSet = new Set(bottom.open);
     const editorWasHidden = el_.editor.hidden;
     const mixerWasHidden = el_.mixer.hidden;
-    el_.editor.hidden = bottom.active !== "editor";
-    el_.keys.hidden = !bottom.keys;
-    el_.chain.hidden = bottom.active !== "chain";
-    el_.mixer.hidden = bottom.active !== "mixer";
+    el_.editor.hidden = !openSet.has("editor");
+    el_.keys.hidden = !openSet.has("keys");
+    el_.chain.hidden = !openSet.has("chain");
+    el_.mixer.hidden = !openSet.has("mixer");
     // Display-clamp only — the user's preferred height survives window shrinks.
     // shellH 0 means the studio view is hidden (no real measurement to clamp
     // against); any real height clamps, even short landscape-phone shells.
-    // The pinned keyboard strip has its own (content) height, so the active
-    // panel's budget shrinks by it.
+    // The keyboard strip sizes to content, so the height-driven panels' budget
+    // shrinks by it; if several panels together exceed the stack budget the
+    // panel stack scrolls (--daw-bmax) rather than squeezing the timeline.
     const shellH = el_.shell.clientHeight;
-    const keysH = bottom.keys ? (el_.keys.offsetHeight || 150) : 0;
-    const maxH = shellH > 0 ? Math.max(56, shellH - 300 - keysH) : BOTTOM_MAX;
+    const keysH = openSet.has("keys") ? (el_.keys.offsetHeight || 150) : 0;
+    const budget = shellH > 0 ? Math.max(120, shellH - 300) : BOTTOM_MAX + 160;
+    const maxH = Math.max(56, budget - keysH);
     el_.shell.style.setProperty("--daw-bh", Math.min(bottom.h, maxH) + "px");
-    el_.shell.classList.toggle("bottom-collapsed", !bottom.active && !bottom.keys);
+    el_.shell.style.setProperty("--daw-bmax", budget + "px");
+    el_.shell.classList.toggle("bottom-collapsed", openSet.size === 0);
     el_.tabs.querySelectorAll(".daw-tab").forEach((b) => {
-      if (b.dataset.panel === "keys") {
-        b.classList.toggle("active", bottom.keys);
-        b.setAttribute("aria-pressed", bottom.keys ? "true" : "false");
-        return;
-      }
-      const active = b.dataset.panel === bottom.active;
-      b.classList.toggle("active", active);
-      b.setAttribute("aria-selected", active ? "true" : "false");
+      const on = openSet.has(b.dataset.panel);
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
       if (b.dataset.panel === "editor") {
         const editable = !!editRegion || !!primarySel();
         b.classList.toggle("is-disabled", !editable);
         b.setAttribute("aria-disabled", editable ? "false" : "true");
       }
     });
-    el_.kbToggle?.setAttribute("aria-pressed", bottom.keys ? "true" : "false");
-    el_.chToggle?.setAttribute("aria-pressed", bottom.active === "chain" ? "true" : "false");
+    el_.kbToggle?.setAttribute("aria-pressed", openSet.has("keys") ? "true" : "false");
+    el_.chToggle?.setAttribute("aria-pressed", openSet.has("chain") ? "true" : "false");
     // The editor DOM is only valid while visible: model edits made while it was
     // hidden (quantize, snap change) skip its re-render, so a reopen — via tab,
     // gutter drag or dblclick — must rebuild it, whatever path un-hid it.
@@ -1329,9 +1422,13 @@ export const DAW = (() => {
   }
 
   function attachBottomResize(gutter) {
+    const restoreSet = () => {
+      const back = sanitizeOpen(bottom.reopen);
+      bottom.open = back.length ? back : ["chain"];
+    };
     let drag = null;
     gutter.addEventListener("pointerdown", (e) => {
-      drag = { y: e.clientY, h: bottom.active ? bottom.h : 0 };
+      drag = { y: e.clientY, h: bottom.open.length ? bottom.h : 0 };
       try { gutter.setPointerCapture(e.pointerId); } catch {}
       e.preventDefault();
     });
@@ -1339,12 +1436,9 @@ export const DAW = (() => {
       if (!drag) return;
       const raw = drag.h + (drag.y - e.clientY);       // dragging up grows the panel
       if (raw < BOTTOM_MIN * 0.55) {
-        if (bottom.active) { bottom.reopen = bottom.active; bottom.active = null; }
+        if (bottom.open.length) { bottom.reopen = sanitizeOpen(bottom.open); bottom.open = []; }
       } else {
-        if (!bottom.active) {
-          const back = bottom.reopen && (bottom.reopen !== "editor" || editRegion) ? bottom.reopen : bottom.prev;
-          bottom.active = back || "chain";
-        }
+        if (!bottom.open.length) restoreSet();
         bottom.h = Math.max(BOTTOM_MIN, Math.min(BOTTOM_MAX, raw));
       }
       applyPanels();
@@ -1354,7 +1448,7 @@ export const DAW = (() => {
     gutter.addEventListener("pointercancel", up);
     gutter.addEventListener("dblclick", () => {
       bottom.h = BOTTOM_DEF;
-      if (!bottom.active) bottom.active = bottom.prev || "chain";
+      if (!bottom.open.length) restoreSet();
       applyPanels(); saveBottomState();
     });
     gutter.addEventListener("keydown", (e) => {
@@ -1362,7 +1456,11 @@ export const DAW = (() => {
       if (e.key === "ArrowUp") bottom.h = Math.min(BOTTOM_MAX, bottom.h + step);
       else if (e.key === "ArrowDown") bottom.h = Math.max(BOTTOM_MIN, bottom.h - step);
       else if (e.key === "Enter" || e.key === " ") {
-        toggleBottomPanel(bottom.active || bottom.prev || "chain");
+        // Enter toggles the whole stack: collapse everything, or bring the
+        // last combination back.
+        if (bottom.open.length) { bottom.reopen = sanitizeOpen(bottom.open); bottom.open = []; }
+        else restoreSet();
+        applyPanels(); saveBottomState();
         e.preventDefault();
         return;
       } else return;
@@ -1409,7 +1507,11 @@ export const DAW = (() => {
     el_.deleteBtn.disabled = !items.length;
     try {
       const ctx = _getCtx();
-      el_.audioRead.textContent = `${(ctx.sampleRate / 1000).toFixed(1)} kHz · ${ctx.state === "running" ? "Audio ready" : "Audio suspended"}`;
+      const track = activeTrack();
+      const input = track?.kind === "audio"
+        ? audioInputState === "ready" ? "input ready" : audioInputState === "blocked" ? "input blocked" : "input not set"
+        : "Audio ready";
+      el_.audioRead.textContent = `${(ctx.sampleRate / 1000).toFixed(1)} kHz · ${ctx.state === "running" ? input : "Audio suspended"}`;
     } catch {
       el_.audioRead.textContent = "Audio ready";
     }
@@ -1422,13 +1524,14 @@ export const DAW = (() => {
     renderHeads();
     renderTimeline();
     renderChain();
-    if (bottom.active === "mixer") renderMixer();
+    if (panelIsOpen("mixer")) renderMixer();
     if (editorOpen()) renderEditor();
     syncStatus();
   }
 
   /** The transport bar is built once — resync its widgets after undo/import. */
   function syncTransport() {
+    if (el_.titleIn) el_.titleIn.value = song.title || "Untitled session";
     const bpmIn = root.querySelector("#daw-bpm-in");
     if (bpmIn) bpmIn.value = song.bpm;
     const sig = root.querySelector("#daw-sig");
@@ -1438,6 +1541,102 @@ export const DAW = (() => {
       loopBtn.classList.toggle("active", !!song.loop?.on);
       loopBtn.setAttribute("aria-pressed", song.loop?.on ? "true" : "false");
     }
+  }
+
+  /**
+   * Compact dial for the track header — dial only (value lives in the
+   * tooltip/aria), so volume and pan fit the head row next to M/S/⏺/A.
+   * Vertical drag, wheel and arrow keys adjust; Home / double-click resets.
+   * pointerdown must NOT bubble: the head's own pointerdown calls
+   * setActiveTrack → renderHeads, which would replace this element mid-drag.
+   */
+  function headKnob(t, param) {
+    const spec = param === "gain"
+      ? {
+        name: "Volume", min: 0, max: 1.4, reset: 0.9,
+        get: () => t.gain, set: (v) => { t.gain = v; },
+        fmt: (v) => (v <= 0.001 ? "-∞" : (20 * Math.log10(v)).toFixed(1)) + " dB",
+      }
+      : {
+        name: "Pan", min: -1, max: 1, reset: 0,
+        get: () => t.pan, set: (v) => { t.pan = v; },
+        fmt: (v) => (Math.abs(v) < 0.02 ? "C" : (v < 0 ? "L" : "R") + Math.round(Math.abs(v) * 100)),
+      };
+    const k = el("div", "daw-head-knob daw-head-knob-" + param);
+    k.tabIndex = 0;
+    k.setAttribute("role", "slider");
+    k.setAttribute("aria-valuemin", String(spec.min));
+    k.setAttribute("aria-valuemax", String(spec.max));
+    const gestureKey = `headknob:${param}:${t.id}`;
+    const paint = () => {
+      const v = spec.get();
+      const tr = (v - spec.min) / (spec.max - spec.min);
+      k.style.setProperty("--rot", `${-135 + tr * 270}deg`);
+      k.setAttribute("aria-valuenow", String(Math.round(v * 100) / 100));
+      k.setAttribute("aria-valuetext", spec.fmt(v));
+      k.setAttribute("aria-label", `${t.name} ${spec.name.toLowerCase()}`);
+      k.title = `${spec.name} ${spec.fmt(v)} — drag, scroll or arrows · double-click resets`;
+    };
+    const apply = (v) => {
+      spec.set(Math.max(spec.min, Math.min(spec.max, v)));
+      engine.refreshTrackParams();
+      paint();
+    };
+    // The chain strip and mixer show the same parameter — refresh them once a
+    // gesture lands so the app never shows two different values for one track.
+    const syncPanels = () => { renderChain(); if (panelIsOpen("mixer")) renderMixer(); };
+    // Wheel/keyboard adjustments have no "release" moment: settle them onto
+    // the other panels after a short idle, or the stale chain fader would
+    // later write its old value straight back over the knob's.
+    let syncT = null;
+    const scheduleSync = () => { clearTimeout(syncT); syncT = setTimeout(syncPanels, 250); };
+    let startY = null, startV = null, moved = false;
+    k.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      startY = e.clientY; startV = spec.get(); moved = false;
+      try { k.setPointerCapture(e.pointerId); } catch {}
+    });
+    k.addEventListener("pointermove", (e) => {
+      if (startY == null) return;
+      if (!moved && Math.abs(e.clientY - startY) < 2) return;
+      if (!moved) { pushState(); moved = true; }
+      const tr = (startV - spec.min) / (spec.max - spec.min) + (startY - e.clientY) / 150;
+      apply(spec.min + Math.max(0, Math.min(1, tr)) * (spec.max - spec.min));
+    });
+    const end = () => {
+      if (startY == null) return;
+      startY = null;
+      if (moved) { save(); syncPanels(); }
+    };
+    k.addEventListener("pointerup", end);
+    k.addEventListener("pointercancel", end);
+    k.addEventListener("dblclick", (e) => { e.stopPropagation(); pushState(); apply(spec.reset); save(); syncPanels(); });
+    k.addEventListener("wheel", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      pushStateGesture(gestureKey);
+      apply(spec.get() - Math.sign(e.deltaY) * (spec.max - spec.min) / 40);
+      save(); scheduleSync();
+    }, { passive: false });
+    k.addEventListener("keydown", (e) => {
+      const step = (spec.max - spec.min) / (e.shiftKey ? 10 : 40);
+      if (e.key === "ArrowUp" || e.key === "ArrowRight") { pushStateGesture(gestureKey); apply(spec.get() + step); }
+      else if (e.key === "ArrowDown" || e.key === "ArrowLeft") { pushStateGesture(gestureKey); apply(spec.get() - step); }
+      else if (e.key === "Home") { pushStateGesture(gestureKey); apply(spec.reset); }
+      else return;
+      e.preventDefault(); e.stopPropagation(); save(); scheduleSync();
+    });
+    paint();
+    // Registered so the chain/mixer/MIDI paths can repaint the dial after they
+    // move the same parameter (syncHeadKnobs) — sync must run both ways.
+    k._paint = paint;
+    return k;
+  }
+
+  /** Repaint every head dial from the model (cheap: a handful of attr writes). */
+  function syncHeadKnobs() {
+    el_.headsScroll?.querySelectorAll?.(".daw-head-knob").forEach((k) => k._paint?.());
   }
 
   function renderHeads() {
@@ -1465,7 +1664,7 @@ export const DAW = (() => {
       row.append(
         mk("daw-mute", "M", `Mute ${t.name}`, t.mute, () => { pushState(); t.mute = !t.mute; engine.refreshTrackParams(); renderHeads(); save(); }),
         mk("daw-solo", "S", `Solo ${t.name}`, t.solo, () => { pushState(); t.solo = !t.solo; engine.refreshTrackParams(); renderHeads(); save(); }),
-        mk("daw-arm", "⏺", `Arm ${t.name} for recording`, t.armed, () => armTrack(t)),
+        mk("daw-arm", "ARM", `Arm ${t.name} for recording`, t.armed, () => armTrack(t)),
         mk("daw-auto-toggle", "A", `Show automation for ${t.name}`, t.automationVisible, () => {
           // A pure VIEW toggle: never seed points here. A seeded 1-point lane
           // would permanently pin the parameter (automationValueAt returns a
@@ -1509,6 +1708,9 @@ export const DAW = (() => {
           renderHeads(); renderTimeline(); save();
         }));
       }
+      // Per-track level (boostable past unity to +3 dB) and pan, right on the
+      // head — no need to open DEVICES or the mixer to trim a signal.
+      row.append(headKnob(t, "gain"), headKnob(t, "pan"));
       const kind = el("span", "daw-head-kind",
         t.kind === "audio" ? "AUDIO" : t.kind === "drums" ? (KIT_LABELS[t.kit] || "DRUMS") : (SOUND_LABELS[t.family]?.[t.sound] || t.family));
       row.appendChild(kind);
@@ -1615,7 +1817,7 @@ export const DAW = (() => {
     if (activeTrackId === id) return;
     activeTrackId = id;
     renderHeads(); renderChain();
-    if (bottom.active === "mixer") renderMixer();
+    if (panelIsOpen("mixer")) renderMixer();
   }
 
   function renderTimeline() {
@@ -2718,7 +2920,7 @@ export const DAW = (() => {
         if (!tr) continue;
         // Fired in one burst, browsers block all but the first download.
         if (count) await new Promise((r) => setTimeout(r, 400));
-        const wavBlob = bufferToWav(buf);
+        const wavBlob = await bufferToWavAsync(buf);
         const url = URL.createObjectURL(wavBlob);
         const a = document.createElement("a");
         a.href = url;
@@ -2824,9 +3026,12 @@ export const DAW = (() => {
   }
 
   function updateTransportButtons() {
-    el_.playBtn.textContent = engine.playing ? "■" : "▶";
+    el_.playBtn.textContent = engine.playing ? "STOP" : "PLAY";
+    el_.playBtn.setAttribute("aria-label", engine.playing ? "Stop playback (Space)" : "Play (Space)");
     el_.playBtn.classList.toggle("playing", engine.playing);
     el_.recBtn.classList.toggle("recording", engine.recording);
+    el_.recBtn.textContent = engine.recording ? "STOP REC" : "REC";
+    el_.recBtn.setAttribute("aria-label", engine.recording ? "Stop recording" : "Record onto the armed track");
   }
 
   function positionPlayhead(beat) {
@@ -2845,6 +3050,13 @@ export const DAW = (() => {
     const bpb = beatsPerBar();
     el_.pos.textContent = formatMusicalPosition(b, bpb, snapStep);
     positionPlayhead(b);
+    const rollHead = rollCtx?.rollPlayhead;
+    if (rollHead) {
+      const localBeat = b - rollCtx.r.start;
+      const visible = localBeat >= 0 && localBeat <= rollCtx.r.len;
+      rollHead.hidden = !visible;
+      if (visible) rollHead.style.transform = `translateX(${ROLL_KEYS_W + localBeat * rollPx}px)`;
+    }
   }
 
   let liveRecEl = null;
@@ -3083,28 +3295,190 @@ export const DAW = (() => {
   }
 
   /* ---------------- recording ---------------- */
+  async function refreshAudioInputs({ requestPermission = false } = {}) {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      audioInputState = "unsupported";
+      return [];
+    }
+    try {
+      if (requestPermission) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        });
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      inputDevices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
+      audioInputState = inputDevices.length ? "ready" : "unknown";
+      return inputDevices;
+    } catch (error) {
+      audioInputState = error?.name === "NotAllowedError" || error?.name === "SecurityError" ? "blocked" : "unknown";
+      return [];
+    }
+  }
+
+  function audioInputSummary(track = activeTrack()) {
+    if (audioInputState === "unsupported") return "Audio input is not supported in this browser";
+    if (audioInputState === "blocked") return "Microphone permission is blocked";
+    if (!inputDevices.length) return "Choose Enable inputs to reveal your microphone or interface";
+    const chosen = inputDevices.find((d) => d.deviceId === track?.inputId);
+    return `Input ready · ${chosen?.label || "Default input"}`;
+  }
+
+  async function enableMidiInput() {
+    const midi = window.sxratch?.midi;
+    if (!midi?.supported?.()) {
+      _toast("Web MIDI is not available in this browser. The on-screen keyboard still works.", { severity: "error" });
+      return false;
+    }
+    try {
+      const ok = await midi.enable();
+      _toast(ok ? `MIDI ready${midi.devices?.length ? ` · ${midi.devices.length} input${midi.devices.length === 1 ? "" : "s"}` : ""}` : "Could not enable MIDI input.", { severity: ok ? "ok" : "error" });
+      return !!ok;
+    } catch {
+      _toast("Could not enable MIDI input.", { severity: "error" });
+      return false;
+    }
+  }
+
+  /** A concise, action-oriented setup surface for devices and record safety. */
+  function showStudioSetup() {
+    root.querySelector("#daw-setup-dialog")?.remove();
+    const dialog = el("dialog", "daw-setup-dialog");
+    dialog.id = "daw-setup-dialog";
+    const header = el("header", "daw-shortcut-head");
+    const title = el("h2", null, "Studio setup");
+    const close = iconBtn("daw-hbtn", "×", "Close studio setup");
+    close.addEventListener("click", () => dialog.close());
+    header.append(title, close);
+
+    const copy = el("p", "daw-setup-copy", "Set an input before you record. PAD will keep the selected device, monitor choice and latency trim with this session.");
+    const grid = el("div", "daw-setup-grid");
+    const audioCard = el("section", "daw-setup-card");
+    audioCard.append(el("h3", null, "Audio recording"));
+    let setupTrack = activeTrack()?.kind === "audio"
+      ? activeTrack()
+      : song.tracks.find((track) => track.kind === "audio") || null;
+    const audioStatus = el("p", "daw-setup-status", audioInputSummary());
+    const addAudio = el("button", "daw-fbtn daw-setup-action", "Add audio track");
+    addAudio.type = "button";
+    const enableInputs = el("button", "daw-fbtn daw-setup-action", "Enable audio inputs");
+    enableInputs.type = "button";
+    const inputLabel = el("label", "daw-setup-field");
+    inputLabel.appendChild(el("span", null, "Input device"));
+    const inputSel = el("select", "daw-dev-sel");
+    inputSel.setAttribute("aria-label", "Audio input device");
+    const monitor = el("button", "daw-fbtn daw-setup-action", "Monitor: off");
+    monitor.type = "button";
+    const latency = el("label", "daw-setup-field");
+    latency.appendChild(el("span", null, "Manual latency trim"));
+    const latencyIn = el("input", "daw-setup-number");
+    latencyIn.type = "number"; latencyIn.min = "-150"; latencyIn.max = "150"; latencyIn.step = "1";
+    latencyIn.setAttribute("aria-label", "Manual recording latency trim in milliseconds");
+    latency.appendChild(latencyIn);
+
+    const paintAudio = () => {
+      const track = setupTrack;
+      audioStatus.textContent = track
+        ? audioInputSummary(track)
+        : "Add an audio track when you are ready to record or import audio.";
+      inputSel.replaceChildren();
+      const first = el("option", null, inputDevices.length ? "Default input" : "Enable inputs first");
+      first.value = ""; inputSel.appendChild(first);
+      inputDevices.forEach((device, index) => {
+        const option = el("option", null, device.label || `Input ${index + 1}`);
+        option.value = device.deviceId;
+        option.selected = device.deviceId === track?.inputId;
+        inputSel.appendChild(option);
+      });
+      inputSel.disabled = !track || !inputDevices.length;
+      monitor.disabled = !track;
+      latencyIn.disabled = !track;
+      monitor.textContent = `Monitor: ${track?.monitor ? "on" : "off"}`;
+      monitor.classList.toggle("active", !!track?.monitor);
+      latencyIn.value = String(track?.recOffsetMs || 0);
+      addAudio.hidden = !!track;
+    };
+    addAudio.addEventListener("click", () => { setupTrack = addTrackFromChoice("audio"); paintAudio(); });
+    enableInputs.addEventListener("click", async () => {
+      enableInputs.disabled = true; enableInputs.textContent = "Requesting input…";
+      await refreshAudioInputs({ requestPermission: true });
+      enableInputs.disabled = false; enableInputs.textContent = inputDevices.length ? "Refresh audio inputs" : "Enable audio inputs";
+      paintAudio(); renderChain(); syncStatus();
+      if (audioInputState === "blocked") _toast("Microphone permission is blocked. Enable it in your browser site settings, then refresh.", { severity: "error" });
+    });
+    inputSel.addEventListener("change", () => {
+      const track = setupTrack;
+      if (!track) return;
+      track.inputId = inputSel.value || null; save(); paintAudio(); renderChain(); syncStatus();
+    });
+    monitor.addEventListener("click", () => {
+      const track = setupTrack;
+      if (!track) return;
+      pushState(); track.monitor = !track.monitor; save(); paintAudio(); renderChain();
+    });
+    latencyIn.addEventListener("change", () => {
+      const track = setupTrack;
+      if (!track) return;
+      track.recOffsetMs = Math.round(clampFinite(latencyIn.value, -150, 150, 0)); save(); paintAudio(); renderChain();
+    });
+    inputLabel.appendChild(inputSel);
+    audioCard.append(audioStatus, addAudio, enableInputs, inputLabel, monitor, latency);
+
+    const midiCard = el("section", "daw-setup-card");
+    midiCard.append(el("h3", null, "MIDI performance"));
+    const midi = window.sxratch?.midi;
+    const midiStatus = el("p", "daw-setup-status", midi?.supported?.()
+      ? midi?.devices?.length ? `${midi.devices.length} MIDI input${midi.devices.length === 1 ? "" : "s"} available` : "Enable MIDI to use a controller"
+      : "No Web MIDI support detected — use the on-screen keyboard instead");
+    const midiEnable = el("button", "daw-fbtn daw-setup-action", "Enable MIDI input");
+    midiEnable.type = "button";
+    midiEnable.disabled = !midi?.supported?.();
+    midiEnable.addEventListener("click", async () => {
+      midiEnable.disabled = true; midiEnable.textContent = "Enabling MIDI…";
+      const ok = await enableMidiInput();
+      midiEnable.disabled = !midi?.supported?.(); midiEnable.textContent = ok ? "Refresh MIDI input" : "Enable MIDI input";
+      midiStatus.textContent = midi?.devices?.length ? `${midi.devices.length} MIDI input${midi.devices.length === 1 ? "" : "s"} ready` : "MIDI enabled — connect a controller or use the keyboard";
+    });
+    const keys = el("button", "daw-fbtn daw-setup-action", "Open on-screen keyboard");
+    keys.type = "button";
+    keys.addEventListener("click", () => { if (!panelIsOpen("keys")) toggleBottomPanel("keys"); dialog.close(); });
+    midiCard.append(midiStatus, midiEnable, keys);
+    grid.append(audioCard, midiCard);
+
+    const ready = el("button", "daw-fbtn daw-setup-record", "Arm audio track");
+    ready.type = "button";
+    ready.addEventListener("click", async () => { const track = setupTrack || addTrackFromChoice("audio"); await armTrack(track); dialog.close(); });
+    dialog.append(header, copy, grid, ready);
+    dialog.addEventListener("close", () => dialog.remove(), { once: true });
+    root.appendChild(dialog);
+    paintAudio();
+    if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
+  }
+
   async function armTrack(t) {
     const on = !t.armed;
     song.tracks.forEach((x) => { x.armed = false; });
     t.armed = on;
     renderHeads(); renderChain(); save();
     if (on && t.kind === "audio") {
-      // Surface the device list up front so the pick is ready before ⏺.
-      try {
-        await navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => s.getTracks().forEach((x) => x.stop()));
-        inputDevices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
-        renderChain();
-      } catch {
-        _toast("Microphone access was blocked — recording needs an input.", { severity: "error" });
-      }
-    }
-    if (on) _toast(`${t.name} armed — press ● to record`);
+      _toast(`${t.name} armed · ${audioInputSummary(t)}. Press REC when ready.`);
+    } else if (on) _toast(`${t.name} armed — press REC to record`);
+    syncStatus();
   }
 
   async function toggleRecord() {
     if (engine.recording) { await finishRecording(); return; }
     const t = song.tracks.find((x) => x.armed);
     if (!t) { _toast("Arm a track first (⏺ on its header)"); return; }
+    if (t.kind === "audio" && !inputDevices.length) {
+      await refreshAudioInputs({ requestPermission: true });
+      if (!inputDevices.length) {
+        _toast(audioInputState === "blocked" ? "Microphone permission is blocked — open SETUP for help." : "No audio input is available — open SETUP to choose one.", { severity: "error" });
+        showStudioSetup();
+        return;
+      }
+      renderChain(); syncStatus();
+    }
     const pending = engine.record(t, { deviceId: t.inputId });
     updateTransportButtons();              // light ● immediately, incl. count-in
     const ok = await pending;
@@ -3150,11 +3524,19 @@ export const DAW = (() => {
       if (completePasses.length) {
         const loopLen = take.loop.b - take.loop.a;
         const secondsPerBeat = 60 / song.bpm;
+        const loopStartBeat = snap(take.loop.a);
+        // Passes were captured at the true loop start, which may be off-grid
+        // (brace set while SNAP was off). Same rule as startDeltaSec above: a
+        // region snapped later than take.loop.a must skip the displacement's
+        // worth of extra buffer; one snapped earlier must skip less.
+        // Regression: without this, takes placed at the snapped start played
+        // shifted by the snap displacement.
+        const loopDeltaSec = (loopStartBeat - take.loop.a) * secondsPerBeat;
         for (const pass of completePasses) {
-          captured.push(makeRegion(t, snap(take.loop.a), loopLen, {
+          captured.push(makeRegion(t, loopStartBeat, loopLen, {
             name: `Take ${t.regions.length + 1}`,
             clipId,
-            offset: inputLatencySec + pass.elapsedStart * secondsPerBeat,
+            offset: Math.max(0, inputLatencySec + loopDeltaSec + pass.elapsedStart * secondsPerBeat),
           }));
         }
       } else {
@@ -3344,10 +3726,14 @@ export const DAW = (() => {
 
   function onKeyDown(e) {
     if (!document.body.classList.contains("view-studio")) return;
-    if (e.target.closest && e.target.closest("input, textarea, select, [contenteditable]")) return;
-    const activationTarget = e.target.closest?.("button, a[href], summary, [role='button'], [role='menuitem'], [role='tab']");
-    // Let focused controls retain their native Enter/Space activation. The
-    // transport shortcut is global only when focus is on the workspace.
+    // Focused value controls own their keys outright — a slider's Home must
+    // reset the slider, not seek the transport (this handler runs in CAPTURE,
+    // so the control's own listener never sees anything we intercept here).
+    if (e.target.closest && e.target.closest("input, textarea, select, [contenteditable], [role='slider']")) return;
+    const activationTarget = e.target.closest?.("button, a[href], summary, [role='button'], [role='menuitem'], [role='tab'], [role='separator']");
+    // Let focused controls retain their native Enter/Space activation (and the
+    // resize separators their documented Enter/Space toggles). The transport
+    // shortcut is global only when focus is on the workspace.
     if (activationTarget && (e.code === "Space" || e.code === "Enter")) return;
     // Note cells own their editor-specific selection shortcut. This listener
     // runs in capture, so it must yield before the target handler sees Ctrl+A.
@@ -3470,7 +3856,7 @@ export const DAW = (() => {
   function openEditor(track, region) {
     if (editRegion !== region) rollSel = new Set();
     editRegion = region;
-    bottom.active = "editor";
+    if (!bottom.open.includes("editor")) bottom.open = [...bottom.open, "editor"];
     bottom.h = Math.max(bottom.h, 280);   // the roll needs vertical room
     applyPanels();
     renderEditor();
@@ -3502,6 +3888,21 @@ export const DAW = (() => {
     head.append(el("span", "daw-panel-title", "EDIT — " + track.name), nameIn);
 
     const toolsWrap = el("div", "daw-roll-header-tools");
+    const preview = iconBtn("daw-hbtn daw-roll-preview", "PLAY", "Play from the start of this region");
+    preview.addEventListener("click", () => {
+      if (engine.playing) engine.stop();
+      else engine.play(r.start);
+      updateTransportButtons(); updateClock();
+    });
+    const gridLabel = SNAP_OPTIONS.find((option) => option.beats === snapStep)?.label || String(snapStep);
+    const rollGrid = iconBtn("daw-hbtn daw-roll-grid", `GRID ${gridLabel}`, "Change the piano-roll grid");
+    rollGrid.addEventListener("click", () => {
+      const choices = SNAP_OPTIONS.map((option) => option.beats).filter((beats) => beats > 0);
+      const index = Math.max(0, choices.indexOf(snapStep));
+      snapStep = choices[(index + 1) % choices.length]; song.view.snap = snapStep; snapOn = true;
+      syncSnapButton(); syncStatus(); renderEditor(); save();
+    });
+    toolsWrap.append(preview, rollGrid);
     if (track.kind === "midi") {
       const nLeft = iconBtn("daw-hbtn", "◀", "Shift notes left");
       nLeft.addEventListener("click", () => nudgeRegionNotes(-gridStep()));
@@ -3581,6 +3982,9 @@ export const DAW = (() => {
 
     const notesLayer = el("div", "daw-roll2-notes");
     inner.appendChild(notesLayer);
+    const rollPlayhead = el("div", "daw-roll-playhead");
+    rollPlayhead.setAttribute("aria-hidden", "true");
+    inner.appendChild(rollPlayhead);
 
     const keysCol = el("div", "daw-roll2-keys");
     keysCol.style.height = innerH + "px";
@@ -3627,7 +4031,7 @@ export const DAW = (() => {
 
     rollCtx = {
       track, r, rows, ROW_H, isDrums, hiPitch, inner, notesLayer, semanticRows,
-      scroll, velCv, noteEls: new Map(),
+      scroll, velCv, rollPlayhead, noteEls: new Map(),
     };
     renderRollNotes();
     attachRollInteractions();
@@ -4082,25 +4486,58 @@ export const DAW = (() => {
         min: 0, max: fadeMax, fmt: (v) => v.toFixed(2) + " beats",
       }),
     );
-    const tempo = el("button", "daw-tempo-mode");
-    tempo.type = "button";
+    const timing = el("div", "daw-audio-timing");
+    const sourceLabel = el("label", "daw-audio-source-bpm");
+    sourceLabel.appendChild(el("span", null, "Source BPM"));
+    const source = el("input", "daw-setup-number");
+    source.type = "number"; source.min = "40"; source.max = "240"; source.step = "0.1";
+    source.value = String(r.sourceBpm || song.bpm);
+    source.setAttribute("aria-label", "Audio clip source BPM");
     const paintTempo = () => {
       const rate = r.tempoMode === "repitch" ? song.bpm / (r.sourceBpm || song.bpm) : 1;
       const semis = 12 * Math.log2(Math.max(0.001, rate));
-      tempo.textContent = r.tempoMode === "repitch"
-        ? `FOLLOW BPM · REPITCH ${rate.toFixed(2)}× (${semis >= 0 ? "+" : ""}${semis.toFixed(1)} st)`
-        : "FOLLOW BPM · OFF (RAW)";
-      tempo.setAttribute("aria-pressed", r.tempoMode === "repitch" ? "true" : "false");
+      mode.value = r.tempoMode === "repitch" ? "repitch" : "raw";
+      rateRead.textContent = r.tempoMode === "repitch"
+        ? `${rate.toFixed(2)}× · ${semis >= 0 ? "+" : ""}${semis.toFixed(1)} st pitch shift`
+        : "Original speed · no tempo follow";
     };
-    tempo.addEventListener("click", () => {
-      pushState();
-      r.tempoMode = r.tempoMode === "repitch" ? "raw" : "repitch";
-      paintTempo();
-      engine?.syncGraph?.();
-      redrawRegion(track, r); save();
+    source.addEventListener("change", () => {
+      pushState(); r.sourceBpm = clampFinite(source.value, 40, 240, song.bpm); source.value = String(r.sourceBpm);
+      paintTempo(); engine?.syncGraph?.(); repaint(); save();
     });
+    sourceLabel.appendChild(source);
+    const modeLabel = el("label", "daw-audio-source-bpm");
+    modeLabel.appendChild(el("span", null, "Tempo mode"));
+    const mode = el("select", "daw-dev-sel");
+    mode.append(
+      el("option", null, "Follow project tempo (repitch)"),
+      el("option", null, "Keep original speed"),
+    );
+    mode.options[0].value = "repitch"; mode.options[1].value = "raw";
+    mode.setAttribute("aria-label", "Audio clip tempo mode");
+    const rateRead = el("span", "daw-audio-rate");
+    mode.addEventListener("change", () => {
+      pushState(); r.tempoMode = mode.value === "repitch" ? "repitch" : "raw";
+      paintTempo(); engine?.syncGraph?.(); repaint(); save();
+    });
+    modeLabel.appendChild(mode);
+    const analyse = el("button", "daw-fbtn daw-audio-analyse", "Detect source BPM");
+    analyse.type = "button";
+    analyse.addEventListener("click", () => {
+      const clip = clips.get(r.clipId);
+      if (!clip) { _toast("This clip is not available in this browser.", { severity: "error" }); return; }
+      analyse.disabled = true; analyse.textContent = "Detecting…";
+      setTimeout(() => {
+        const detected = detectBPM(clip);
+        analyse.disabled = false; analyse.textContent = "Detect source BPM";
+        if (!detected) { _toast("PAD could not confidently detect a tempo. Enter the source BPM manually."); return; }
+        pushState(); r.sourceBpm = detected; source.value = String(detected); paintTempo(); repaint(); save();
+        _toast(`Source tempo set to ${detected.toFixed(1)} BPM`, { severity: "ok" });
+      }, 0);
+    });
+    timing.append(sourceLabel, modeLabel, rateRead, analyse);
     paintTempo();
-    body.append(cv, knobs, tempo);
+    body.append(cv, knobs, timing);
     requestAnimationFrame(() => drawAudioEditorWave(cv, r));
     return body;
   }
@@ -4290,25 +4727,66 @@ export const DAW = (() => {
         pushState(); track.fx.bypass = !track.fx.bypass; engine?.syncGraph?.(); renderMixer(); save();
       }, "fx"),
     );
+    const vOK = verticalRangeOk();
     const fader = mixerSlider("Fader", track.gain, 0, 1.4, 0.01, (value) => {
-      track.gain = value; engine.refreshMixParams?.() || engine.refreshTrackParams();
-    }, true, `t${track.id}`, { target: "gain", trackIndex });
+      track.gain = value; engine.refreshMixParams?.() || engine.refreshTrackParams(); syncHeadKnobs();
+    }, vOK, `t${track.id}`, { target: "gain", trackIndex }, track.name);
     const pan = mixerSlider("Pan", track.pan, -1, 1, 0.01, (value) => {
-      track.pan = value; engine.refreshMixParams?.() || engine.refreshTrackParams();
-    }, false, `t${track.id}`, { target: "pan", trackIndex });
+      track.pan = value; engine.refreshMixParams?.() || engine.refreshTrackParams(); syncHeadKnobs();
+    }, false, `t${track.id}`, { target: "pan", trackIndex }, track.name);
     const reverb = mixerSlider("Verb", track.sends.reverb, 0, 1, 0.01, (value) => {
       track.sends.reverb = value; engine.refreshMixParams?.() || engine.refreshTrackParams();
-    }, false, `t${track.id}`, { target: "reverb", trackIndex });
+    }, false, `t${track.id}`, { target: "reverb", trackIndex }, track.name);
     const delay = mixerSlider("Delay", track.sends.delay, 0, 1, 0.01, (value) => {
       track.sends.delay = value; engine.refreshMixParams?.() || engine.refreshTrackParams();
-    }, false, `t${track.id}`, { target: "delay", trackIndex });
-    strip.append(name, meter, fader, pan, reverb, delay, buttons);
+    }, false, `t${track.id}`, { target: "delay", trackIndex }, track.name);
+    const bank = el("div", "daw-fader-bank" + (vOK ? "" : " no-fader"));
+    if (vOK) bank.append(fader, meterScale(), meter);
+    else bank.append(meterScale(), meter);
+    const sends = el("div", "daw-send-stack");
+    sends.append(reverb, delay);
+    if (vOK) strip.append(name, pan, bank, sends, buttons);
+    else strip.append(name, fader, pan, bank, sends, buttons);
     return strip;
   }
 
-  function mixerSlider(label, value, min, max, step, set, vertical = false, id = "", midiTarget = null) {
+  /** dB ruler printed between fader and meter. Tick positions follow
+   *  meterPercent's −60..0 dBFS mapping, so the numbers are true for the
+   *  METER column (the fader itself is linear in gain, like the engine). */
+  function meterScale() {
+    const scale = el("div", "daw-fader-scale");
+    scale.setAttribute("aria-hidden", "true");
+    for (const db of [0, 6, 12, 18, 24, 36, 48]) {
+      const tick = el("i", null, db % 12 === 0 ? String(db) : "");
+      tick.style.top = (db / 60) * 100 + "%";
+      scale.appendChild(tick);
+    }
+    return scale;
+  }
+
+  /** Old engines (Safari <17.4, legacy Chromium WebViews) lay a writing-mode
+   *  vertical range input out horizontally — probe once so those get a
+   *  horizontal fader row instead of an unusable 5px sliver. */
+  let _vRangeOk = null;
+  function verticalRangeOk() {
+    if (_vRangeOk != null) return _vRangeOk;
+    const probe = el("input");
+    probe.type = "range";
+    probe.style.cssText = "position:absolute;visibility:hidden;width:auto;height:auto;writing-mode:vertical-lr;";
+    document.body.appendChild(probe);
+    _vRangeOk = probe.offsetHeight > probe.offsetWidth;
+    probe.remove();
+    return _vRangeOk;
+  }
+
+  function mixerSlider(label, value, min, max, step, set, vertical = false, id = "", midiTarget = null, owner = "") {
     const gestureKey = `mixer:${id}:${label}`;
-    const wrap = el("label", `daw-mixer-control${vertical ? " vertical" : ""}`);
+    // Variant class picks the skin: tall console fader, bipolar (centre-fill)
+    // slider for pan/EQ, or a left-fill send slider. "vfader" not "fader" —
+    // bare .fader is the DJ deck widget (styles.css touch-action:none would
+    // kill touch-scrolling the mixer).
+    const bipolar = label === "Pan" || label.endsWith("EQ");
+    const wrap = el("label", `daw-mixer-control ${vertical ? "vfader" : bipolar ? "bi" : "send"}`);
     if (midiTarget) {
       wrap.classList.add("midi-mappable");
       // Capture phase: in learn mode a press ARMS the control instead of
@@ -4323,11 +4801,19 @@ export const DAW = (() => {
     const input = el("input");
     input.type = "range";
     input.min = min; input.max = max; input.step = step; input.value = value;
-    input.setAttribute("aria-label", label);
+    // Strip context in the accessible name — eight strips of bare "Fader"
+    // are indistinguishable to a screen reader (WCAG 2.4.6).
+    input.setAttribute("aria-label", owner ? `${owner} ${label}` : label);
+    // Belt-and-braces vertical orientation: writing-mode does it in CSS for
+    // current browsers, `orient` keeps older Firefox from lying flat.
+    if (vertical) input.setAttribute("orient", "vertical");
     input.dataset.focusKey = gestureKey;
     const output = el("output");
     const paint = () => {
       const v = +input.value;
+      // The CSS fill (send bars, bipolar centre-fill) tracks the thumb via
+      // this custom property — pseudo-element tracks can't read input.value.
+      wrap.style.setProperty("--pct", (((v - min) / (max - min)) * 100).toFixed(1) + "%");
       output.textContent = label === "Fader"
         ? (v <= 0.001 ? "−∞" : `${(20 * Math.log10(v)).toFixed(1)} dB`)
         : label.endsWith("EQ")
@@ -4339,6 +4825,9 @@ export const DAW = (() => {
             : label === "Tone"
               ? fmtHz(v)
           : `${Math.round(v * 100)}%`;
+      // Assistive tech should hear the same dB/pan text sighted users read,
+      // not the raw linear slider value.
+      input.setAttribute("aria-valuetext", output.textContent);
     };
     // The snapshot is DEFERRED to the first input event: a bare click on the
     // thumb must not wipe the redo stack with a no-op snapshot. At that first
@@ -4350,6 +4839,13 @@ export const DAW = (() => {
     input.addEventListener("pointerup", endGesture);
     input.addEventListener("pointercancel", endGesture);
     input.addEventListener("keydown", (e) => {
+      if (midiLearnMode && midiTarget) {
+        // Keyboard parity with the pointer path: Enter/Space arms the control,
+        // and value keys are suspended (pointer-events:none suspends the mouse).
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); armMidiLearn(midiTarget, wrap); }
+        else if (/^(Arrow|Home$|End$|Page)/.test(e.key)) e.preventDefault();
+        return;
+      }
       if (/^(Arrow|Home$|End$|Page)/.test(e.key)) pushStateGesture(gestureKey);
     });
     input.addEventListener("input", () => {
@@ -4370,19 +4866,30 @@ export const DAW = (() => {
     on.classList.toggle("active", bus.on !== false);
     on.setAttribute("aria-pressed", bus.on !== false ? "true" : "false");
     on.addEventListener("click", () => { pushState(); bus.on = bus.on === false; refresh(); renderMixer(); save(); });
-    strip.append(title, mixerSlider("Fader", bus[key] ?? 1, 0, 1.4, 0.01, (v) => { bus[key] = v; refresh(); }, true, `bus:${name}`));
+    // No scale beside a return fader — the printed dB numbers describe the
+    // meter mapping, and returns have no meter to make them true.
+    const vOK = verticalRangeOk();
+    const owner = `${name} return`;
+    const fader = mixerSlider("Fader", bus[key] ?? 1, 0, 1.4, 0.01, (v) => { bus[key] = v; refresh(); }, vOK, `bus:${name}`, null, owner);
+    const params = el("div", "daw-send-stack");
     if (name === "REVERB") {
-      strip.append(
-        mixerSlider("Size", bus.size ?? 0.4, 0, 1, 0.01, (v) => { bus.size = v; queueReverbRebuild(); refresh(); }, false, `bus:${name}`),
-        mixerSlider("Damp", bus.damp ?? 0.5, 0, 1, 0.01, (v) => { bus.damp = v; queueReverbRebuild(); refresh(); }, false, `bus:${name}`),
+      params.append(
+        mixerSlider("Size", bus.size ?? 0.4, 0, 1, 0.01, (v) => { bus.size = v; queueReverbRebuild(); refresh(); }, false, `bus:${name}`, null, owner),
+        mixerSlider("Damp", bus.damp ?? 0.5, 0, 1, 0.01, (v) => { bus.damp = v; queueReverbRebuild(); refresh(); }, false, `bus:${name}`, null, owner),
       );
     } else {
-      strip.append(
-        mixerSlider("Time", bus.time ?? 0.25, 0.0625, 2, 0.0625, (v) => { bus.time = v; refresh(); }, false, `bus:${name}`),
-        mixerSlider("Feedback", bus.feedback ?? 0.3, 0, 0.72, 0.01, (v) => { bus.feedback = v; refresh(); }, false, `bus:${name}`),
+      params.append(
+        mixerSlider("Time", bus.time ?? 0.25, 0.0625, 2, 0.0625, (v) => { bus.time = v; refresh(); }, false, `bus:${name}`, null, owner),
+        mixerSlider("Feedback", bus.feedback ?? 0.3, 0, 0.72, 0.01, (v) => { bus.feedback = v; refresh(); }, false, `bus:${name}`, null, owner),
       );
     }
-    strip.append(on);
+    if (vOK) {
+      const bank = el("div", "daw-fader-bank");
+      bank.append(fader);
+      strip.append(title, bank, params, on);
+    } else {
+      strip.append(title, fader, params, on);
+    }
     return strip;
   }
 
@@ -4409,16 +4916,119 @@ export const DAW = (() => {
     eqToggle.addEventListener("click", () => {
       pushState(); master.eq.on = master.eq.on === false; engine?.refreshMixParams?.(); renderMixer(); save();
     });
-    strip.append(
-      masterHead,
-      meter,
-      mixerSlider("Fader", master.gain, 0, 1.4, 0.01, (v) => { master.gain = v; engine?.refreshMixParams?.(); }, true, "master", { target: "masterGain" }),
-      mixerSlider("Low EQ", master.eq.low, -18, 18, 0.5, (v) => { master.eq.low = v; engine?.refreshMixParams?.(); }, false, "master"),
-      mixerSlider("Mid EQ", master.eq.mid, -18, 18, 0.5, (v) => { master.eq.mid = v; engine?.refreshMixParams?.(); }, false, "master"),
-      mixerSlider("High EQ", master.eq.high, -18, 18, 0.5, (v) => { master.eq.high = v; engine?.refreshMixParams?.(); }, false, "master"),
-      eqToggle,
+    const vOK = verticalRangeOk();
+    const fader = mixerSlider("Fader", master.gain, 0, 1.4, 0.01, (v) => { master.gain = v; engine?.refreshMixParams?.(); }, vOK, "master", { target: "masterGain" }, "DAW master");
+    const bank = el("div", "daw-fader-bank" + (vOK ? "" : " no-fader"));
+    if (vOK) bank.append(fader, meterScale(), meter);
+    else bank.append(meterScale(), meter);
+    const eqs = el("div", "daw-send-stack");
+    eqs.append(
+      mixerSlider("Low EQ", master.eq.low, -18, 18, 0.5, (v) => { master.eq.low = v; engine?.refreshMixParams?.(); }, false, "master", null, "DAW master"),
+      mixerSlider("Mid EQ", master.eq.mid, -18, 18, 0.5, (v) => { master.eq.mid = v; engine?.refreshMixParams?.(); }, false, "master", null, "DAW master"),
+      mixerSlider("High EQ", master.eq.high, -18, 18, 0.5, (v) => { master.eq.high = v; engine?.refreshMixParams?.(); }, false, "master", null, "DAW master"),
     );
+    if (vOK) strip.append(masterHead, bank, eqs, eqToggle);
+    else strip.append(masterHead, fader, bank, eqs, eqToggle);
     return strip;
+  }
+
+  function formatSynthParam(spec, value) {
+    if (spec.unit === "pct") return `${Math.round(value * 100)}%`;
+    if (spec.unit === "hz") return value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)} kHz` : `${Math.round(value)} Hz`;
+    if (spec.unit === "ct") return `${Math.round(value)} ct`;
+    if (spec.unit === "s") return `${value < 0.1 ? value.toFixed(3) : value.toFixed(2)} s`;
+    if (spec.unit === "amp") return `${Math.round(value * 100)}%`;
+    if (spec.unit === "int") return String(Math.round(value));
+    return Number(value).toFixed(Math.abs(value) >= 10 ? 0 : 2).replace(/\.00$/, "");
+  }
+
+  function buildSynthDesigner(track) {
+    const active = resolvePatch(track.family, track.sound, track.patch);
+    const card = el("section", "daw-device daw-synth-designer");
+    const head = el("div", "daw-device-head");
+    const title = el("strong", null, "Sound designer");
+    const reset = el("button", "daw-fbtn daw-synth-reset", "Reset sound");
+    reset.type = "button";
+    reset.title = "Return every parameter to the factory sound";
+    const paintReset = () => { reset.disabled = !Object.keys(track.patch || {}).length; };
+    paintReset();
+    reset.addEventListener("click", () => {
+      pushState(); track.patch = {}; engine?.refreshTrackParams?.(); renderChain(); save();
+      _toast(`${track.name} restored to its factory sound`, { severity: "ok" });
+    });
+    head.append(title, el("span", "daw-device-meta", active.engine.toUpperCase()), reset);
+    const body = el("div", "daw-synth-body");
+    const sections = ENGINE_SCHEMA[active.engine] || [];
+    for (const [sectionIndex, section] of sections.entries()) {
+      const group = el("details", "daw-synth-section");
+      group.open = sectionIndex < 2;
+      const summary = el("summary", null, section.label);
+      group.appendChild(summary);
+      const fields = el("div", "daw-synth-fields");
+      for (const spec of section.params) {
+        const row = el("label", "daw-synth-param");
+        const label = el("span", "daw-synth-label", spec.label);
+        const changed = () => Object.prototype.hasOwnProperty.call(track.patch || {}, spec.key);
+        const paintChanged = () => row.classList.toggle("changed", changed());
+        let control;
+        if (spec.unit === "wave" || spec.unit === "filtertype") {
+          control = el("select", "daw-synth-select");
+          const choices = spec.unit === "wave" ? WAVES : FILTER_TYPES;
+          choices.forEach((choice, index) => {
+            const option = el("option", null, choice.replace(/^./, (x) => x.toUpperCase()));
+            option.value = String(index); option.selected = index === active.params[spec.key]; control.appendChild(option);
+          });
+          control.setAttribute("aria-label", `${section.label}: ${spec.label}`);
+          control.addEventListener("change", () => {
+            pushState();
+            (track.patch ||= {})[spec.key] = +control.value;
+            engine?.refreshTrackParams?.(); paintChanged(); paintReset(); save();
+          });
+        } else {
+          control = el("input", "daw-synth-range");
+          control.type = "range"; control.min = String(spec.min); control.max = String(spec.max); control.step = String(spec.step);
+          control.value = String(active.params[spec.key]);
+          control.setAttribute("aria-label", `${section.label}: ${spec.label}`);
+          const output = el("output", "daw-synth-value", formatSynthParam(spec, +control.value));
+          let gesture = false;
+          control.addEventListener("pointerdown", () => { gesture = true; });
+          control.addEventListener("keydown", (event) => {
+            if (/^(Arrow|Home$|End$|Page)/.test(event.key)) pushStateGesture(`synth:${track.id}:${spec.key}`);
+          });
+          control.addEventListener("input", () => {
+            if (gesture) { pushState(); gesture = false; }
+            const value = +control.value;
+            (track.patch ||= {})[spec.key] = spec.unit === "int" ? Math.round(value) : value;
+            output.textContent = formatSynthParam(spec, value);
+            engine?.refreshTrackParams?.(); paintChanged(); paintReset();
+          });
+          control.addEventListener("change", save);
+          row.append(label, control, output);
+          const restore = iconBtn("daw-synth-restore", "↺", `Restore ${spec.label} to its factory value`);
+          restore.addEventListener("click", () => {
+            if (!changed()) return;
+            pushState(); delete track.patch[spec.key];
+            const factory = factoryValue(track.family, track.sound, spec.key);
+            control.value = String(factory); output.textContent = formatSynthParam(spec, factory);
+            engine?.refreshTrackParams?.(); paintChanged(); paintReset(); save();
+          });
+          row.appendChild(restore);
+          paintChanged(); fields.appendChild(row);
+          continue;
+        }
+        const restore = iconBtn("daw-synth-restore", "↺", `Restore ${spec.label} to its factory value`);
+        restore.addEventListener("click", () => {
+          if (!changed()) return;
+          pushState(); delete track.patch[spec.key];
+          const factory = factoryValue(track.family, track.sound, spec.key);
+          control.value = String(factory); engine?.refreshTrackParams?.(); paintChanged(); paintReset(); save();
+        });
+        row.append(label, control, restore); paintChanged(); fields.appendChild(row);
+      }
+      group.appendChild(fields); body.appendChild(group);
+    }
+    card.append(head, body);
+    return card;
   }
 
   function renderChain() {
@@ -4459,7 +5069,7 @@ export const DAW = (() => {
     });
     fader.addEventListener("input", () => {
       if (faderPending) { pushState(); faderPending = false; }
-      t.gain = +fader.value; engine.refreshTrackParams(); save();
+      t.gain = +fader.value; engine.refreshTrackParams(); save(); syncHeadKnobs();
     });
     const meter = el("div", "daw-meter"); meter.id = "daw-meter"; meter.appendChild(el("i"));
     const mrow = el("div", "daw-mix-btns");
@@ -4467,7 +5077,7 @@ export const DAW = (() => {
       mkT("daw-mute", "MUTE", t.mute, () => { pushState(); t.mute = !t.mute; engine.refreshTrackParams(); renderHeads(); renderChain(); save(); }, `Mute ${t.name}`),
       mkT("daw-solo", "SOLO", t.solo, () => { pushState(); t.solo = !t.solo; engine.refreshTrackParams(); renderHeads(); renderChain(); save(); }, `Solo ${t.name}`),
     );
-    const pankn = knob("Pan", () => t.pan, (v) => { t.pan = v; engine.refreshTrackParams(); }, {
+    const pankn = knob("Pan", () => t.pan, (v) => { t.pan = v; engine.refreshTrackParams(); syncHeadKnobs(); }, {
       min: -1, max: 1, fmt: (v) => (Math.abs(v) < 0.02 ? "C" : (v < 0 ? "L" : "R") + Math.round(Math.abs(v) * 100)),
     });
     mix.append(mrow, fader, pankn, meter);
@@ -4487,7 +5097,11 @@ export const DAW = (() => {
         sel.appendChild(o);
       });
       sel.setAttribute("aria-label", "Instrument sound");
-      sel.addEventListener("change", () => { pushState(); t.sound = sel.value; renderHeads(); save(); });
+      sel.addEventListener("change", () => {
+        pushState(); t.sound = sel.value; t.patch = {};
+        engine?.refreshTrackParams?.(); renderHeads(); renderChain(); save();
+        _toast(`Loaded ${SOUND_LABELS[t.family]?.[t.sound] || t.sound}`, { severity: "ok" });
+      });
       instBody.appendChild(sel);
     } else if (t.kind === "drums") {
       const sel = el("select", "daw-dev-sel");
@@ -4503,23 +5117,27 @@ export const DAW = (() => {
       dflt.value = ""; sel.appendChild(dflt);
       inputDevices.forEach((d, i) => { const o = el("option", null, d.label || `Input ${i + 1}`); o.value = d.deviceId; if (d.deviceId === t.inputId) o.selected = true; sel.appendChild(o); });
       sel.setAttribute("aria-label", "Audio input device");
-      sel.addEventListener("change", () => { t.inputId = sel.value || null; save(); });
+      sel.addEventListener("change", () => { t.inputId = sel.value || null; save(); syncStatus(); });
       const monBtn = iconBtn("daw-hbtn daw-mon", "🎧", `Live Input Monitor: ${t.monitor ? "ON" : "OFF"}`);
       monBtn.classList.toggle("active", !!t.monitor);
       monBtn.addEventListener("click", () => { pushState(); t.monitor = !t.monitor; renderChain(); save(); _toast(t.monitor ? "Live monitoring ON" : "Live monitoring OFF"); });
       const imp = el("button", "daw-fbtn", "Import audio file");
       imp.type = "button";
       imp.addEventListener("click", () => importAudioFile(t));
+      const readiness = el("div", "daw-input-readiness", audioInputSummary(t));
+      const setup = el("button", "daw-fbtn daw-input-setup", "Configure input");
+      setup.type = "button"; setup.addEventListener("click", showStudioSetup);
       // Fine calibration on top of the automatic alignment: positive shifts
       // future takes earlier (more latency trimmed), negative later.
       const offKnob = knob("Rec Offset", () => Number(t.recOffsetMs) || 0, (v) => { t.recOffsetMs = Math.round(v); }, {
         min: -150, max: 150, fmt: (v) => (v > 0 ? "+" : "") + Math.round(v) + " ms",
       });
       offKnob.title = "Recording offset — nudge if takes still land early/late on your device";
-      instBody.append(sel, monBtn, imp, offKnob);
+      instBody.append(readiness, sel, monBtn, setup, imp, offKnob);
     }
     inst.appendChild(instBody);
     body.appendChild(inst);
+    if (t.kind === "midi") body.appendChild(buildSynthDesigner(t));
 
     // EQ card
     const fx = t.fx || (t.fx = DEFAULT_FX());
@@ -4610,6 +5228,127 @@ export const DAW = (() => {
   }
 
   /* ---------------- import / export / deck ---------------- */
+  const GM_DRUM_MAP = Object.freeze({
+    35: "kick", 36: "kick", 37: "snare", 38: "snare", 39: "snare", 40: "snare",
+    41: "tomL", 43: "tomL", 45: "tomM", 47: "tomM", 48: "tomH", 50: "tomH",
+    42: "hat", 44: "hat", 46: "open", 49: "crash", 57: "crash",
+  });
+
+  function parsedMidiTempo(parsed) {
+    const tempo = parsed?.tempoMap?.[0]?.bpm;
+    return Number.isFinite(tempo) ? Math.max(40, Math.min(240, tempo)) : null;
+  }
+
+  function midiGroupsForProject(parsed) {
+    const byGroup = midiImportGroups(parsed);
+    if (parsed?.ticksPerQuarter) return byGroup;
+    // SMPTE MIDI is time-based rather than beat-based. PAD's arrangement is
+    // musical, so project tempo is the only honest conversion available.
+    const beatsPerSecond = song.bpm / 60;
+    return byGroup.map((group) => ({
+      ...group,
+      notes: group.notes.map((note) => ({
+        ...note,
+        b: Math.max(0, (note.startSeconds || 0) * beatsPerSecond),
+        d: Math.max(MIN_SNAP, (note.durationSeconds || 0.05) * beatsPerSecond),
+      })),
+    }));
+  }
+
+  function importMidiGroups(parsed, groups, fileName, { matchTempo = false } = {}) {
+    if (!groups.length) { _toast("This MIDI file has no playable notes.", { severity: "error" }); return; }
+    const sourceTempo = parsedMidiTempo(parsed);
+    const at = snap(engine.beatNow());
+    pushState();
+    if (matchTempo && sourceTempo) song.bpm = sourceTempo;
+    const imported = [];
+    for (const group of groups) {
+      const isDrums = group.channel === 9;
+      const track = isDrums ? makeTrack("drums") : makeTrack("midi", { family: "chord" });
+      track.name = String(group.name || (isDrums ? "Drums" : "Imported MIDI")).slice(0, 24);
+      if (isDrums) {
+        const hits = group.notes
+          .map((note) => ({ b: note.b, k: GM_DRUM_MAP[note.m], v: note.v }))
+          .filter((hit) => hit.k);
+        if (!hits.length) continue;
+        const end = Math.max(...hits.map((hit) => hit.b + 0.25), 1);
+        makeRegion(track, at, Math.max(minLen(), snap(end, "ceil")), { name: fileName, hits });
+      } else {
+        const notes = group.notes
+          .filter((note) => note.m >= 0 && note.m <= 127)
+          .map((note) => ({ b: Math.max(0, note.b), d: Math.max(MIN_SNAP, note.d || MIN_SNAP), m: note.m, v: Math.max(0.05, Math.min(1, note.v ?? 1)) }));
+        if (!notes.length) continue;
+        const end = Math.max(...notes.map((note) => note.b + note.d), 1);
+        makeRegion(track, at, Math.max(minLen(), snap(end, "ceil")), { name: fileName, notes });
+      }
+      song.tracks.push(track); engine?.rebuildTrack(track.id); imported.push(track);
+    }
+    if (!imported.length) {
+      const previous = undoStack.pop();
+      if (previous) { undoBytes -= previous.length; song = JSON.parse(previous); }
+      _toast("No supported notes were found in that MIDI file.", { severity: "error" });
+      return;
+    }
+    const sourceMarkers = (parsed.markers || []).filter((marker) => Number.isFinite(marker.tick));
+    for (const marker of sourceMarkers.slice(0, 64)) {
+      const beat = parsed.ticksPerQuarter ? marker.tick / parsed.ticksPerQuarter : (marker.seconds || 0) * song.bpm / 60;
+      song.markers.push({ id: idc++, beat: at + Math.max(0, beat), name: String(marker.name || "Marker").slice(0, 32), color: 2 });
+    }
+    song.markers.sort((a, b) => a.beat - b.beat);
+    activeTrackId = imported[0].id;
+    renderAll(); save();
+    const warning = parsed.warnings?.length ? ` · ${parsed.warnings.length} MIDI warning${parsed.warnings.length === 1 ? "" : "s"}` : "";
+    _toast(`Imported ${imported.length} track${imported.length === 1 ? "" : "s"} from ${fileName}${warning}`, { severity: "ok", duration: 6000 });
+  }
+
+  function showMidiImportDialog(parsed, fileName) {
+    const groups = midiGroupsForProject(parsed);
+    if (!groups.length) { _toast("This MIDI file contains no playable note data.", { severity: "error" }); return; }
+    root.querySelector("#daw-midi-import-dialog")?.remove();
+    const dialog = el("dialog", "daw-midi-import-dialog");
+    dialog.id = "daw-midi-import-dialog";
+    const header = el("header", "daw-shortcut-head");
+    const close = iconBtn("daw-hbtn", "×", "Cancel MIDI import");
+    close.addEventListener("click", () => dialog.close());
+    header.append(el("h2", null, "Import MIDI"), close);
+    const tempo = parsedMidiTempo(parsed);
+    const summary = el("p", "daw-setup-copy", `${fileName} · ${groups.length} playable channel${groups.length === 1 ? "" : "s"}${tempo ? ` · source tempo ${tempo.toFixed(1)} BPM` : ""}`);
+    const detail = el("p", "daw-midi-import-detail", parsed.ticksPerQuarter
+      ? "Each MIDI channel becomes an editable PAD track. Channel 10 becomes a drum track; markers are brought in too."
+      : "This timecode MIDI file will be aligned to the current project tempo so it remains editable on PAD’s beat grid.");
+    const actions = el("div", "daw-midi-import-actions");
+    const importAtProject = el("button", "daw-fbtn", "Import at project tempo");
+    importAtProject.type = "button";
+    importAtProject.addEventListener("click", () => { importMidiGroups(parsed, groups, fileName); dialog.close(); });
+    actions.appendChild(importAtProject);
+    if (tempo && Math.abs(tempo - song.bpm) > 0.05) {
+      const match = el("button", "daw-fbtn daw-midi-match", `Match ${tempo.toFixed(1)} BPM & import`);
+      match.type = "button";
+      match.addEventListener("click", () => { importMidiGroups(parsed, groups, fileName, { matchTempo: true }); dialog.close(); });
+      actions.appendChild(match);
+    }
+    dialog.append(header, summary, detail, actions);
+    dialog.addEventListener("close", () => dialog.remove(), { once: true });
+    root.appendChild(dialog);
+    if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
+  }
+
+  function importMidiFile() {
+    const input = document.createElement("input");
+    input.type = "file"; input.accept = ".mid,.midi,audio/midi,audio/x-midi";
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const parsed = parseMidiFile(await file.arrayBuffer(), { defaultTempoBpm: song.bpm });
+        showMidiImportDialog(parsed, file.name.replace(/\.(mid|midi)$/i, "") || "MIDI file");
+      } catch (error) {
+        _toast(error?.message || "Could not read that MIDI file.", { severity: "error", duration: 7000 });
+      }
+    }, { once: true });
+    input.click();
+  }
+
   async function importAudioBlob(t, file, startBeat) {
     try {
       const buf = await _getCtx().decodeAudioData(await file.arrayBuffer());
@@ -4621,14 +5360,28 @@ export const DAW = (() => {
         stored = await saveSample(clipId, file.name, buf, { pinned: true });
       } catch {}
       const lenB = Math.max(minLen(), snap(buf.duration * (song.bpm / 60)));
-      const r = makeRegion(t, snap(startBeat), lenB, { name: file.name.replace(/\.[^.]+$/, ""), clipId });
+      const r = makeRegion(t, snap(startBeat), lenB, {
+        name: file.name.replace(/\.[^.]+$/, ""), clipId, sourceBpm: song.bpm, tempoMode: "repitch",
+      });
       if (!stored) r.volatile = true;
       activeTrackId = t.id;
       sel = [{ trackId: t.id, regionId: r.id }];
       renderAll();
       save();
       if (stored) {
-        _toast(`Imported ${file.name}`, { severity: "ok" });
+        _toast(`Imported ${file.name} · checking source tempo…`, { severity: "ok" });
+        // Tempo analysis is intentionally deferred so decode/import paints
+        // first. The result is a starting point, never a hidden warp decision:
+        // the clip editor exposes the value for an immediate correction.
+        setTimeout(() => {
+          const detected = detectBPM(buf);
+          if (!detected || !t.regions.includes(r)) return;
+          r.sourceBpm = detected;
+          redrawRegion(t, r);
+          if (editRegion === r) renderEditor();
+          save();
+          _toast(`Detected ${detected.toFixed(1)} BPM for ${r.name} — adjust it in the clip editor if needed.`, { severity: "ok", duration: 6000 });
+        }, 0);
       } else {
         _toast(
           `${file.name} is available for this session, but browser storage could not save it. Export before closing this tab.`,
@@ -4682,7 +5435,8 @@ export const DAW = (() => {
     try {
       const buf = await bounce();
       if (!buf) return;
-      const url = URL.createObjectURL(bufferToWav(buf));
+      _toast("Encoding WAV without blocking the Studio…");
+      const url = URL.createObjectURL(await bufferToWavAsync(buf));
       const a = document.createElement("a");
       a.href = url; a.download = "sxratch-pad-song.wav"; a.click();
       setTimeout(() => URL.revokeObjectURL(url), 4000);
@@ -4701,6 +5455,84 @@ export const DAW = (() => {
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
     _toast("Song exported as a JSON file (audio clips stay in this browser).", { severity: "ok" });
+  }
+
+  function projectFileStem() {
+    return (song.title || "untitled-session")
+      .trim().replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "untitled-session";
+  }
+
+  function clipDisplayName(clipId) {
+    for (const track of song.tracks) {
+      const region = (track.regions || []).find((item) => item.clipId === clipId);
+      if (region?.name) return region.name;
+    }
+    return clipId.replace(/^dawclip:/, "Audio clip ");
+  }
+
+  async function exportProjectBundle() {
+    const clipIds = referencedProjectAssetIds(song);
+    const missing = clipIds.filter((id) => !clips.has(id));
+    if (missing.length) {
+      _toast(`${missing.length} audio clip${missing.length === 1 ? " is" : "s are"} missing in this browser. Restore or replace them before making a portable project.`, { severity: "error", duration: 8000 });
+      return;
+    }
+    _toast(`Packaging ${clipIds.length} lossless audio clip${clipIds.length === 1 ? "" : "s"}…`);
+    try {
+      const assets = clipIds.map((id) => audioBufferToBundleAsset({ id, name: clipDisplayName(id), buffer: clips.get(id) }));
+      const blob = await createProjectBundle({
+        song: JSON.parse(JSON.stringify(song)),
+        assets,
+        metadata: { title: song.title, exportedAt: new Date().toISOString(), app: "PAD Studio" },
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${projectFileStem()}.sxpad`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      _toast(`Portable project exported${clipIds.length ? ` with ${clipIds.length} audio clip${clipIds.length === 1 ? "" : "s"}` : ""}.`, { severity: "ok" });
+    } catch (error) {
+      _toast(error?.message || "Could not create a portable project.", { severity: "error", duration: 8000 });
+    }
+  }
+
+  function importProjectBundle() {
+    const input = document.createElement("input");
+    input.type = "file"; input.accept = ".sxpad,application/vnd.sxratch.pad-project+json,application/json";
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      _toast("Checking portable project…");
+      try {
+        const parsed = await parseProjectBundle(file);
+        const next = normalizeSong(parsed.song);
+        if (!next) throw new Error("This project does not contain a valid PAD session.");
+        const needed = referencedProjectAssetIds(next);
+        const byId = new Map(parsed.assets.map((asset) => [asset.id, asset]));
+        const missing = needed.filter((id) => !byId.has(id));
+        if (missing.length) throw new Error(`This project is missing ${missing.length} referenced audio clip${missing.length === 1 ? "" : "s"}.`);
+        const restored = new Map();
+        const ctx = _getCtx();
+        for (const id of needed) restored.set(id, bundleAssetToAudioBuffer(byId.get(id), ctx));
+
+        pushState();
+        closeEditor();
+        song = next;
+        clips = restored;
+        activeTrackId = song.tracks[0]?.id ?? null;
+        // Keep imported project audio available after a reload. A storage quota
+        // issue leaves the current session usable and is explained honestly.
+        let stored = 0;
+        for (const [id, buffer] of restored) {
+          try { if (await saveSample(id, clipDisplayName(id), buffer, { pinned: true })) stored++; } catch {}
+        }
+        afterHistoryJump();
+        const storageNote = stored === restored.size ? "" : " Some audio could not be saved locally; export again before closing this tab.";
+        _toast(`Imported portable project “${song.title}”${storageNote}`, { severity: stored === restored.size ? "ok" : "error", duration: storageNote ? 9000 : 5000 });
+      } catch (error) {
+        _toast(error?.message || "Could not import that portable project.", { severity: "error", duration: 8000 });
+      }
+    }, { once: true });
+    input.click();
   }
 
   function importJson() {
@@ -4867,7 +5699,7 @@ export const DAW = (() => {
     _onUse = deps.onUse || _onUse;
     _getSampler = deps.getSampler || _getSampler;
     _refreshSamplerPad = deps.refreshSamplerPad || _refreshSamplerPad;
-    root = document.getElementById("song-builder");
+    root = document.getElementById("daw-root");
     root.replaceChildren(el("div", "daw-loading", "Loading Studio…"));
 
     const localRecord = readVersionedRecord(STORE_KEY, SCHEMA_V, MIGRATIONS);
@@ -4905,7 +5737,7 @@ export const DAW = (() => {
     } else {
       const old = readVersioned("sxratch.song", 1, [(s) => s]);
       song = migrateOldSong(old);
-      if (song) _toast("Imported your song-builder project into the new studio.", { severity: "ok" });
+      if (song) _toast("Imported your legacy PAD project into the new studio.", { severity: "ok" });
       else song = starterSong();
       normalizeSong(song);
     }
@@ -5024,7 +5856,7 @@ export const DAW = (() => {
       midiLearnMode = false;
       saveMidiMap();
       _toast(`Mapped CC ${cc}`, { severity: "ok" });
-      if (bottom.active === "mixer") renderMixer();
+      if (panelIsOpen("mixer")) renderMixer();
       return true;
     }
     const m = midiMap[cc];
@@ -5048,11 +5880,12 @@ export const DAW = (() => {
       else if (m.target === "pan") t.pan = v * 2 - 1;
       else { t.sends ||= {}; t.sends[m.target] = v; }
       engine?.refreshTrackParams?.();
+      if (m.target === "gain" || m.target === "pan") syncHeadKnobs();
       sliderId = `t${t.id}`;
     }
     save();
     // Mirror onto the on-screen slider when the mixer is visible.
-    if (bottom.active === "mixer" && sliderId) {
+    if (panelIsOpen("mixer") && sliderId) {
       const key = `mixer:${sliderId}:${MIDI_TARGET_LABEL[m.target]}`;
       const input = el_.mixer?.querySelector(`[data-focus-key="${CSS.escape(key)}"]`);
       if (input) {

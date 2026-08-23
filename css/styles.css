@@ -3,9 +3,9 @@
    deep-navy base (à la pro DJ gear) is --sx-bg, and the one brand system
    across start screen, nav, decks and PAD — SXRATCH = deck teal, PAD =
    studio amber — is --sx-brand-a / --sx-brand-b. What is left here are
-   aliases, because css/studio.css still spells its colours with these
-   older names; each one points at the --sx-* equivalent rather than
-   repeating a literal, so both themes come for free.
+   compatibility aliases used by the original deck markup. Each one points
+   at the --sx-* equivalent rather than repeating a literal, so both themes
+   come for free.
    --------------------------------------------------------------------- */
 :root {
   --panel-2: var(--sx-surface-3);
@@ -104,6 +104,40 @@ html, body {
   cursor: pointer; font-weight: 700; flex: none;
 }
 #settings-btn { font-size: var(--sx-fs-xl); line-height: 1; }
+
+/* ---------- SXRATCH / PAD navigation + Studio shell ---------- */
+.brandnav { display: flex; align-items: center; gap: 0.4rem; }
+.brand-seg {
+  font-weight: 900; letter-spacing: 0.14em; font-size: var(--sx-fs-xl); cursor: pointer;
+  background: none; border: none; padding: 2px 4px;
+  font-family: inherit; transition: opacity 0.15s; opacity: 0.5;
+}
+#nav-decks { color: var(--sx-brand-a-ink); }
+#nav-studio { color: var(--sx-brand-b-ink); }
+.brand-seg:hover { opacity: 0.85; }
+.brand-seg.active { opacity: 1; }
+.brand-slash { color: var(--sx-text-3); font-weight: 700; }
+
+/* The hidden attributes remain the accessibility source of truth; these rules
+   also keep deck-only topbar modules out of PAD at every breakpoint. */
+body.view-studio #topbar .deck-only { display: none; }
+body.view-studio #console { display: none; }
+body.view-studio {
+  background:
+    radial-gradient(circle at 24% -10%, var(--sx-bg-glow-b), transparent 30%),
+    radial-gradient(circle at 86% 8%, var(--sx-bg-glow-a), transparent 32%),
+    linear-gradient(135deg, var(--sx-bg) 0%, var(--sx-surface-1) 44%, var(--sx-well) 100%);
+}
+#studio {
+  height: calc(100dvh - var(--sx-topbar-h));
+  max-width: none;
+  width: 100%;
+  margin: 0;
+  padding: 8px;
+  overflow: hidden;
+  color: var(--sx-text-1);
+}
+.daw-root { height: 100%; min-height: 0; }
 
 /* ---------- Console layout ---------- */
 #console {
@@ -796,7 +830,7 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* Reduced motion — the ONE strategy, app-wide (this file loads for every
-   view; decks.css and studio.css must not carry their own variants).
+   view; decks.css and daw.css must not carry their own variants).
    Blanket-zero all CSS animation/transition time. Functional motion is
    unaffected by design: the platter rotation and the sequencer playhead are
    JS-driven transforms tied to real playback, not CSS animations — snapping

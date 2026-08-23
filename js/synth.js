@@ -1,6 +1,6 @@
 // Sxratch synthesis library — the S1 sound-fidelity engine.
 //
-// Everything the PAD composer plays comes through here:
+// Everything the PAD Studio synthesizes comes through here:
 //  · adsr()            exponential envelopes with true release tails past note end
 //  · unison()          detuned multi-voice oscillator banks with stereo spread
 //  · INSTRUMENTS       the designed patches (pads, strings, FM e-piano, drawbar

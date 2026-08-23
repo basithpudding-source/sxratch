@@ -6,10 +6,10 @@
        opt out individually via touch-action, not by disabling zoom app-wide. -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0a0f1c" />
-  <title>Sxratch / Pad — Browser DJ &amp; Song Builder</title>
-  <meta name="description" content="Sxratch / Pad — a two-deck scratch &amp; mix DJ rig with a studio song builder, entirely in your browser. Works on desktop and mobile." />
-  <meta property="og:title" content="Sxratch / Pad — Browser DJ &amp; Song Builder" />
-  <meta property="og:description" content="Two decks, a real scratch engine, and a song builder — no install, no samples to download. Scratch with your trackpad or thumbs." />
+  <title>Sxratch / Pad — Browser DJ &amp; Multitrack Studio</title>
+  <meta name="description" content="Sxratch / Pad — a two-deck scratch &amp; mix DJ rig with a multitrack recording studio, entirely in your browser. Works on desktop and mobile." />
+  <meta property="og:title" content="Sxratch / Pad — Browser DJ &amp; Multitrack Studio" />
+  <meta property="og:description" content="Two decks, a real scratch engine, and a multitrack studio for MIDI, drums, and audio — entirely in your browser." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://sxratchpad.com/" />
   <meta property="og:image" content="https://sxratchpad.com/icon-512.png" />
@@ -44,7 +44,6 @@
   </script>
   <link rel="stylesheet" href="css/tokens.css" />
   <link rel="stylesheet" href="css/styles.css" />
-  <link rel="stylesheet" href="css/studio.css" />
   <link rel="stylesheet" href="css/daw.css" />
   <link rel="stylesheet" href="css/decks.css" />
 </head>
@@ -64,7 +63,7 @@
     <nav class="brandnav" aria-label="View">
       <button id="nav-decks" class="brand-seg active" title="Decks — scratch &amp; mix" aria-current="page">SXRATCH</button>
       <span class="brand-slash" aria-hidden="true">/</span>
-      <button id="nav-studio" class="brand-seg" title="PAD — Studio Song Builder">PAD</button>
+      <button id="nav-studio" class="brand-seg" title="PAD Studio — write, record and arrange">STUDIO</button>
     </nav>
     <div class="master deck-only">
       <label for="master-vol">MASTER</label>
@@ -73,8 +72,7 @@
     <button id="drawer-btn" class="deck-only" title="Show / hide the pads &amp; FX drawer">🎛 Sampler/FX</button>
     <button id="practice-btn" class="deck-only" title="Practice mode — guided tutorials">🎓 Practice</button>
     <button id="record-btn" class="deck-only" title="Record mix">🔴 REC</button>
-    <!-- Not .deck-only: the theme applies to PAD too, and studio.css
-         hides .deck-only in the studio view. -->
+    <!-- Not .deck-only: the theme applies to PAD too. -->
     <!-- Revealed by app.js when the app is installable (or on iOS Safari,
          where installing is manual and needs instructions). -->
     <button id="install-btn" hidden title="Install Sxratch on this device">⤓ Install</button>
@@ -317,13 +315,13 @@
     </section>
   </main>
 
-  <!-- PAD — Studio Song Builder -->
+  <!-- PAD — multitrack Studio -->
   <main id="studio" tabindex="-1" hidden>
-    <div class="studio-head">
+    <div class="studio-head sr-only">
       <h1>🎹 PAD · Studio</h1>
       <p class="studio-sub">A multitrack studio — arrange synth, drum and audio regions on a timeline, record your own audio input, then send the mix to a deck to scratch, or download it.</p>
     </div>
-    <div id="song-builder" class="song-builder"></div>
+    <div id="daw-root" class="daw-root"></div>
   </main>
 
   <!-- URL load dialog -->

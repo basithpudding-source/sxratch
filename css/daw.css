@@ -6,13 +6,39 @@
    tokens; each track carries its accent in --tc.
    ========================================================================= */
 
+/* Studio form substrate. These rules used to live beside the retired Song
+   Builder; they are active DAW styles and intentionally stay ID-scoped so
+   dialogs and deck controls keep their own treatment. */
+#studio label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  font-size: var(--sx-fs-md);
+  color: var(--sx-text-3);
+}
+#studio label.check { flex-direction: row; align-items: center; gap: 0.45rem; cursor: pointer; }
+#studio select,
+#studio input[type="number"],
+#studio input[type="text"] {
+  min-height: 32px;
+  background: linear-gradient(180deg, var(--sx-surface-3), var(--sx-surface-1));
+  color: var(--sx-text-1);
+  border: 1px solid var(--sx-line);
+  border-radius: var(--sx-radius-md);
+  padding: 0.34rem 0.5rem;
+  font: inherit;
+  font-size: var(--sx-fs-md);
+  box-shadow: inset 0 1px 0 var(--sx-hilite);
+}
+#studio input[type="range"] { accent-color: var(--sx-brand-b); }
+
 .daw {
   height: 100%;
   min-height: 0;
   display: grid;
   /* The timeline row is the 1fr: panels may never squeeze it below the grid
      minimum, and collapsing the bottom panel hands the space straight back. */
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   border: 1px solid var(--sx-line);
   border-radius: var(--sx-radius-md);
   background: var(--sx-bg);
@@ -46,6 +72,37 @@
 }
 .daw-transport-meta { padding-inline: 10px; gap: 10px; }
 .daw-transport-utility { margin-left: auto; }
+.daw-project-title {
+  display: grid;
+  gap: 1px;
+  min-width: 126px;
+  padding: 3px 8px;
+  border: 1px solid var(--sx-line);
+  border-radius: var(--sx-radius-sm);
+  background: color-mix(in srgb, var(--sx-surface-2) 74%, var(--sx-well));
+}
+#studio .daw-project-title { flex-direction: unset; }
+.daw-project-kicker,
+.daw-quick-kicker {
+  color: var(--sx-text-3);
+  font-family: var(--sx-font-mono);
+  font-size: var(--sx-fs-2xs);
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+.daw-project-input {
+  width: 150px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--sx-text-1);
+  font-size: var(--sx-fs-md);
+  font-weight: 800;
+}
+.daw-project-input:focus { outline: 0; box-shadow: inset 0 -2px 0 var(--sx-brand-b); }
+.daw-setup { color: var(--sx-brand-b-ink); }
 .daw-sep { width: 1px; height: 24px; background: var(--sx-line); flex: none; margin: 0 4px; }
 .daw-flex { flex: 1; }
 .daw-time {
@@ -89,14 +146,16 @@
 }
 
 .daw-tbtn {
-  min-width: 34px;
+  min-width: 38px;
   min-height: 34px;
   padding: 0 8px;
   border: 1px solid var(--sx-line);
   border-radius: var(--sx-radius-sm);
   background: var(--sx-btn-lo);
   color: var(--sx-text-2);
-  font-size: var(--sx-fs-lg);
+  font-size: var(--sx-fs-xs);
+  font-weight: 800;
+  letter-spacing: .035em;
   cursor: pointer;
   flex: none;
 }
@@ -112,6 +171,7 @@
   color: var(--sx-ink-on-accent);
   background: linear-gradient(180deg, var(--sx-brand-a), color-mix(in srgb, var(--sx-brand-a) 60%, var(--sx-btn-lo)));
 }
+.daw-start { color: var(--sx-text-3); }
 .daw-rec { color: var(--sx-danger); }
 .daw-rec.recording {
   border-color: var(--sx-danger);
@@ -152,6 +212,40 @@
 }
 .daw-fbtn:hover { background: var(--sx-wash-2); border-color: var(--sx-line); }
 
+/* The highest-frequency creation paths stay visible: no hunting through File
+   or a context menu before a musician can make their first sound. */
+.daw-quickstart {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 42px;
+  padding: 5px 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--sx-line);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--sx-brand-b) 7%, var(--sx-surface-2)), var(--sx-surface-1) 52%);
+  scrollbar-width: thin;
+}
+.daw-quick-kicker { flex: none; margin-right: 4px; }
+.daw-quick-btn {
+  flex: none;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--sx-line);
+  border-radius: var(--sx-radius-sm);
+  background: var(--sx-btn-lo);
+  color: var(--sx-text-1);
+  font: inherit;
+  font-size: var(--sx-fs-sm);
+  font-weight: 750;
+  cursor: pointer;
+}
+.daw-quick-btn:hover { background: var(--sx-btn-hi); border-color: var(--sx-line-strong); }
+.daw-quick-btn.primary {
+  border-color: color-mix(in srgb, var(--sx-brand-b) 70%, var(--sx-line));
+  background: color-mix(in srgb, var(--sx-brand-b) 16%, var(--sx-btn-lo));
+  color: var(--sx-brand-b-ink);
+}
+
 /* ------------------------------ body ------------------------------ */
 .daw-body {
   display: grid;
@@ -185,6 +279,9 @@
 .daw-heads-scroll { overflow: hidden; }
 .daw-head {
   position: relative;
+  /* Size container: the volume/pan dials hide via @container when the
+     (user-resizable) heads column gets too narrow to hold them. */
+  container-type: inline-size;
   height: 68px;   /* must match .daw-lane and LANE_H in daw.js */
   display: grid;
   grid-template-columns: minmax(0, 1fr) 14px;
@@ -222,7 +319,9 @@
   padding: 1px 4px;
 }
 .daw-head-name:hover, .daw-head-name:focus { border-color: var(--sx-line); background: var(--sx-well); }
-.daw-head-btns { grid-column: 1; display: flex; gap: 4px; align-items: center; min-width: 0; }
+/* overflow:hidden is the hard stop: row content may never paint over the
+   reorder/recolour strip or the neighbouring lane, whatever the column width. */
+.daw-head-btns { grid-column: 1; display: flex; gap: 4px; align-items: center; min-width: 0; overflow: hidden; }
 .daw-hbtn {
   min-width: 28px;
   min-height: 26px;
@@ -246,6 +345,47 @@
   color: var(--sx-ink-on-danger);
   animation: dawRecPulse 1.4s infinite;
 }
+/* Per-track volume/pan dials in the head row. Dial-only — the live value is
+   in the tooltip and aria-valuetext — so they fit beside M/S/⏺/A at 68px. */
+.daw-head-knob {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--sx-line-strong);
+  background: radial-gradient(circle at 38% 30%, var(--sx-btn-hi), var(--sx-bg) 76%);
+  box-shadow: inset 0 1px 0 var(--sx-hilite);
+  position: relative;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.daw-head-knob::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 2px;
+  width: 2px;
+  height: 7px;
+  border-radius: 1px;
+  background: var(--tc, var(--sx-brand-a));
+  transform-origin: 50% 8px;
+  transform: translateX(-50%) rotate(var(--rot, 0deg));
+}
+.daw-head-knob:hover { border-color: var(--tc, var(--sx-brand-a)); }
+.daw-head-knob:focus-visible { outline: 2px solid var(--sx-focus); outline-offset: 1px; }
+/* The dials are the first thing to yield: display:none (not clipping) also
+   removes them from the tab order, so no invisible focus targets. Narrow
+   columns can't hold them at all; with the automation selector expanded they
+   need the wider threshold so the selector keeps its readable floor. On
+   phones (148px fixed column) the first rule doubles as the touch-safety
+   valve — 20px dials are below the 24px touch floor. */
+@container (max-width: 214px) {
+  .daw-head-knob { display: none; }
+}
+@container (max-width: 330px) {
+  .daw-head-btns:has(.daw-head-auto-select) .daw-head-knob { display: none; }
+}
+
 .daw-head-kind {
   /* Lives inside the M/S/⏺ row — the head is two rows tall at 68px lanes. */
   flex: 1;
@@ -290,7 +430,9 @@
   background: color-mix(in srgb, var(--tc, var(--sx-brand-a)) 18%, var(--sx-btn-lo));
 }
 .daw-head-auto-select {
-  min-width: 0;
+  /* A shrinkable-to-zero select is an unusable select — hold a readable
+     floor; the head dials yield first (see the @container rules below). */
+  min-width: 64px;
   max-width: 78px;
   min-height: 26px;
   border: 1px solid var(--sx-line);
@@ -667,13 +809,29 @@
   box-shadow: inset 0 2px 0 var(--sx-brand-a);
 }
 .daw-tab.is-disabled { opacity: var(--sx-disabled-opacity); }
+/* Open panels stack vertically inside the wrapper; the wrapper (not the
+   panels) owns the height cap, scrolling internally when several are open so
+   the timeline row is never squeezed below its minimum. */
+.daw-panels {
+  display: grid;
+  min-height: 0;
+  max-height: var(--daw-bmax, 70vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--sx-line-strong) var(--sx-surface-1);
+  scrollbar-width: thin;
+}
 .daw-bottom .daw-panel {
   height: var(--daw-bh, 156px);
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
+  flex: none;
 }
+/* Stacked panels keep a visible seam (also separates the first from the
+   tab strip, matching the wrap's own top border weight). */
+.daw-panels .daw-panel:not([hidden]) { border-top: 1px solid var(--sx-line); }
 /* display:grid above would defeat the UA's [hidden]{display:none} — restore it. */
 .daw-bottom .daw-panel[hidden] { display: none; }
 /* The pinned keyboard strip sizes to its content and always sits LAST, below
@@ -736,6 +894,8 @@
   text-transform: uppercase;
 }
 .daw-panel-head .daw-hbtn { margin-left: auto; }
+.daw-roll-header-tools .daw-roll-preview,
+.daw-roll-header-tools .daw-roll-grid { margin-left: 0; min-width: 48px; font-size: var(--sx-fs-3xs); }
 .daw-panel-head .daw-region-rename,
 .daw-chain-track {
   background: none;
@@ -853,6 +1013,16 @@
     linear-gradient(90deg, color-mix(in srgb, var(--sx-line) 55%, transparent) 1px, transparent 1px);
 }
 .daw-roll2-notes { position: absolute; inset: 0; }
+.daw-roll-playhead {
+  position: absolute;
+  z-index: 6;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--sx-brand-b);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--sx-brand-b) 65%, transparent);
+  pointer-events: none;
+}
 .daw-roll2-note {
   position: absolute;
   border: 1px solid color-mix(in srgb, var(--sx-brand-a) 75%, var(--sx-line));
@@ -1006,6 +1176,10 @@
 }
 .daw-device {
   min-width: 200px;
+  /* Never shrink below content: an explicit min-width REPLACES the flex
+     min-content floor, so squeezed cards let their knob rows bleed under the
+     neighbouring card. The chain body scrolls horizontally instead. */
+  flex: 0 0 auto;
   border: 1px solid var(--sx-line);
   border-radius: var(--sx-radius-md);
   background: var(--sx-surface-2);
@@ -1033,6 +1207,70 @@
   font-size: var(--sx-fs-md);
   padding: 0 8px;
 }
+.daw-input-readiness {
+  flex: 1 0 100%;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--sx-brand-a) 34%, var(--sx-line));
+  border-radius: var(--sx-radius-sm);
+  background: color-mix(in srgb, var(--sx-brand-a) 7%, var(--sx-well));
+  color: var(--sx-text-2);
+  font-size: var(--sx-fs-xs);
+  line-height: 1.35;
+}
+.daw-input-setup { color: var(--sx-brand-a-ink); }
+.daw-device-meta { margin-left: auto; color: var(--sx-text-4); font: 800 var(--sx-fs-3xs) var(--sx-font-mono); letter-spacing: .08em; }
+
+/* Synth parameters are based on the real engine schema. Collapsed sections
+   let a performer reach the meaningful controls quickly without creating a
+   permanent 40-control wall. */
+.daw-synth-designer { min-width: min(370px, 86vw); max-width: 430px; }
+.daw-synth-reset { margin-left: auto; min-height: 26px; padding-inline: 7px; color: var(--sx-text-2); font-size: var(--sx-fs-xs); }
+.daw-synth-body { max-height: 340px; overflow: auto; scrollbar-width: thin; }
+.daw-synth-section { border-bottom: 1px solid var(--sx-line); }
+.daw-synth-section:last-child { border-bottom: 0; }
+.daw-synth-section > summary {
+  min-height: 32px;
+  padding: 8px 10px;
+  color: var(--sx-text-2);
+  font-size: var(--sx-fs-xs);
+  font-weight: 800;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.daw-synth-fields { display: grid; gap: 1px; padding: 0 8px 8px; }
+.daw-synth-param {
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) minmax(74px, 1.35fr) 52px 26px;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 3px 4px;
+  border-radius: var(--sx-radius-xs);
+}
+.daw-synth-param.changed { background: color-mix(in srgb, var(--sx-brand-b) 8%, transparent); }
+.daw-synth-label { color: var(--sx-text-3); font-size: var(--sx-fs-xs); }
+.daw-synth-range { width: 100%; accent-color: var(--sx-brand-b); }
+.daw-synth-value { color: var(--sx-text-2); font: 700 var(--sx-fs-3xs) var(--sx-font-mono); text-align: right; white-space: nowrap; }
+.daw-synth-select { min-width: 0; min-height: 26px; padding-inline: 5px; font-size: var(--sx-fs-xs); }
+.daw-synth-restore { width: 24px; min-width: 24px; min-height: 24px; padding: 0; border: 1px solid transparent; border-radius: var(--sx-radius-xs); background: transparent; color: var(--sx-text-3); cursor: pointer; }
+.daw-synth-restore:hover { border-color: var(--sx-line); background: var(--sx-wash-2); color: var(--sx-text-1); }
+
+.daw-audio-timing {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 190px;
+  padding: 8px;
+  border: 1px solid var(--sx-line);
+  border-radius: var(--sx-radius-sm);
+  background: color-mix(in srgb, var(--sx-well) 72%, var(--sx-surface-2));
+}
+.daw-audio-source-bpm { display: grid; gap: 3px; color: var(--sx-text-3); font-size: var(--sx-fs-3xs); font-weight: 800; letter-spacing: .04em; }
+#studio .daw-audio-source-bpm { flex-direction: unset; }
+.daw-audio-source-bpm .daw-setup-number { min-height: 28px; }
+.daw-audio-source-bpm .daw-dev-sel { min-width: 0; min-height: 28px; }
+.daw-audio-rate { color: var(--sx-text-2); font: 700 var(--sx-fs-3xs) var(--sx-font-mono); line-height: 1.4; }
+.daw-audio-analyse { min-height: 30px; color: var(--sx-brand-b-ink); }
 .daw-knobs { flex-wrap: nowrap; }
 .daw-knob-wrap { display: grid; justify-items: center; gap: 3px; min-width: 56px; }
 .daw-knob {
@@ -1090,72 +1328,259 @@
 }
 .daw-channel {
   position: relative;
-  flex: 0 0 118px;
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  grid-template-rows: 22px minmax(60px, 1fr) auto auto auto;
-  gap: 3px 6px;
+  flex: 0 0 122px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-height: 0;
-  padding: 6px;
+  padding: 6px 7px;
   border: 1px solid var(--sx-line);
+  border-top: 3px solid var(--tc, var(--sx-line-strong));
   border-radius: var(--sx-radius-sm);
-  background: color-mix(in srgb, var(--tc, var(--sx-surface-3)) 5%, var(--sx-surface-2));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--tc, var(--sx-surface-3)) 8%, var(--sx-surface-2)), var(--sx-surface-2) 55%);
 }
-.daw-channel.active { border-color: var(--tc, var(--sx-brand-a)); }
+.daw-channel.active {
+  border-color: color-mix(in srgb, var(--tc, var(--sx-brand-a)) 60%, var(--sx-line));
+  border-top-color: var(--tc, var(--sx-brand-a));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tc, var(--sx-brand-a)) 35%, transparent);
+}
 .daw-channel-name {
-  grid-column: 1 / -1;
+  flex-shrink: 0;
   overflow: hidden;
   color: var(--sx-text-2);
   font-size: var(--sx-fs-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.daw-channel-meter {
-  grid-column: 1;
-  grid-row: 2 / 6;
+/* only the fader bank gives up height when the panel runs short */
+.daw-channel > .daw-mixer-control,
+.daw-channel > .daw-send-stack,
+.daw-channel > .daw-channel-buttons,
+.daw-channel > .daw-master-head { flex-shrink: 0; }
+
+/* fader bank: console fader | dB ruler | level meter */
+.daw-fader-bank {
+  flex: 1 1 auto;
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  /* floor keeps the fader usable at the mixer's 300px minimum panel height —
+     everything above the floor stretches the fader travel instead */
+  min-height: 72px;
+  padding: 1px 0;
+}
+/* old-browser fallback: the fader is a horizontal row instead, so the
+   meter-only bank may compress */
+.daw-fader-bank.no-fader { min-height: 34px; }
+.daw-fader-scale {
   position: relative;
+  flex: 0 0 14px;
+  color: var(--sx-text-4);
+  font: 700 7px var(--sx-font-mono);
+}
+.daw-fader-scale i {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  border-top: 1px solid color-mix(in srgb, var(--sx-line-strong) 75%, transparent);
+  padding-top: 1px;
+  font-style: normal;
+  line-height: 1;
+  text-align: center;
+}
+.daw-channel-meter {
+  position: relative;
+  flex: 0 0 12px;
   overflow: hidden;
   border: 1px solid var(--sx-line);
   border-radius: 3px;
   background: var(--sx-well);
+  box-shadow: inset 0 1px 4px rgb(0 0 0 / 0.35);
+  /* cqh units let the bar carry a gradient sized to the METER, not to the
+     bar's own (variable) height — a quiet signal stays green. */
+  container-type: size;
 }
 .daw-channel-meter i {
   position: absolute;
-  inset: auto 2px 2px;
+  inset: auto 1px 1px;
   height: 0;
-  border-radius: 2px;
-  background: linear-gradient(0deg, var(--sx-ok), var(--sx-warn) 78%, var(--sx-danger));
+  background: linear-gradient(0deg, var(--sx-ok), var(--sx-ok) 58%, var(--sx-warn) 80%, var(--sx-warn) 88%, var(--sx-danger) 97%);
+  background-repeat: no-repeat;
+  background-position: bottom;
+  background-size: 100% 100cqh;
   transition: height 70ms linear;
 }
+.daw-channel-meter::after {
+  /* 6 dB segment lines (the meter maps −60..0 dBFS over its height) */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(to top, transparent 0 calc(10% - 1px), rgb(0 0 0 / 0.32) calc(10% - 1px) 10%);
+  pointer-events: none;
+}
 .daw-channel-meter.clip { border-color: var(--sx-danger); box-shadow: 0 0 5px color-mix(in srgb, var(--sx-danger) 45%, transparent); }
-.daw-mixer-control {
-  grid-column: 2;
+
+/* control = label row (name + mono value) over a skinned range input.
+   #studio prefix: these controls are <label>s, and the generic `#studio
+   label` form rule (ID specificity) would otherwise flatten the grid and
+   inflate the font. */
+#studio .daw-mixer-control {
   display: grid;
-  grid-template-columns: 34px minmax(44px, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 3px;
+  gap: 1px 4px;
   color: var(--sx-text-4);
   font-size: 8px;
   font-weight: 800;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
+  user-select: none;
 }
-.daw-mixer-control input { width: 100%; accent-color: var(--tc, var(--sx-brand-a)); }
+.daw-mixer-control > span { grid-area: 1 / 1; overflow: hidden; white-space: nowrap; }
 .daw-mixer-control output {
-  grid-column: 1 / -1;
+  grid-area: 1 / 2;
   color: var(--sx-text-3);
   font: 700 8px var(--sx-font-mono);
   text-align: right;
 }
-.daw-mixer-control.vertical {
-  grid-row: 2;
-  min-height: 62px;
-  grid-template-columns: 1fr;
-  justify-items: center;
+.daw-mixer-control input[type="range"] {
+  grid-area: 2 / 1 / 3 / 3;
+  width: 100%;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
 }
-.daw-mixer-control.vertical input {
-  width: 68px;
-  transform: rotate(-90deg);
+.daw-mixer-control input[type="range"]:focus-visible {
+  outline: 2px solid var(--sx-brand-b);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
+.daw-mixer-control.bi input,
+.daw-mixer-control.send input { height: 16px; }
+/* bipolar sliders print a centre detent on the input itself (taller than the track) */
+.daw-mixer-control.bi input {
+  background: linear-gradient(to right, transparent calc(50% - 1px), color-mix(in srgb, var(--sx-line-strong) 85%, transparent) calc(50% - 1px), color-mix(in srgb, var(--sx-line-strong) 85%, transparent) calc(50% + 1px), transparent calc(50% + 1px)) no-repeat center / 100% 12px;
+}
+/* --- WebKit skins --- */
+/* `border: none` + explicit heights everywhere below: the decks' global
+   input[type="range"] skin (styles.css) otherwise leaks its bordered 5px
+   track and 18px thumb into these. */
+.daw-mixer-control.send input::-webkit-slider-runnable-track {
+  height: 4px;
+  border: none;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--tc, var(--sx-brand-a)) var(--pct, 0%), var(--sx-well) var(--pct, 0%));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sx-line) 70%, transparent);
+}
+.daw-mixer-control.bi input::-webkit-slider-runnable-track {
+  height: 4px;
+  border: none;
+  border-radius: 2px;
+  background: linear-gradient(to right,
+    var(--sx-well) min(50%, var(--pct, 50%)),
+    var(--tc, var(--sx-brand-a)) min(50%, var(--pct, 50%)),
+    var(--tc, var(--sx-brand-a)) max(50%, var(--pct, 50%)),
+    var(--sx-well) max(50%, var(--pct, 50%)));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sx-line) 70%, transparent);
+}
+.daw-mixer-control.send input::-webkit-slider-thumb,
+.daw-mixer-control.bi input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 9px;
+  height: 15px;
+  margin-top: -5.5px;
+  border: 1px solid var(--sx-line-strong);
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--sx-btn-hi), var(--sx-surface-3) 60%, var(--sx-well));
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.45);
+}
+/* --- Firefox skins --- */
+.daw-mixer-control.send input::-moz-range-track {
+  height: 4px;
+  border: none;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--tc, var(--sx-brand-a)) var(--pct, 0%), var(--sx-well) var(--pct, 0%));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sx-line) 70%, transparent);
+}
+.daw-mixer-control.bi input::-moz-range-track {
+  height: 4px;
+  border: none;
+  border-radius: 2px;
+  background: linear-gradient(to right,
+    var(--sx-well) min(50%, var(--pct, 50%)),
+    var(--tc, var(--sx-brand-a)) min(50%, var(--pct, 50%)),
+    var(--tc, var(--sx-brand-a)) max(50%, var(--pct, 50%)),
+    var(--sx-well) max(50%, var(--pct, 50%)));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sx-line) 70%, transparent);
+}
+.daw-mixer-control.send input::-moz-range-thumb,
+.daw-mixer-control.bi input::-moz-range-thumb {
+  width: 9px;
+  height: 15px;
+  border: 1px solid var(--sx-line-strong);
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--sx-btn-hi), var(--sx-surface-3) 60%, var(--sx-well));
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.45);
+}
+/* --- vertical console fader --- */
+#studio .daw-mixer-control.vfader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 0;
+}
+.daw-mixer-control.vfader > span { display: none; }  /* the input carries the aria-label */
+.daw-mixer-control.vfader output { flex: 0 0 auto; font-size: 9px; color: var(--sx-text-2); }
+.daw-mixer-control.vfader input[type="range"] {
+  flex: 1 1 auto;
+  width: 34px;
+  min-height: 70px;
+  writing-mode: vertical-lr;
+  direction: rtl;
+}
+.daw-mixer-control.vfader input::-webkit-slider-runnable-track {
+  width: 5px;
+  height: 100%;
+  border: none;
+  border-radius: 3px;
+  background: var(--sx-well);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.5), 0 0 0 1px color-mix(in srgb, var(--sx-line) 70%, transparent);
+}
+.daw-mixer-control.vfader input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 28px;
+  height: 15px;
+  margin-top: 0;
+  margin-left: -11.5px;
+  border: 1px solid rgb(0 0 0 / 0.55);
+  border-radius: 3px;
+  background:
+    linear-gradient(180deg, transparent 6px, var(--tc, var(--sx-brand-a)) 6px, var(--tc, var(--sx-brand-a)) 9px, transparent 9px),
+    linear-gradient(180deg, var(--sx-btn-hi), var(--sx-surface-3) 45%, var(--sx-well) 52%, var(--sx-surface-3));
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.5), inset 0 1px 0 rgb(255 255 255 / 0.2);
+}
+.daw-mixer-control.vfader input::-moz-range-track {
+  width: 5px;
+  height: 100%;
+  border: none;
+  border-radius: 3px;
+  background: var(--sx-well);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.5), 0 0 0 1px color-mix(in srgb, var(--sx-line) 70%, transparent);
+}
+.daw-mixer-control.vfader input::-moz-range-thumb {
+  width: 28px;
+  height: 15px;
+  border: 1px solid rgb(0 0 0 / 0.55);
+  border-radius: 3px;
+  background:
+    linear-gradient(180deg, transparent 6px, var(--tc, var(--sx-brand-a)) 6px, var(--tc, var(--sx-brand-a)) 9px, transparent 9px),
+    linear-gradient(180deg, var(--sx-btn-hi), var(--sx-surface-3) 45%, var(--sx-well) 52%, var(--sx-surface-3));
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.5), inset 0 1px 0 rgb(255 255 255 / 0.2);
+}
+.daw-send-stack { display: grid; gap: 2px; }
 
 /* MIDI learn mode: mappable controls advertise themselves; the armed one pulses */
 .daw-mixer.midi-learn .daw-mixer-control.midi-mappable {
@@ -1175,9 +1600,9 @@
   border-color: var(--sx-brand-b);
 }
 .daw-channel-buttons {
-  grid-column: 1 / -1;
   display: flex;
   gap: 3px;
+  margin-top: auto;
 }
 .daw-channel-btn {
   flex: 1;
@@ -1192,10 +1617,15 @@
   font-weight: 900;
 }
 .daw-channel-btn.active { border-color: var(--tc, var(--sx-brand-a)); color: var(--sx-text-1); }
+/* MIDI LEARN / MIDI ×N live in the panel head — without this they inherit
+   flex:1 and stretch across the whole header */
+.daw-panel-head .daw-channel-btn { flex: 0 0 auto; }
 .daw-channel-btn.mute.active { background: var(--sx-warn); color: var(--sx-ink-on-accent); }
 .daw-channel-btn.solo.active { background: var(--sx-ok); color: var(--sx-ink-on-accent); }
-.daw-return { flex-basis: 102px; grid-template-columns: 1fr; }
-.daw-return .daw-mixer-control { grid-column: 1; }
+.daw-return { flex-basis: 98px; }
+/* ON / EQ toggles sit as direct children of the column-flex strip — without
+   this the base flex: 1 would stretch them to fill the leftover height */
+.daw-channel > .daw-channel-btn { flex: 0 0 auto; margin-top: 2px; }
 .daw-master-channel {
   position: sticky;
   right: 0;
@@ -1206,15 +1636,13 @@
   box-shadow: -10px 0 18px color-mix(in srgb, var(--sx-bg) 75%, transparent);
 }
 .daw-master-head {
-  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 4px;
   min-width: 0;
 }
-.daw-master-head .daw-channel-name { grid-column: auto; flex: 1; }
-.daw-master-channel > .daw-channel-btn { grid-column: 1 / -1; }
+.daw-master-head .daw-channel-name { flex: 1; }
 .daw-limiter-badge {
   flex: 0 0 auto;
   padding: 2px 3px;
@@ -1372,6 +1800,54 @@
 .daw-recovery-dialog::backdrop { background: color-mix(in srgb, var(--sx-bg) 72%, transparent); }
 .daw-recovery-copy { margin: 14px 16px 8px; color: var(--sx-text-3); line-height: 1.4; }
 .daw-recovery-list { display: grid; gap: 7px; max-height: 460px; padding: 8px 16px 16px; overflow: auto; }
+
+/* Recording setup makes the browser permission, input choice, monitor and
+   latency state explicit before an artist commits a take. */
+.daw-setup-dialog {
+  width: min(720px, calc(100vw - 24px));
+  max-height: min(680px, calc(100vh - 24px));
+  padding: 0;
+  border: 1px solid var(--sx-line-strong);
+  border-radius: var(--sx-radius-lg);
+  background: var(--sx-surface-2);
+  color: var(--sx-text-1);
+  box-shadow: var(--sx-shadow-2);
+}
+.daw-setup-dialog::backdrop { background: color-mix(in srgb, var(--sx-bg) 74%, transparent); backdrop-filter: blur(5px); }
+.daw-setup-copy { margin: 14px 16px 4px; color: var(--sx-text-3); line-height: 1.45; }
+.daw-setup-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px 16px; }
+.daw-setup-card {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 220px;
+  padding: 12px;
+  border: 1px solid var(--sx-line);
+  border-radius: var(--sx-radius-md);
+  background: color-mix(in srgb, var(--sx-surface-1) 88%, var(--sx-well));
+}
+.daw-setup-card h3 { margin: 0; color: var(--sx-text-1); font-size: var(--sx-fs-md); }
+.daw-setup-status { min-height: 38px; margin: 0; color: var(--sx-text-3); font-size: var(--sx-fs-sm); line-height: 1.4; }
+.daw-setup-action { min-height: 34px; color: var(--sx-brand-a-ink); }
+.daw-setup-action.active { border-color: var(--sx-brand-a); background: color-mix(in srgb, var(--sx-brand-a) 12%, var(--sx-btn-lo)); }
+.daw-setup-field { display: grid; gap: 4px; color: var(--sx-text-3); font-size: var(--sx-fs-xs); font-weight: 700; }
+#studio .daw-setup-field { flex-direction: unset; }
+.daw-setup-number { width: 100%; min-height: 32px; box-sizing: border-box; }
+.daw-setup-record { display: block; width: calc(100% - 32px); min-height: 42px; margin: 0 16px 16px; text-align: center; border-color: color-mix(in srgb, var(--sx-danger) 52%, var(--sx-line)); color: var(--sx-danger); }
+.daw-midi-import-dialog {
+  width: min(560px, calc(100vw - 24px));
+  padding: 0;
+  border: 1px solid var(--sx-line-strong);
+  border-radius: var(--sx-radius-lg);
+  background: var(--sx-surface-2);
+  color: var(--sx-text-1);
+  box-shadow: var(--sx-shadow-2);
+}
+.daw-midi-import-dialog::backdrop { background: color-mix(in srgb, var(--sx-bg) 74%, transparent); backdrop-filter: blur(5px); }
+.daw-midi-import-detail { margin: 8px 16px; color: var(--sx-text-3); font-size: var(--sx-fs-sm); line-height: 1.45; }
+.daw-midi-import-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px 16px; }
+.daw-midi-import-actions .daw-fbtn { min-height: 38px; border-color: var(--sx-line); }
+.daw-midi-match { border-color: color-mix(in srgb, var(--sx-brand-b) 60%, var(--sx-line)) !important; color: var(--sx-brand-b-ink); }
 .daw-recovery-item {
   display: grid;
   gap: 3px;
@@ -1447,6 +1923,31 @@
   outline: 2px solid var(--sx-focus);
   outline-offset: 2px;
 }
+
+/* Live-input and recording states are created dynamically by daw.js. */
+.daw-roll-header-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.daw-mon.active {
+  background: var(--sx-hot) !important;
+  color: #fff !important;
+  border-color: var(--sx-hot) !important;
+}
+.daw-region-recording {
+  border-color: var(--sx-danger) !important;
+  background: color-mix(in srgb, var(--sx-danger) 22%, var(--sx-surface-1)) !important;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--sx-danger) 45%, transparent);
+  animation: dawRecGlow 1.2s ease-in-out infinite alternate;
+  pointer-events: none;
+  z-index: 3;
+}
+@keyframes dawRecGlow {
+  from { border-color: var(--sx-danger); }
+  to { border-color: #ff80ab; }
+}
 @media (max-width: 900px) {
   .daw-body { grid-template-columns: min(var(--daw-heads-w, 176px), 40vw) minmax(0, 1fr); }
   .daw-head { padding-left: 8px; }
@@ -1512,7 +2013,7 @@
 
   .daw-bottom { grid-template-rows: 10px 40px auto; }
   .daw.bottom-collapsed .daw-bottom { grid-template-rows: 10px 40px; }
-  .daw-tab { flex: 1; min-height: 40px; padding-inline: 4px; font-size: 9px; }
+  .daw-tab { flex: 1; min-height: 40px; padding-inline: 3px; font-size: 10px; letter-spacing: .055em; }
   .daw-panel-head { min-height: 36px; }
   .daw-keys-body { gap: 6px; padding: 2px 8px 8px; }
   .daw-oct {
@@ -1531,6 +2032,9 @@
   .daw-mixer-note { display: none; }
   .daw-mixer-body { padding-inline: 6px; scroll-snap-type: x proximity; }
   .daw-channel { flex-basis: 112px; scroll-snap-align: start; }
+  /* re-assert after .daw-channel above — same specificity, later wins, and
+     without this the returns would WIDEN from 98px to 112px on phones */
+  .daw-return { flex-basis: 94px; }
   .daw-master-channel { flex-basis: 144px; }
   .daw-audio-ed { flex-wrap: wrap; align-content: flex-start; }
   .daw-audio-ed-cv { flex-basis: 100%; height: 68px; }

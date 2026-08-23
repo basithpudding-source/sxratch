@@ -388,7 +388,9 @@ export function attachTrackpadGestures(engine, ui, config) {
   window.addEventListener(
     "wheel",
     (e) => {
-      if (e.target.closest && e.target.closest("input, .knob, .dialog, .waveform, .fader")) return;
+      // .daw-mixer: horizontal trackpad swipes over the DAW mixer should
+      // scroll its strip carousel, not nudge the (hidden) deck crossfader.
+      if (e.target.closest && e.target.closest("input, .knob, .dialog, .waveform, .fader, .daw-mixer")) return;
       const gg = g();
       const { dx, dy } = normDelta(e);
       if (Math.abs(dx) < Math.abs(dy)) { // vertical-dominant: not a crossfade

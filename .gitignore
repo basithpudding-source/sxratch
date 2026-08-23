@@ -3,6 +3,8 @@ node_modules/
 
 # build output (regenerate with `npm run build`)
 dist/
+playwright-report/
+test-results/
 
 # firebase
 .firebase/
@@ -13,3 +15,4 @@ firebase-debug.log
 *.log
 .DS_Store
 Thumbs.db
+.review-tmp/

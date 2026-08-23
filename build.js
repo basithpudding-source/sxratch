@@ -43,20 +43,21 @@ for (const w of ["scratch-processor", "limiter-processor"]) {
   });
 }
 
-// Waveform render worker: separate bundled entry, referenced by URL ("/js/...").
-await esbuild.build({
-  ...common,
-  entryPoints: [join(root, "js/waveform-worker.js")],
-  outfile: join(dist, "js/waveform-worker.js"),
-  sourcemap: true,
-});
+// Render / export workers: separate bundled entries, referenced by URL at runtime.
+for (const w of ["waveform-worker", "wav-worker"]) {
+  await esbuild.build({
+    ...common,
+    entryPoints: [join(root, `js/${w}.js`)],
+    outfile: join(dist, `js/${w}.js`),
+    sourcemap: true,
+  });
+}
 
 // Stylesheets.
 await esbuild.build({
   entryPoints: [
     join(root, "css/tokens.css"),
     join(root, "css/styles.css"),
-    join(root, "css/studio.css"),
     join(root, "css/daw.css"),
     join(root, "css/decks.css"),
   ],
@@ -65,19 +66,11 @@ await esbuild.build({
   logLevel: "info",
 });
 
-// Static assets that ship unchanged (file or directory). samples/ is the
-// self-hosted FluidR3_GM instrument set (npm run samples) — optional: skipped
-// with a note if it hasn't been fetched, and the app falls back to the CDN.
+// Static assets that ship unchanged.
 // NOTE: .well-known/ (TWA assetlinks) is deliberately NOT deployed — its
 // fingerprint is still a placeholder; restore it here when a Play Store
 // release is signed (see TWA.md).
 for (const f of ["index.html", "manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png"]) {
   await cp(join(root, f), join(dist, f), { recursive: true });
 }
-try {
-  await cp(join(root, "samples"), join(dist, "samples"), { recursive: true });
-} catch {
-  console.warn("  (no samples/ directory — run `npm run samples` to self-host the GM instruments)");
-}
-
 console.log("\n  Built → dist/   (serve with: npm run start:dist)\n");

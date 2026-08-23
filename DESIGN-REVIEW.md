@@ -1,5 +1,10 @@
 # SXRATCH / PAD — Full Design & Functionality Review
 
+> Historical review: this document records the section-based PAD implementation
+> reviewed in July 2026. The live app now uses `js/daw.js`; the retired Song Builder
+> and its sampled-instrument asset chain were removed on 2026-08-08. See `README.md`
+> and `ARCHITECTURE.md` for the current product.
+
 Reviewed: entire codebase (index.html, app.js, audio-engine.js, input.js, waveform*, songbuilder.js, practice.js, all three stylesheets, PWA/SW/build/server). Date: 2026-07-15.
 
 **Verdict in one line:** the audio engine and interaction code are genuinely excellent (worklet scratch engine, SAB jog channel, coalesced pointers, offline rendering, undo/autosave). What holds the product back from feeling premium is the *presentation layer*: three overlapping layout generations, decorative fake data on a real instrument, an invisible "active deck" model, fragmented brand tokens, and touch targets/mobile ergonomics that don't match the engineering quality underneath.

@@ -1,7 +1,7 @@
 {
-  "name": "Sxratch / Pad — Browser DJ & Song Builder",
+  "name": "Sxratch / Pad — Browser DJ & Multitrack Studio",
   "short_name": "Sxratch",
-  "description": "Two-deck scratch & mix DJ rig with a studio song builder, in the browser.",
+  "description": "Two-deck scratch & mix DJ rig with a multitrack recording studio, in the browser.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -1095,7 +1095,13 @@ body.use-landscape-layout:not(.view-studio) .controller-center .eq .knob-group {
   gap: 12px;
 }
 
-.controller-center .channel[data-deck="B"] .knob-group {
+/* The landscape variant of the base rule above outranks a plain
+   .channel[data-deck="B"] selector (its body.use-landscape-layout qualifier
+   adds specificity), which silently reverted deck B to label-width-first
+   columns — every dial's x then depended on its label text, so the B column
+   zig-zagged. Carry the same qualifier here so the mirror always wins. */
+.controller-center .channel[data-deck="B"] .knob-group,
+body.use-landscape-layout:not(.view-studio) .controller-center .channel[data-deck="B"] .knob-group {
   grid-template-columns: 1fr auto;
 }
 .controller-center .channel[data-deck="B"] .knob-dial { grid-column: 2; }

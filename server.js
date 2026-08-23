@@ -70,8 +70,8 @@ const server = createServer(async (req, res) => {
       "Cache-Control": "no-cache",
       "Vary": "Accept-Encoding",
       // Cross-origin isolation enables SharedArrayBuffer (low-latency scratch
-      // control). "credentialless" keeps the cross-origin GM-sample CDN working
-      // without requiring CORP headers from it.
+      // control). "credentialless" also keeps permitted cross-origin audio
+      // sources usable without requiring CORP headers from them.
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "credentialless",
     };

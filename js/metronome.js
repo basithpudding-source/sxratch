@@ -1,5 +1,5 @@
 // Shared metronome — Web-Audio-clock click scheduler used by Practice mode's
-// timing drills and the PAD composer's count-in / click-along.
+// timing drills and the PAD Studio count-in / click-along.
 //
 // Scheduling model: a short setTimeout loop keeps ~250 ms of clicks scheduled
 // ahead on the audio clock, so timing is sample-accurate regardless of main-

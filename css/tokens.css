@@ -3,7 +3,7 @@
    ---------------------------------------------------------------------
    ONE semantic colour layer for the whole product. Before this file the
    palette lived in three unrelated namespaces (`:root` in styles.css, a
-   second `:root` in decks.css, a `#studio` block in studio.css) with ~480
+   second `:root` in decks.css, and the former Song Builder stylesheet) with ~480
    raw hex/rgba literals outside them, so a theme switch was impossible.
 
    Rules for anything added later:
