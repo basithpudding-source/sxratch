@@ -9,7 +9,7 @@ import { DAW } from "./daw.js";
 import { generateScratchPreset, generateLaserPreset } from "./presets.js";
 import { MidiInput, DEFAULT_MIDI_MAP } from "./midi.js";
 import { haptic, setHapticsEnabled, hapticsSupported } from "./haptics.js";
-import { detectBPM } from "./bpm.js";
+import { detectBPM, detectBeatGrid } from "./bpm.js";
 import { createMixRecorder } from "./recorder.js";
 import { bufferToWav } from "./wav.js";
 import { readVersioned, writeVersioned } from "./store.js";
@@ -450,6 +450,7 @@ function loadConfig() {
       map: { ...DEFAULT_MIDI_MAP, ...(saved.midi?.map || {}) },
     },
     haptics: saved.haptics ?? true,
+    cueMode: saved.cueMode || "stereo",
     theme: THEME_MODES.includes(saved.theme) ? saved.theme : "auto",
   };
 }
@@ -593,6 +594,7 @@ document.getElementById("start-btn").addEventListener("click", async () => {
     await engine.resume();
     engine.crossfadeCurve = config.gestures.crossfadeCurve ?? "power";
     engine.hamster = config.gestures.hamsterMode ?? false;
+    engine.setCueMode(config.cueMode ?? "stereo");
     setup();
     booted = true;
     overlay.style.display = "none";
@@ -978,13 +980,14 @@ function applyLoaded(deck, audio, name, opts = {}) {
       // Detect off the load path; only apply if this deck still holds the track.
       setTimeout(() => {
         if (bpmDetectToken[deck] !== token || engine.decks[deck].buffer !== audio) return;
-        const found = detectBPM(audio);
-        if (found && bpmDetectToken[deck] === token && engine.decks[deck].buffer === audio) {
-          engine.decks[deck].setBpm(found);
+        const grid = detectBeatGrid(audio);
+        if (grid && bpmDetectToken[deck] === token && engine.decks[deck].buffer === audio) {
+          engine.decks[deck].setBpm(grid.bpm);
+          engine.decks[deck].beatOffset = grid.offset;
           bpmKnown[deck] = true;
           ui.setBpm(deck, true);
-          // Detected tempo ⇒ beat ticks only (downbeat unknown — no bar numbers).
-          ui.waves[deck].setBeatGrid({ bpm: found, offset: 0, anchored: false });
+          // Detected tempo & downbeat offset ⇒ accurate aligned beat grid
+          ui.waves[deck].setBeatGrid({ bpm: grid.bpm, offset: grid.offset, anchored: true });
         }
       }, 40);
     }
@@ -1371,9 +1374,23 @@ function setupTransport() {
   document.querySelectorAll(".play-btn").forEach((btn) =>
     btn.addEventListener("click", () => engine.decks[btn.dataset.deck].toggle())
   );
-  document.querySelectorAll(".cue-btn").forEach((btn) =>
-    btn.addEventListener("click", () => { engine.decks[btn.dataset.deck].goToCue(); coach?.notify(`cue${btn.dataset.deck}`); })
-  );
+  document.querySelectorAll(".cue-btn").forEach((btn) => {
+    const id = btn.dataset.deck;
+    const d = engine.decks[id];
+    const down = (e) => {
+      e.preventDefault();
+      d.cueDown();
+      coach?.notify(`cue${id}`);
+    };
+    const up = (e) => {
+      e.preventDefault();
+      d.cueUp();
+    };
+    btn.addEventListener("pointerdown", down);
+    btn.addEventListener("pointerup", up);
+    btn.addEventListener("pointerleave", up);
+    btn.addEventListener("pointercancel", up);
+  });
   document.querySelectorAll(".set-btn").forEach((btn) =>
     btn.addEventListener("click", () => {
       engine.decks[btn.dataset.deck].setCue();
@@ -1435,15 +1452,18 @@ function syncDeck(id) {
   const m = engine.decks[otherId];
   if (!d.buffer || !m.buffer) { ui.toast("Load both decks to sync"); return; }
   const masterEff = m.bpm * (1 + m.tempo / 100);
-  const target = Math.max(-8, Math.min(8, (masterEff / d.bpm - 1) * 100));
+  const range = d.tempoRange || 8;
+  const target = Math.max(-range, Math.min(range, (masterEff / d.bpm - 1) * 100));
   tempoFaders[id]?.set(target); // moves the fader + applies tempo + readout
-  // Align this deck's beat phase to the master's.
+  // Align this deck's beat phase to the master's, accounting for downbeat offsets.
   const eff = d.bpm * (1 + target / 100);
   if (d.duration > 0 && m.duration > 0) {
     const beatM = 60 / masterEff, beatD = 60 / eff;
-    const mPhase = ((m.position * m.duration) % beatM + beatM) % beatM;
+    const mOff = m.beatOffset || 0;
+    const dOff = d.beatOffset || 0;
+    const mPhase = (((m.position * m.duration - mOff) % beatM) + beatM) % beatM;
     const dTime = d.position * d.duration;
-    const dPhase = (dTime % beatD + beatD) % beatD;
+    const dPhase = (((dTime - dOff) % beatD) + beatD) % beatD;
     let delta = mPhase - dPhase;
     if (delta > beatD / 2) delta -= beatD;
     if (delta < -beatD / 2) delta += beatD;
@@ -1494,26 +1514,88 @@ function setupMixer() {
     midiTargets["vol" + id] = (v) => vh.set(v);
   }
 
-  // Tempo faders (vertical, ±8%, neutral = 0)
-  for (const id of ["A", "B"]) {
+  function initTempoFader(id, range = 8) {
+    const d = engine.decks[id];
+    d.setTempoRange(range);
     const read = document.getElementById(`tempo-${id}-read`);
     const fmt = (v) => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v).toFixed(1)}%`;
-    tempoFaders[id] = attachFader(document.getElementById(`tempo-${id}`), {
-      min: -8, max: 8, value: 0, default: 0, step: 0.1,
+    const faderEl = document.getElementById(`tempo-${id}`);
+    if (!faderEl) return;
+    const half = Math.round(range / 2);
+    tempoFaders[id] = attachFader(faderEl, {
+      min: -range, max: range, value: d.tempo, default: 0, step: 0.1,
       label: `Deck ${id} tempo`,
       valueText: fmt,
       ticks: [
-        { at: 8, label: "+8", major: true }, { at: 4 }, { at: 0, major: true },
-        { at: -4 }, { at: -8, label: "−8", major: true },
+        { at: range, label: `+${range}`, major: true }, { at: half }, { at: 0, major: true },
+        { at: -half }, { at: -range, label: `−${range}`, major: true },
       ],
       onChange: (v) => {
-        engine.decks[id].setTempo(v);
+        d.setTempo(v);
         read.textContent = fmt(v);
         ui.setBpm(id, bpmKnown[id]); // effective BPM follows the tempo fader
         coach?.notify("tempo");
       },
     });
-    read.textContent = fmt(0);
+    read.textContent = fmt(d.tempo);
+  }
+
+  // Tempo faders (vertical, selectable range ±6..±100%, neutral = 0) + Pitch Bend
+  for (const id of ["A", "B"]) {
+    initTempoFader(id, 8);
+
+    const rail = document.querySelector(`.deck-rail[data-deck="${id}"]`);
+    if (rail) {
+      const downBtn = rail.querySelector(".bend-down");
+      const upBtn = rail.querySelector(".bend-up");
+      const rangeBtn = rail.querySelector(".bend-range");
+
+      const onDown = (e) => { e.preventDefault(); engine.decks[id].nudgeStart(-1); };
+      const onStop = (e) => { e.preventDefault(); engine.decks[id].nudgeEnd(); };
+      downBtn?.addEventListener("pointerdown", onDown);
+      downBtn?.addEventListener("pointerup", onStop);
+      downBtn?.addEventListener("pointerleave", onStop);
+      downBtn?.addEventListener("pointercancel", onStop);
+
+      const onUp = (e) => { e.preventDefault(); engine.decks[id].nudgeStart(1); };
+      upBtn?.addEventListener("pointerdown", onUp);
+      upBtn?.addEventListener("pointerup", onStop);
+      upBtn?.addEventListener("pointerleave", onStop);
+      upBtn?.addEventListener("pointercancel", onStop);
+
+      const RANGES = [6, 8, 10, 16, 100];
+      let curRange = 8;
+      rangeBtn?.addEventListener("click", () => {
+        const idx = RANGES.indexOf(curRange);
+        curRange = RANGES[(idx + 1) % RANGES.length];
+        rangeBtn.textContent = `±${curRange}%`;
+        initTempoFader(id, curRange);
+        ui.toast(`Deck ${id} range: ±${curRange}%`);
+      });
+    }
+  }
+
+  // Headphone Cue (PFL) buttons
+  document.querySelectorAll(".pfl-btn").forEach((btn) => {
+    const deck = btn.dataset.deck;
+    btn.addEventListener("click", () => {
+      const active = engine.decks[deck].toggleCuePfl();
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+      ui.toast(`Deck ${deck} Headphone Cue ${active ? "ON" : "OFF"}`);
+    });
+  });
+
+  // Headphone volume & Cue/Master mix
+  const hpVol = document.getElementById("hp-vol");
+  if (hpVol) {
+    engine.setCueVolume(parseFloat(hpVol.value));
+    hpVol.addEventListener("input", () => engine.setCueVolume(parseFloat(hpVol.value)));
+  }
+  const hpMix = document.getElementById("hp-mix");
+  if (hpMix) {
+    engine.setCueMix(parseFloat(hpMix.value));
+    hpMix.addEventListener("input", () => engine.setCueMix(parseFloat(hpMix.value)));
   }
 
   // Crossfader (horizontal, neutral = centre, magnetic centre notch)
@@ -1637,8 +1719,8 @@ function buildActions() {
   return {
     playA: () => { A.toggle(); ui.flash("A"); },
     playB: () => { B.toggle(); ui.flash("B"); },
-    cueA: () => { A.goToCue(); coach?.notify("cueA"); },
-    cueB: () => { B.goToCue(); coach?.notify("cueB"); },
+    cueA: () => { A.cueDown(); coach?.notify("cueA"); },
+    cueB: () => { B.cueDown(); coach?.notify("cueB"); },
     setCueA: () => { A.setCue(); ui.toast("Deck A: cue set"); coach?.notify("setCueA"); },
     setCueB: () => { B.setCue(); ui.toast("Deck B: cue set"); coach?.notify("setCueB"); },
     crossLeft: () => setCrossUI(engine.crossfade - 0.05),
@@ -1660,6 +1742,7 @@ let rebindCapture = null; // { type:'keys'|'gestures', name } while listening fo
 function setupKeyboard() {
   rebuildKeyMap();
   const actions = buildActions();
+  const A = engine.decks.A, B = engine.decks.B;
 
   // Capture phase: when rebinding, the next key press becomes the binding and
   // is swallowed so it can't also trigger an action / arm a deck.
@@ -1691,6 +1774,12 @@ function setupKeyboard() {
     if (e.repeat && !repeatable) return;
     actions[action]?.(e);
     if (action.startsWith("cross") || action === "playBoth") e.preventDefault();
+  });
+
+  window.addEventListener("keyup", (e) => {
+    const action = keyMap[e.code];
+    if (action === "cueA") A.cueUp();
+    else if (action === "cueB") B.cueUp();
   });
 }
 
@@ -1812,6 +1901,26 @@ function renderSettings() {
   });
   hamRow.append(hamL, ham);
   body.append(hamRow);
+
+  const audioTitle = document.createElement("div"); audioTitle.className = "set-group-title"; audioTitle.textContent = "Audio output & headphones";
+  body.append(audioTitle);
+
+  const cueRow = document.createElement("div"); cueRow.className = "set-row";
+  const cueL = document.createElement("span"); cueL.textContent = "Headphone cue routing";
+  const cueS = document.createElement("select");
+  cueS.className = "preset-select";
+  cueS.style.minHeight = "28px";
+  cueS.style.padding = "2px 6px";
+  cueS.appendChild(opt("stereo", "Stereo Master (Speakers & Headphones)", (config.cueMode || "stereo") === "stereo"));
+  cueS.appendChild(opt("split", "Split Cue (L: Master / R: Cue)", config.cueMode === "split"));
+  cueS.addEventListener("change", () => {
+    config.cueMode = cueS.value;
+    engine.setCueMode(cueS.value);
+    saveConfig();
+    ui.toast(`Headphone output: ${cueS.value === "split" ? "Split Cue (L: Master / R: Cue)" : "Stereo Master"}`);
+  });
+  cueRow.append(cueL, cueS);
+  body.append(cueRow);
 
   renderAppearanceSettings(body);
   renderMidiHapticsSettings(body);

@@ -91,7 +91,7 @@ export function scheduleAutomationParam(
   }
 }
 
-export function createDawEngine({ getCtx, getOutput, getSong, getClip, onPlayhead, onRecordFail }) {
+export function createDawEngine({ getCtx, getOutput, getSong, getClip, onPlayhead, onRecordFail, onInputStateChange }) {
   let ctx = null;
   let master = null, glue = null, meterTap = null;
   let liveMix = null;
@@ -112,6 +112,14 @@ export function createDawEngine({ getCtx, getOutput, getSong, getClip, onPlayhea
   // Recording state.
   let rec = null;             // { kind:'audio'|'midi', trackId, startBeat, ... }
   let recPending = null;      // { cancelled, voices } while a count-in runs
+
+  // Permission-led live input preview. This deliberately lives outside the
+  // song document: an input device is hardware/session state, not a project
+  // asset. One stream powers the input meter, optional browser monitoring and
+  // the capture branch used when an audio track records.
+  let inputPreview = null;
+  const inputMeterState = { rms: 0, peak: 0 };
+  let inputOpenGeneration = 0;
 
   const song = () => getSong();
   const secPerBeat = () => 60 / (song().bpm || 120);
@@ -359,6 +367,202 @@ export function createDawEngine({ getCtx, getOutput, getSong, getClip, onPlayhea
     noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     noise.getChannelData(0).set(noiseData(ctx.sampleRate, 1));
     return ctx;
+  }
+
+  function inputError(name, message) {
+    const error = new Error(message);
+    error.name = name;
+    return error;
+  }
+
+  function inputConstraints(deviceId) {
+    return {
+      audio: {
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    };
+  }
+
+  function disposeInputPreview(preview, { stopTracks = false } = {}) {
+    if (!preview) return;
+    try { preview.source?.disconnect(); } catch {}
+    try { preview.inputGain?.disconnect(); } catch {}
+    try { preview.analyser?.disconnect(); } catch {}
+    try { preview.monitorGain?.disconnect(); } catch {}
+    if (stopTracks) {
+      try { preview.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
+    }
+  }
+
+  function notifyInputState(reason) {
+    try { onInputStateChange?.(getInputState(), { reason }); } catch {}
+  }
+
+  /** Return the current permission/session state without exposing graph nodes. */
+  function getInputState() {
+    return {
+      open: !!inputPreview,
+      deviceId: inputPreview?.deviceId || null,
+      requestedDeviceId: inputPreview?.requestedId || null,
+      monitoring: !!inputPreview?.monitoring,
+      inputGain: inputPreview?.inputGainValue ?? 1,
+    };
+  }
+
+  /**
+   * Open one real microphone/interface stream for the Input rail.
+   *
+   * Its direct-monitor branch intentionally bypasses a DAW track's inserts
+   * and fader. It still passes through the application's final output so the
+   * user retains the global volume/limiter. This is browser monitoring, not
+   * a claim of hardware direct or zero-latency monitoring.
+   */
+  async function openInput(options = {}) {
+    const {
+      deviceId = null,
+      monitor = false,
+      inputGain = 1,
+      allowDuringRecord = false,
+    } = options;
+    const c = ensureCtx();
+    const requestedId = deviceId || null;
+    const hasRequestedDevice = Object.prototype.hasOwnProperty.call(options, "deviceId");
+    const current = inputPreview;
+    // `null` is an explicit request for the browser default input, while an
+    // omitted device keeps the current session. Preserve that distinction so
+    // selecting “Default input” really switches away from a named interface.
+    const wantsAnotherDevice = !!current && hasRequestedDevice && current.requestedId !== requestedId;
+    if (!allowDuringRecord && (rec || recPending) && (wantsAnotherDevice || !current)) {
+      throw inputError("InvalidStateError", "Finish recording before changing the audio input.");
+    }
+    if (current && !wantsAnotherDevice) {
+      setInputGain(inputGain, { notify: false });
+      setInputMonitoring(monitor, { notify: false });
+      notifyInputState("updated");
+      return getInputState();
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw inputError("NotSupportedError", "This browser cannot open audio inputs.");
+    }
+
+    // Do not tear down a working interface until its replacement is actually
+    // open. This is especially important for device selectors: a unplugged or
+    // busy option must leave the current meter/monitor session intact.
+    const generation = ++inputOpenGeneration;
+    let stream = null;
+    let preview = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(inputConstraints(requestedId));
+      if (generation !== inputOpenGeneration) {
+        try { stream.getTracks().forEach((track) => track.stop()); } catch {}
+        return getInputState();
+      }
+      const source = c.createMediaStreamSource(stream);
+      const inputGainNode = c.createGain();
+      const analyser = c.createAnalyser();
+      const monitorGain = c.createGain();
+      analyser.fftSize = 1024;
+      inputGainNode.gain.value = clamp(inputGain, 0, 2, 1);
+      monitorGain.gain.value = 0;
+      source.connect(inputGainNode);
+      inputGainNode.connect(analyser);
+      analyser.connect(monitorGain);
+      // Bypass the selected track's inserts/fader, but stay in the Studio
+      // master path so the visible Studio Output control and safety processing
+      // govern browser monitoring just like program material.
+      monitorGain.connect(master || getOutput?.() || c.destination);
+      const settings = stream.getAudioTracks?.()[0]?.getSettings?.() || {};
+      preview = {
+        stream,
+        source,
+        inputGain: inputGainNode,
+        analyser,
+        monitorGain,
+        meterBuffer: new Float32Array(analyser.fftSize),
+        deviceId: settings.deviceId || requestedId,
+        requestedId,
+        inputGainValue: clamp(inputGain, 0, 2, 1),
+        monitoring: false,
+      };
+      if (generation !== inputOpenGeneration) {
+        disposeInputPreview(preview, { stopTracks: true });
+        return getInputState();
+      }
+      const previous = inputPreview;
+      inputPreview = preview;
+      if (previous && previous !== preview) disposeInputPreview(previous, { stopTracks: true });
+      for (const track of stream.getAudioTracks?.() || []) {
+        track.addEventListener?.("ended", () => {
+          if (inputPreview !== preview) return;
+          inputPreview = null;
+          disposeInputPreview(preview);
+          inputMeterState.rms = 0;
+          inputMeterState.peak = 0;
+          onRecordFail?.("Audio input disconnected. Reconnect it before recording another take.");
+          notifyInputState("ended");
+        }, { once: true });
+      }
+      setInputMonitoring(monitor, { notify: false });
+      notifyInputState(previous ? "switched" : "connected");
+      return getInputState();
+    } catch (error) {
+      disposeInputPreview(preview);
+      try { stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
+      throw error;
+    }
+  }
+
+  /** Set the record/meter gain before the capture and monitor split. */
+  function setInputGain(value, { notify = true } = {}) {
+    const preview = inputPreview;
+    if (!preview?.inputGain?.gain) return false;
+    const gain = clamp(value, 0, 2, 1);
+    preview.inputGainValue = gain;
+    try {
+      preview.inputGain.gain.setTargetAtTime(gain, ctx.currentTime, 0.012);
+    } catch {
+      preview.inputGain.gain.value = gain;
+    }
+    if (notify) notifyInputState("gain");
+    return true;
+  }
+
+  /** Toggle the browser-monitor branch while keeping the input meter alive. */
+  function setInputMonitoring(on, { notify = true } = {}) {
+    const preview = inputPreview;
+    if (!preview?.monitorGain?.gain) return false;
+    const target = on ? 0.9 : 0;
+    preview.monitoring = !!on;
+    try {
+      preview.monitorGain.gain.setTargetAtTime(target, ctx.currentTime, 0.012);
+    } catch {
+      preview.monitorGain.gain.value = target;
+    }
+    if (notify) notifyInputState("monitor");
+    return true;
+  }
+
+  /** Close the live input session. A take owns the stream until it finishes. */
+  function closeInput() {
+    if (rec?.kind === "audio" || recPending) return false;
+    // Invalidate a pending permission prompt too. If it resolves after the
+    // user has disconnected, its stream is immediately stopped rather than
+    // quietly reopening the microphone.
+    inputOpenGeneration++;
+    const preview = inputPreview;
+    if (!preview) {
+      notifyInputState("closed");
+      return true;
+    }
+    inputPreview = null;
+    disposeInputPreview(preview, { stopTracks: true });
+    inputMeterState.rms = 0;
+    inputMeterState.peak = 0;
+    notifyInputState("closed");
+    return true;
   }
 
   function makeDistortionCurve(drive = 0.2) {
@@ -1024,19 +1228,27 @@ registerProcessor("sx-cap", SxCap);`;
 
   async function startAudioRecording(track, deviceId) {
     ensureCtx();
-    let stream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          deviceId: deviceId ? { exact: deviceId } : undefined,
-          echoCancellation: false, noiseSuppression: false, autoGainControl: false,
-        },
+      await openInput({
+        deviceId,
+        monitor: !!track.monitor,
+        inputGain: track.inputGain,
+        allowDuringRecord: true,
       });
-    } catch (e) {
-      onRecordFail?.("Microphone access was blocked — allow it in the browser and try again.");
+    } catch (error) {
+      const message = error?.name === "NotAllowedError" || error?.name === "SecurityError"
+        ? "Microphone access was blocked — allow it in the browser and try again."
+        : error?.name === "NotFoundError" || error?.name === "OverconstrainedError"
+          ? "That audio input is no longer available. Choose another input and try again."
+          : error?.name === "NotReadableError"
+            ? "That audio input is busy in another app. Close it there and try again."
+            : error?.message || "Could not open the audio input.";
+      onRecordFail?.(message);
       return null;
     }
-    const source = ctx.createMediaStreamSource(stream);
+    const preview = inputPreview;
+    if (!preview) return null;
+    const captureSource = preview.inputGain;
     const chunks = [];   // arrays of per-channel Float32Arrays
     // Context time of the first captured sample (worklet-reported). Without it
     // the take can only be positioned by ESTIMATE; with it the buffer can be
@@ -1089,25 +1301,30 @@ registerProcessor("sx-cap", SxCap);`;
         }
       };
     }
-    source.connect(node);
-    // Live input monitoring toggle or silent sink
+    captureSource.connect(node);
+    // The live preview has its own browser-monitor branch. The capture branch
+    // is always sent through a zero-gain sink solely to keep the worklet (or
+    // ScriptProcessor fallback) processing; routing it audibly here would
+    // double-monitor the input.
     const sink = ctx.createGain();
-    if (track.monitor) {
-      sink.gain.value = 0.9;
-      node.connect(sink);
-      sink.connect(busFor(track).input);
-    } else {
-      sink.gain.value = 0;
-      node.connect(sink);
-      sink.connect(ctx.destination);
-    }
-    return { stream, source, node, sink, chunks, isWorklet, meta };
+    sink.gain.value = 0;
+    node.connect(sink);
+    sink.connect(ctx.destination);
+    return { stream: preview.stream, captureSource, node, sink, chunks, isWorklet, meta };
+  }
+
+  function disposeAudioCapture(cap) {
+    if (!cap) return;
+    try { cap.captureSource?.disconnect(cap.node); } catch {}
+    try { cap.node?.disconnect(); } catch {}
+    try { cap.sink?.disconnect(); } catch {}
   }
 
   async function finishAudioRecording(cap) {
     if (cap.isWorklet && cap.node.flush) await cap.node.flush();
-    try { cap.source.disconnect(); cap.node.disconnect(); cap.sink.disconnect(); } catch {}
-    try { cap.stream.getTracks().forEach((t) => t.stop()); } catch {}
+    // Leave the preview stream, meter and optional browser monitoring alive.
+    // Closing it here would make the Input rail lie immediately after a take.
+    disposeAudioCapture(cap);
     const chunks = cap.chunks;
     if (!chunks.length) return null;
     const nCh = Math.max(1, chunks[0].length);
@@ -1193,7 +1410,7 @@ registerProcessor("sx-cap", SxCap);`;
       if (track.kind === "audio") {
         const cap = await startAudioRecording(track, deviceId);
         if (token.cancelled) {
-          try { cap?.stream.getTracks().forEach((t) => t.stop()); } catch {}
+          disposeAudioCapture(cap);
           return false;
         }
         if (!cap) return false;
@@ -1424,6 +1641,21 @@ registerProcessor("sx-cap", SxCap);`;
     return meterState;
   }
 
+  /**
+   * Permission-gated input level for the persistent Input rail. It measures
+   * the actual post-input-gain stream before browser monitoring, so a muted
+   * monitor still shows a truthful signal and a disconnected input reads zero.
+   */
+  function inputMeterSnapshot() {
+    if (inputPreview?.analyser && inputPreview?.meterBuffer) {
+      readMeter(inputPreview.analyser, inputPreview.meterBuffer, inputMeterState);
+    } else {
+      inputMeterState.rms = 0;
+      inputMeterState.peak = 0;
+    }
+    return inputMeterState;
+  }
+
   /** Legacy normalized RMS seam retained for the compact transport meter. */
   function masterLevel() {
     return Math.min(1, meterSnapshot().master.rms * 3);
@@ -1448,7 +1680,8 @@ registerProcessor("sx-cap", SxCap);`;
     beatNow, play, stop, seek,
     noteOn, noteOff, record, stopRecord,
     refreshTrackParams, refreshMixParams, rebuildTrack, rebuildReverbBus, syncGraph,
-    renderOffline, renderOfflineStems, masterLevel, meterSnapshot, graphStats,
+    renderOffline, renderOfflineStems, masterLevel, meterSnapshot, inputMeterSnapshot, graphStats,
+    openInput, closeInput, getInputState, setInputGain, setInputMonitoring,
     setMetronome(on) { metronomeOn = !!on; },
     get metronome() { return metronomeOn; },
     setCountIn(bars) { countInBars = Math.max(0, Math.min(2, Number(bars) || 0)); },

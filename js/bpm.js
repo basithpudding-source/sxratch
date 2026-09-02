@@ -10,6 +10,18 @@
 // (setTimeout / idle) so the UI never blocks.
 
 /**
+ * Estimate the tempo and downbeat offset of a decoded track.
+ * @param {AudioBuffer} buffer
+ * @returns {{ bpm: number, offset: number }|null}
+ */
+export function detectBeatGrid(buffer) {
+  if (!buffer || !buffer.length) return null;
+  const ch0 = buffer.getChannelData(0);
+  const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : ch0;
+  return detectBeatGridFromChannels(ch0, ch1, buffer.sampleRate, buffer.length);
+}
+
+/**
  * Estimate the tempo of a decoded track.
  * @param {AudioBuffer} buffer
  * @returns {number|null} BPM rounded to 0.1, or null if not confident.
@@ -21,15 +33,20 @@ export function detectBPM(buffer) {
   return detectBPMFromChannels(ch0, ch1, buffer.sampleRate, buffer.length);
 }
 
+export function detectBeatGridFromChannels(ch0, ch1, sr, length) {
+  return detectBPMFromChannels(ch0, ch1, sr, length, { detailed: true });
+}
+
 /**
  * Pure-array tempo estimator (all the logic; node-testable without Web Audio).
  * @param {Float32Array} ch0
  * @param {Float32Array} ch1  pass ch0 again for mono
  * @param {number} sr         sample rate
  * @param {number} length     samples to analyze
- * @returns {number|null}
+ * @param {{ detailed?: boolean }} [opts]
+ * @returns {number|{ bpm: number, offset: number }|null}
  */
-export function detectBPMFromChannels(ch0, ch1, sr, length) {
+export function detectBPMFromChannels(ch0, ch1, sr, length, { detailed = false } = {}) {
   if (!ch0 || !length) return null;
 
   // 1) RMS envelope at ~172 Hz (hop 256 @ 44.1k) — fine enough lag resolution
@@ -134,5 +151,24 @@ export function detectBPMFromChannels(ch0, ch1, sr, length) {
 
   const bpm = (60 * envRate) / refined;
   if (!(bpm >= 50 && bpm <= 220)) return null;
-  return Math.round(bpm * 10) / 10;
+  const roundedBpm = Math.round(bpm * 10) / 10;
+
+  if (!detailed) return roundedBpm;
+
+  // 6) Downbeat offset estimation — find which phase phi has the strongest onset sum.
+  const beatPeriod = Math.max(1, Math.round(refined));
+  let bestPhase = 0;
+  let bestPhaseScore = -1;
+  for (let phi = 0; phi < beatPeriod; phi++) {
+    let sum = 0;
+    for (let p = phi; p < n; p += beatPeriod) {
+      sum += on[p];
+    }
+    if (sum > bestPhaseScore) {
+      bestPhaseScore = sum;
+      bestPhase = phi;
+    }
+  }
+  const offset = Math.round(((bestPhase * hop) / sr) * 1000) / 1000;
+  return { bpm: roundedBpm, offset };
 }

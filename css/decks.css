@@ -513,7 +513,7 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-meta {
 .deck-side .deck-rail,
 body.use-landscape-layout:not(.view-studio) .deck-side .deck-rail {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr auto auto;
   width: 58px;
   height: min(94%, 360px);
   min-height: 0;
@@ -537,6 +537,49 @@ body.use-landscape-layout:not(.view-studio) .deck-side .deck-rail {
 }
 
 .deck-b .rail-read { color: var(--sx-deck-b-ink); }
+
+.bend-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.bend-btn {
+  padding: 2px 4px;
+  font-size: var(--sx-fs-2xs);
+  font-weight: 700;
+  min-width: 18px;
+  height: 20px;
+  border-radius: var(--sx-radius-2xs);
+  border: 1px solid var(--sx-border-medium, rgba(255,255,255,0.15));
+  background: var(--sx-surface-2, #182030);
+  color: var(--sx-text-muted, #94a3b8);
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bend-btn:hover {
+  background: var(--sx-surface-3, #222d42);
+  color: var(--sx-text-bright, #fff);
+}
+
+.bend-btn:active {
+  background: var(--sx-accent, #ff7a00);
+  color: #fff;
+}
+
+.bend-range {
+  font-size: 9px;
+  min-width: 24px;
+  padding: 2px 2px;
+}
 
 .deck-side .deck-rail .fader.v {
   width: 58px;
@@ -1203,11 +1246,69 @@ body.use-landscape-layout:not(.view-studio) .controller-center .crossfade-col {
 .controller-center .vfader,
 body.use-landscape-layout:not(.view-studio) .controller-center .vfader {
   display: grid;
-  grid-template-rows: 1fr;
+  grid-template-rows: auto 1fr;
   min-height: 0;
   align-items: stretch;
   justify-items: center;
   gap: 6px;
+}
+
+.pfl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 8px;
+  font-size: var(--sx-fs-2xs, 10px);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border-radius: var(--sx-radius-sm, 4px);
+  border: 1px solid var(--sx-border-medium, rgba(255,255,255,0.15));
+  background: var(--sx-surface-2, #182030);
+  color: var(--sx-text-muted, #94a3b8);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.pfl-btn:hover {
+  color: var(--sx-text-bright, #fff);
+  border-color: var(--sx-border-strong, rgba(255,255,255,0.3));
+}
+
+.pfl-btn.active[data-deck="A"],
+.pfl-btn.active {
+  background: color-mix(in srgb, var(--sx-deck-a, #ff7a00) 25%, var(--sx-surface-2, #182030));
+  color: var(--sx-deck-a-ink, #ff9e40);
+  border-color: var(--sx-deck-a, #ff7a00);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--sx-deck-a, #ff7a00) 40%, transparent);
+}
+
+.pfl-btn.active[data-deck="B"] {
+  background: color-mix(in srgb, var(--sx-deck-b, #00d2ff) 25%, var(--sx-surface-2, #182030));
+  color: var(--sx-deck-b-ink, #38bdf8);
+  border-color: var(--sx-deck-b, #00d2ff);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--sx-deck-b, #00d2ff) 40%, transparent);
+}
+
+.cue-vol-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 10px;
+  font-size: var(--sx-fs-2xs, 10px);
+  color: var(--sx-text-muted, #94a3b8);
+}
+
+.cue-vol-wrap input[type="range"] {
+  width: 50px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.jog-pad.nudging .platter-disc {
+  box-shadow:
+    inset 0 2px 8px var(--sx-hilite),
+    0 0 16px color-mix(in srgb, var(--sx-accent, #ff7a00) 45%, transparent) !important;
 }
 
 /* The VU moved to the centre meter bridge — the row holds just the fader. */

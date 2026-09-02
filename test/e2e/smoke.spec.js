@@ -75,23 +75,31 @@ test.describe("@source source application", () => {
     await expect(page.locator("#studio")).toBeHidden();
 
     await openStudio(page);
-    await expect(studioButton).toHaveAttribute("aria-current", "page");
+    await expect(page.locator("body")).toHaveClass(/view-studio/);
     await expect(page.locator("#console")).toBeHidden();
-    await expect(page.getByRole("button", { name: "Add synth", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Record audio", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Import MIDI", exact: true })).toBeVisible();
-    await expect(page.getByText("Sound designer", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Play / stop (Space)", exact: true })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Add track", exact: true })).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Audio input and monitoring" })).toBeVisible();
+    await expect(page.getByRole("grid", { name: "Piano roll note grid" })).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Sound designer" })).toBeVisible();
+    expect(await page.locator(".daw-head-name").evaluateAll((names) => names.map((name) => name.value)))
+      .toEqual(["Chords", "Bass", "Drums"]);
+    await expect(page.locator(".daw-head-kind")).toHaveText(["Analog Pad", "Sub Bass", "Studio Kit"]);
+    expect(await page.locator(".daw-ruler-bar").evaluateAll((bars) => bars.slice(0, 4).map((bar) => bar.textContent?.trim())))
+      .toEqual(["1", "5", "9", "13"]);
 
+    await page.locator(".daw-file summary").click();
     await page.getByRole("button", { name: "Open recording and MIDI setup", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Studio setup", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Enable audio inputs", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Close studio setup", exact: true }).click();
 
-    await page.locator(".daw-file summary").click();
+    const commandMenu = page.locator(".daw-file");
+    if (await commandMenu.getAttribute("open") === null) await commandMenu.locator("summary").click();
     await expect(page.getByRole("button", { name: "Import MIDI (.mid)", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Export portable project (.sxpad)", exact: true })).toBeVisible();
 
-    await decksButton.click();
+    await page.getByRole("button", { name: "PAD Studio", exact: true }).click();
     await expect(decksButton).toHaveAttribute("aria-current", "page");
     await expect(page.locator("#console")).toBeVisible();
     await expect(page.locator("#studio")).toBeHidden();
@@ -125,7 +133,10 @@ test.describe("@source source application", () => {
     await firstTrackName.press("Tab");
 
     const saveStatus = page.locator(".daw-status-save");
-    await expect(saveStatus).toHaveText(/Saving/);
+    // A fast IndexedDB transaction can advance straight from the previous
+    // Saved state to Saved again between Playwright polls. The durable state,
+    // rather than a transient status frame, is what this regression covers.
+    await expect(saveStatus).toHaveText(/^(Saving|Saved|Saved locally)$/);
     await expect(saveStatus).toHaveText(/^(Saved|Saved locally)$/);
 
     await page.reload({ waitUntil: "domcontentloaded" });

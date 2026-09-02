@@ -5,7 +5,7 @@
 // is cached so the app still boots fully offline. Cross-origin requests (e.g.
 // user-supplied direct audio URLs) are left untouched.
 
-const CACHE = "sxratch-v40"; // bump when the shell changes so clients refresh
+const CACHE = "sxratch-v46"; // bump when the shell changes so clients refresh
 const SHELL = [
   "/",
   "/index.html",
@@ -21,6 +21,7 @@ const SHELL = [
   "/js/limiter-kernel.js",
   "/js/waveform.js",
   "/js/waveform-worker.js",
+  "/js/wav-worker.js",
   "/js/waveform-draw.js",
   "/js/ui.js",
   "/js/input.js",
@@ -39,6 +40,9 @@ const SHELL = [
   "/js/idb-store.js",
   "/js/theory.js",
   "/js/midi.js",
+  "/js/midi-import.js",
+  "/js/project-bundle.js",
+  "/js/zip.js",
   "/js/haptics.js",
   "/js/presets.js",
   "/js/bpm.js",

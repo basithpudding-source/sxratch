@@ -22,7 +22,7 @@ export function attachScratchPad(el, deck, opts = {}) {
   let active = false;
   let lastX = 0;
   let lastT = 0;
-  let pointerId = null;
+  let isRimNudge = false;
 
   const down = (e) => {
     active = true;
@@ -30,14 +30,43 @@ export function attachScratchPad(el, deck, opts = {}) {
     lastX = e.clientX;
     lastT = e.timeStamp;
     capture(el, pointerId);
-    el.classList.add("touching");
-    deck.touchStart();
-    if (opts.onScratchStart) opts.onScratchStart();
+
+    // Differentiate platter rim nudge from vinyl scratch:
+    // Dragging near the outer rim nudges speed (like pushing/dragging the rim of a turntable)
+    // while touching the vinyl surface stops the record to scratch.
+    const platEl = el.querySelector(".platter") || el;
+    const rect = platEl.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const radius = Math.min(rect.width, rect.height) / 2;
+    const dist = Math.hypot(e.clientX - cx, e.clientY - cy);
+    isRimNudge = dist > radius * 0.84 || e.target.classList?.contains("platter-ring");
+
+    if (isRimNudge && deck.playing) {
+      el.classList.add("nudging");
+    } else {
+      isRimNudge = false;
+      el.classList.add("touching");
+      deck.touchStart();
+      if (opts.onScratchStart) opts.onScratchStart();
+    }
     e.preventDefault();
   };
 
   const move = (e) => {
     if (!active || e.pointerId !== pointerId) return;
+
+    if (isRimNudge) {
+      const dx = e.clientX - lastX;
+      if (dx > 3) {
+        deck.nudgeStart(1);
+      } else if (dx < -3) {
+        deck.nudgeStart(-1);
+      }
+      e.preventDefault();
+      return;
+    }
+
     // Process the high-frequency samples the browser coalesced into this event
     // (touchscreens report 120-240Hz between 60Hz frames) so fast flicks get
     // accurate, fine-grained velocity instead of one averaged delta per frame.
@@ -64,9 +93,15 @@ export function attachScratchPad(el, deck, opts = {}) {
     if (!active || e.pointerId !== pointerId) return;
     active = false;
     release(el, pointerId);
-    el.classList.remove("touching");
-    deck.touchEnd();
-    if (opts.onScratchEnd) opts.onScratchEnd();
+    if (isRimNudge) {
+      el.classList.remove("nudging");
+      deck.nudgeEnd();
+    } else {
+      el.classList.remove("touching");
+      deck.touchEnd();
+      if (opts.onScratchEnd) opts.onScratchEnd();
+    }
+    isRimNudge = false;
     e.preventDefault();
   };
 

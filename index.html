@@ -162,6 +162,11 @@
         <div class="rail-label">TEMPO</div>
         <div class="fader v tempo" id="tempo-A" data-deck="A"></div>
         <div class="rail-read" id="tempo-A-read">±0.0%</div>
+        <div class="bend-row" data-deck="A">
+          <button class="btn bend-btn bend-down" data-deck="A" type="button" title="Pitch bend − (nudge slower)">−</button>
+          <button class="btn bend-btn bend-range" data-deck="A" type="button" title="Tempo range (click to cycle ±6%, ±8%, ±10%, ±16%, ±100%)">±8%</button>
+          <button class="btn bend-btn bend-up" data-deck="A" type="button" title="Pitch bend ＋ (nudge faster)">＋</button>
+        </div>
       </div>
 
       <div class="jog-pad" id="pad-A" data-deck="A">
@@ -196,6 +201,11 @@
         <div class="rail-label">TEMPO</div>
         <div class="fader v tempo" id="tempo-B" data-deck="B"></div>
         <div class="rail-read" id="tempo-B-read">±0.0%</div>
+        <div class="bend-row" data-deck="B">
+          <button class="btn bend-btn bend-down" data-deck="B" type="button" title="Pitch bend − (nudge slower)">−</button>
+          <button class="btn bend-btn bend-range" data-deck="B" type="button" title="Tempo range (click to cycle ±6%, ±8%, ±10%, ±16%, ±100%)">±8%</button>
+          <button class="btn bend-btn bend-up" data-deck="B" type="button" title="Pitch bend ＋ (nudge faster)">＋</button>
+        </div>
       </div>
     </section>
 
@@ -254,6 +264,7 @@
           <button class="btn fx-on" data-deck="A">FX ON</button>
         </div>
         <div class="vfader">
+          <button class="btn pfl-btn" data-deck="A" type="button" title="Deck A Headphone Cue (PFL)">🎧 CUE</button>
           <div class="vol-row">
             <div class="vu" id="vu-A"></div>
             <div class="fader v vol" id="vol-A" data-deck="A"></div>
@@ -269,6 +280,7 @@
             <span class="sampler-hint">click a pad to load · click to fire · ■ to stop · hold to clear</span>
             <button class="btn samp-stopall" id="samp-stopall" title="Stop all samples">■ STOP</button>
             <span class="samp-vol-wrap"><label>VOL</label><input id="sampler-vol" type="range" min="0" max="1" step="0.01" value="0.9" /></span>
+            <span class="cue-vol-wrap" title="Headphone cue volume & mix"><label for="hp-vol">🎧</label><input id="hp-vol" type="range" min="0" max="1" step="0.01" value="0.8" title="Headphone volume" /><label for="hp-mix">MIX</label><input id="hp-mix" type="range" min="0" max="1" step="0.01" value="0" title="Cue/Master mix" /></span>
           </div>
           <div class="sampler-pads" id="sampler-pads"></div>
         </div>
@@ -305,6 +317,7 @@
           <button class="btn fx-on" data-deck="B">FX ON</button>
         </div>
         <div class="vfader">
+          <button class="btn pfl-btn" data-deck="B" type="button" title="Deck B Headphone Cue (PFL)">🎧 CUE</button>
           <div class="vol-row">
             <div class="vu" id="vu-B"></div>
             <div class="fader v vol" id="vol-B" data-deck="B"></div>

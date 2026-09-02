@@ -10,7 +10,7 @@
 // Model (beats; 1 beat = quarter note):
 //   song = { v, bpm, ts:{num,den}, loop:{on,a,b}, tracks:[Track] }
 //   Track = { id, name, kind:'midi'|'drums'|'audio', color, family?, sound?,
-//             kit?, gain, pan, mute, solo, armed, inputId?, fx:{eq,reverb},
+//             kit?, gain, pan, mute, solo, armed, inputId?, inputGain?, fx:{eq,reverb},
 //             regions:[Region] }
 //   Region midi  = { id, name, start, len, notes:[{b,d,m,v}] }
 //   Region drums = { id, name, start, len, hits:[{b,k,v}] }
@@ -21,6 +21,7 @@
 import { createDawEngine, DRUM_KEYS, RENDER_LEAD_SEC } from "./daw-engine.js";
 import { FACTORY_PATCHES, DRUM_KIT_IDS, ENGINE_SCHEMA, FILTER_TYPES, WAVES, resolvePatch, factoryValue } from "./synth.js";
 import { bufferToWavAsync } from "./wav.js";
+import { createZip } from "./zip.js";
 import { encodeMidi } from "./midiexport.js";
 import { parseMidiFile, midiImportGroups } from "./midi-import.js";
 import { detectBPM } from "./bpm.js";
@@ -117,12 +118,15 @@ export const DAW = (() => {
     }),
   ];
   const CLIP_PREFIX = "dawclip:";
-  const LANE_H = 68;        // must match .daw-lane / .daw-head heights in daw.css
-  const PREVIEW_H = 34;     // must match .daw-region-cv height in daw.css
+  // Desktop Studio uses generously sized console lanes. Keep every pointer
+  // calculation on this single source of truth; the compact breakpoints use
+  // the same geometry, with scrolling rather than a second hit-test model.
+  const LANE_H = 125;       // must match .daw-lane / .daw-head heights in daw.css
+  const PREVIEW_H = 56;     // must match .daw-region-cv height in daw.css
   const MAJOR = [0, 2, 4, 5, 7, 9, 11, 12];
   const DRUM_LABELS = { crash: "Crash", hat: "Hi-Hat", open: "Open Hat", snare: "Snare", tomH: "Tom Hi", tomM: "Tom Mid", tomL: "Tom Low", kick: "Kick" };
   const KIT_LABELS = {
-    acoustic: "Acoustic kit",
+    acoustic: "Studio Kit",
     "808": "808 / Hip-hop",
     electronic: "Electronic",
     bossa: "Bossa / Brushes",
@@ -135,7 +139,7 @@ export const DAW = (() => {
   };
   const SOUND_LABELS = {
     chord: {
-      pad: "Warm analog pad",
+      pad: "Analog Pad",
       strings: "Symphonic strings",
       epiano: "Vintage E-piano",
       organ: "Hammond B3 organ",
@@ -157,7 +161,7 @@ export const DAW = (() => {
       electric: "Vintage precision bass",
       synth: "Moog mini bass",
       upright: "Jazz upright bass",
-      sub: "808 Sub sine",
+      sub: "Sub Bass",
       acid_tb: "Acid 303 bass",
       slap_bass: "Funk slap bass",
       wobble_bass: "Dubstep wobble bass",
@@ -240,9 +244,11 @@ export const DAW = (() => {
   let selectedMarkerId = null;
   let editRegion = null;                   // region open in the editor panel
   let rollSel = new Set();                 // selected note/hit objects in the roll
+  let rollTool = "draw";                   // draw | select | erase | pointer — piano-roll toolbar
+  let inspectorTab = "filter";             // persistent right-side sound designer
   let lastNoteLen = 0.5;                   // sticky length for newly drawn notes
   let tool = "select";
-  let pxPerBeat = 26;
+  let pxPerBeat = 18;
   let snapStep = DEFAULT_SNAP;
   let snapOn = true;                       // magnet toggle — off = free fine positioning
   let followPlayhead = true;
@@ -261,9 +267,11 @@ export const DAW = (() => {
   // The sound/device inspector is the most useful default. The keyboard is a
   // deliberate performance surface rather than consuming launch-space before
   // the user has selected an instrument.
-  let bottom = { open: ["chain"], h: BOTTOM_DEF, reopen: ["chain"], headsW: 0 };
+  let bottom = { open: ["editor"], h: BOTTOM_DEF, reopen: ["editor"], headsW: 0, inputCollapsed: false };
   let heldKeys = new Map();                // code → {trackId, midi, tOn}
   let inputDevices = [];
+  let preferredInputId = null;             // remembered until an audio track is chosen/created
+  let preferredInputGain = 1;              // live session gain before an audio track is created
   let audioInputState = "unknown";         // unknown | ready | blocked | unsupported
   let rafId = null;
   let undoStack = [], redoStack = [], undoBytes = 0;
@@ -493,7 +501,7 @@ export const DAW = (() => {
     };
     if (kind === "midi") { base.family = opts.family || "chord"; base.sound = opts.sound || Object.keys(FACTORY_PATCHES[base.family])[0]; base.patch = {}; }
     if (kind === "drums") base.kit = opts.kit || "acoustic";
-    if (kind === "audio") { base.inputId = null; base.recOffsetMs = 0; }
+    if (kind === "audio") { base.inputId = null; base.inputGain = 1; base.recOffsetMs = 0; }
     return base;
   }
   function makeRegion(track, start, len, opts = {}) {
@@ -520,6 +528,10 @@ export const DAW = (() => {
       : kind === "audio"
         ? makeTrack("audio")
         : makeTrack("midi", { family: kind });
+    if (kind === "audio") {
+      if (preferredInputId) track.inputId = preferredInputId;
+      track.inputGain = preferredInputGain;
+    }
     song.tracks.push(track);
     activeTrackId = track.id;
     engine?.rebuildTrack(track.id);
@@ -551,7 +563,9 @@ export const DAW = (() => {
       master: DEFAULT_MASTER(),
       buses: DEFAULT_BUSES(),
       markers: [],
-      view: { snap: DEFAULT_SNAP, snapOn: true, zoom: 26, follow: true, openTakeTrackIds: [] },
+      // The Studio template frames roughly 45 beats across the reference
+      // console width, while existing projects retain their saved zoom.
+      view: { snap: DEFAULT_SNAP, snapOn: true, zoom: 18, follow: true, openTakeTrackIds: [] },
       tracks: [],
     };
     return s;
@@ -614,7 +628,10 @@ export const DAW = (() => {
         t.patch = t.patch && typeof t.patch === "object" && !Array.isArray(t.patch) ? t.patch : {};
       }
       if (t.kind === "drums" && !DRUM_KIT_IDS.includes(t.kit)) t.kit = "acoustic";
-      if (t.kind === "audio") t.recOffsetMs = Math.round(clampFinite(t.recOffsetMs, -150, 150, 0));
+      if (t.kind === "audio") {
+        t.inputGain = clampFinite(t.inputGain, 0, 2, 1);
+        t.recOffsetMs = Math.round(clampFinite(t.recOffsetMs, -150, 150, 0));
+      }
       t.id = +t.id || idc++;
       t.name = String(t.name || t.kind).slice(0, 24);
       t.color = (+t.color || 0) % TRACK_COLORS.length;
@@ -686,24 +703,39 @@ export const DAW = (() => {
   }
   function starterSong() {
     const s = defaultSong();
+    s.loop.b = 48;
     song = s;
     const drums = makeTrack("drums", { color: 4 });
-    const bass = makeTrack("midi", { family: "bass", color: 0 });
+    const bass = makeTrack("midi", { family: "bass", sound: "sub", color: 0 });
     const chords = makeTrack("midi", { family: "chord", color: 1 });
     s.tracks.push(chords, bass, drums);
-    // A one-bar starter groove so first play makes sound immediately.
-    const dr = makeRegion(drums, 0, 8, { name: "Beat" });
-    for (let bar = 0; bar < 2; bar++) {
+    // A twelve-bar starter arrangement gives a new session enough musical
+    // runway to arrange against immediately, rather than presenting three
+    // tiny clips stranded at the left edge of the console.
+    const dr = makeRegion(drums, 0, 48, { name: "Beat" });
+    for (let bar = 0; bar < 12; bar++) {
       const o = bar * 4;
       dr.hits.push({ b: o, k: "kick", v: 1 }, { b: o + 2, k: "kick", v: 1 });
       dr.hits.push({ b: o + 1, k: "snare", v: 1 }, { b: o + 3, k: "snare", v: 1 });
       for (let i = 0; i < 8; i++) dr.hits.push({ b: o + i * 0.5, k: "hat", v: i % 2 ? 0.5 : 0.9 });
     }
-    const br = makeRegion(bass, 0, 8, { name: "Bassline" });
-    [0, 0, 5, 7].forEach((deg, i) => br.notes.push({ b: i * 2, d: 1.5, m: 36 + deg, v: 1 }));
-    const cr = makeRegion(chords, 0, 8, { name: "Chords" });
-    [[48, 52, 55], [45, 48, 52], [53, 57, 60], [55, 59, 62]].forEach((ch, i) =>
-      ch.forEach((m) => cr.notes.push({ b: i * 2, d: 2, m, v: 0.9 })));
+    const bassParts = [[0, 0, 5, 7], [0, 3, 5, 10]];
+    const chordParts = [
+      [[48, 52, 55], [45, 48, 52], [53, 57, 60], [55, 59, 62]],
+      [[48, 52, 55], [50, 53, 57], [45, 48, 52], [43, 47, 50]],
+    ];
+    for (let part = 0; part < 3; part++) {
+      const offset = part * 16;
+      const partName = part === 0 ? "" : ` ${String.fromCharCode(65 + part)}`;
+      const br = makeRegion(bass, offset, 16, { name: `Bassline${partName}` });
+      for (let bar = 0; bar < 4; bar++) {
+        bassParts[part % bassParts.length].forEach((deg, i) => br.notes.push({ b: bar * 4 + i, d: .85, m: 36 + deg, v: 1 }));
+      }
+      const cr = makeRegion(chords, offset, 16, { name: `Chords${partName}` });
+      chordParts[part % chordParts.length].forEach((ch, i) => {
+        for (let bar = 0; bar < 4; bar++) ch.forEach((m) => cr.notes.push({ b: bar * 4 + i, d: 1, m, v: .9 }));
+      });
+    }
     activeTrackId = chords.id;
     return s;
   }
@@ -905,16 +937,20 @@ export const DAW = (() => {
   /* ---------------- shell ---------------- */
   function buildShell() {
     root.innerHTML = "";
-    const shell = el("div", "daw");
+    const shell = el("div", "daw daw-console");
     shell.id = "daw";
 
     // --- transport bar ---
-    const tp = el("div", "daw-transport");
+    const tp = el("header", "daw-transport");
+    const brand = el("button", "daw-studio-brand", "PAD Studio");
+    brand.type = "button";
+    brand.title = "Return to the Sxratch decks";
+    brand.addEventListener("click", () => document.getElementById("nav-decks")?.click());
     const time = el("div", "daw-time");
     time.id = "daw-time"; time.textContent = "0:00.00";
     const pos = el("div", "daw-pos");
     pos.id = "daw-pos"; pos.textContent = "1.1";
-    const bpmWrap = el("label", "daw-bpm");
+    const bpmWrap = el("label", "daw-bpm daw-readout daw-tempo-readout");
     const bpmIn = el("input"); bpmIn.type = "number"; bpmIn.min = 40; bpmIn.max = 240; bpmIn.value = song.bpm;
     bpmIn.id = "daw-bpm-in";
     bpmIn.addEventListener("change", () => {
@@ -922,7 +958,7 @@ export const DAW = (() => {
       if (updateTimelineClock(() => { song.bpm = v; })) bpmIn.value = v;
       else bpmIn.value = song.bpm;
     });
-    bpmWrap.append(bpmIn, el("span", "daw-dim", "bpm"));
+    bpmWrap.append(bpmIn, el("span", "daw-readout-label", "BPM"));
     const sig = el("select", "daw-sig");
     sig.id = "daw-sig";
     sig.setAttribute("aria-label", "Time signature");
@@ -936,13 +972,15 @@ export const DAW = (() => {
       const [num, den] = sig.value.split("/").map(Number);
       if (!updateTimelineClock(() => { song.ts = { num, den }; })) sig.value = `${song.ts.num}/${song.ts.den}`;
     });
+    const sigWrap = el("label", "daw-readout daw-signature-readout");
+    sigWrap.append(sig, el("span", "daw-readout-label", "TIME"));
 
-    const toStart = iconBtn("daw-tbtn daw-start", "START", "Return playhead to start");
+    const toStart = iconBtn("daw-tbtn daw-start", "↻", "Return playhead to start");
     toStart.addEventListener("click", () => { engine.seek(0); updateClock(); });
-    const playBtn = iconBtn("daw-tbtn daw-play", "PLAY", "Play / stop (Space)");
+    const playBtn = iconBtn("daw-tbtn daw-play", "▶ Play", "Play / stop (Space)");
     playBtn.id = "daw-play";
     playBtn.addEventListener("click", togglePlay);
-    const recBtn = iconBtn("daw-tbtn daw-rec", "REC", "Record onto the armed track");
+    const recBtn = iconBtn("daw-tbtn daw-rec", "◉ Record", "Record onto the armed track");
     recBtn.id = "daw-rec";
     recBtn.addEventListener("click", toggleRecord);
     const loopBtn = iconBtn("daw-tbtn", "LOOP", "Loop — drag on the ruler to set the range");
@@ -1016,22 +1054,63 @@ export const DAW = (() => {
     redoBtn.addEventListener("click", redo);
 
     const file = el("details", "daw-file");
-    const fileSum = el("summary", "daw-tbtn daw-file-sum", "⋯ File");
-    fileSum.title = "Export, import, send to deck";
+    const fileSum = el("summary", "daw-tbtn daw-file-sum", "•••");
+    fileSum.title = "Project commands, import and export";
     const fileBody = el("div", "daw-file-body");
     const fbtn = (label, fn) => { const b = el("button", "daw-fbtn", label); b.type = "button"; b.addEventListener("click", () => { file.open = false; fn(); }); return b; };
+    const fileSection = (title) => el("div", "daw-file-section-title", title);
+    const fileDivider = () => el("div", "daw-file-divider");
+
+    const markerBtn = iconBtn("daw-tbtn", "MARK", "Add marker at playhead (M)");
+    markerBtn.id = "daw-add-marker";
+    markerBtn.addEventListener("click", () => addMarkerAt(engine.beatNow()));
+    const guideBtn = iconBtn("daw-tbtn", "TOUR", "Start the studio tour");
+    guideBtn.id = "daw-tour";
+    guideBtn.addEventListener("click", () => startDawTour(true));
+    const shortcutsBtn = iconBtn("daw-tbtn", "HELP", "Keyboard shortcuts (?)");
+    shortcutsBtn.id = "daw-shortcuts";
+    shortcutsBtn.addEventListener("click", showShortcutOverlay);
+
+    const titleWrap = el("label", "daw-project-title");
+    titleWrap.appendChild(el("span", "daw-project-kicker", "SESSION"));
+    const titleIn = el("input", "daw-project-input");
+    titleIn.id = "daw-project-title";
+    titleIn.value = song.title;
+    titleIn.maxLength = 48;
+    titleIn.setAttribute("aria-label", "Session title");
+    titleIn.addEventListener("change", () => {
+      const next = titleIn.value.trim().slice(0, 48) || "Untitled session";
+      if (next !== song.title) { pushState(); song.title = next; save(); }
+      titleIn.value = song.title;
+    });
+    titleWrap.appendChild(titleIn);
+    const setupBtn = iconBtn("daw-tbtn daw-setup", "SETUP", "Open recording and MIDI setup");
+    setupBtn.id = "daw-setup";
+    setupBtn.addEventListener("click", () => { file.open = false; showStudioSetup(); });
+
     fileBody.append(
+      fileSection("SESSION"),
+      titleWrap,
+      setupBtn,
+      fileDivider(),
+      fileSection("DECKS & SAMPLER"),
       fbtn("Send to Deck A", () => sendToDeck("A")),
       fbtn("Send to Deck B", () => sendToDeck("B")),
       fbtn("Bounce to Sampler Pad", bounceToSamplerPad),
+      fileDivider(),
+      fileSection("EXPORT"),
       fbtn("Download Master WAV", downloadWav),
       fbtn("Export Stems (WAV)", exportStemsWav),
       fbtn("Export MIDI (.mid)", exportMidiFile),
-      fbtn("Import MIDI (.mid)", importMidiFile),
       fbtn("Export portable project (.sxpad)", exportProjectBundle),
-      fbtn("Import portable project (.sxpad)", importProjectBundle),
       fbtn("Export JSON", exportJson),
+      fileDivider(),
+      fileSection("IMPORT"),
+      fbtn("Import MIDI (.mid)", importMidiFile),
+      fbtn("Import portable project (.sxpad)", importProjectBundle),
       fbtn("Import JSON", importJson),
+      fileDivider(),
+      fileSection("PROJECT"),
       fbtn("Recover previous save…", showRecoveryPicker),
       fbtn("New song", newSong),
     );
@@ -1065,54 +1144,71 @@ export const DAW = (() => {
       if (file.open && !file.contains(e.target)) file.open = false;
     });
 
-    const kbToggle = iconBtn("daw-tbtn daw-panel-toggle", "KEYS", "Show / hide the keyboard");
-    kbToggle.addEventListener("click", () => toggleBottomPanel("keys"));
-    const chToggle = iconBtn("daw-tbtn daw-panel-toggle", "DEVICES", "Show / hide the device chain");
-    chToggle.addEventListener("click", () => toggleBottomPanel("chain"));
-    const markerBtn = iconBtn("daw-tbtn", "MARK", "Add marker at playhead (M)");
-    markerBtn.id = "daw-add-marker";
-    markerBtn.addEventListener("click", () => addMarkerAt(engine.beatNow()));
-    const guideBtn = iconBtn("daw-tbtn", "TOUR", "Start the studio tour");
-    guideBtn.id = "daw-tour";
-    guideBtn.addEventListener("click", () => startDawTour(true));
-    const shortcutsBtn = iconBtn("daw-tbtn", "HELP", "Keyboard shortcuts (?)");
-    shortcutsBtn.id = "daw-shortcuts";
-    shortcutsBtn.addEventListener("click", showShortcutOverlay);
-
-    const titleWrap = el("label", "daw-project-title");
-    titleWrap.appendChild(el("span", "daw-project-kicker", "SESSION"));
-    const titleIn = el("input", "daw-project-input");
-    titleIn.id = "daw-project-title";
-    titleIn.value = song.title;
-    titleIn.maxLength = 48;
-    titleIn.setAttribute("aria-label", "Session title");
-    titleIn.addEventListener("change", () => {
-      const next = titleIn.value.trim().slice(0, 48) || "Untitled session";
-      if (next !== song.title) { pushState(); song.title = next; save(); }
-      titleIn.value = song.title;
-    });
-    titleWrap.appendChild(titleIn);
-    const setupBtn = iconBtn("daw-tbtn daw-setup", "SETUP", "Open recording and MIDI setup");
-    setupBtn.id = "daw-setup";
-    setupBtn.addEventListener("click", showStudioSetup);
+    const clockReadout = el("div", "daw-readout daw-clock-readout");
+    clockReadout.append(time, pos, el("span", "daw-readout-label", "BAR · BEAT · TICK"));
+    const playbackGroup = el("div", "daw-transport-group daw-transport-playback");
+    playbackGroup.append(playBtn, recBtn, toStart);
+    const togglesGroup = el("div", "daw-transport-group daw-transport-toggles");
+    togglesGroup.append(loopBtn, metroBtn, countInBtn, markerBtn);
     const timingGroup = el("div", "daw-transport-group daw-transport-meta");
-    timingGroup.append(time, pos, bpmWrap, sig);
-    const playbackGroup = el("div", "daw-transport-group");
-    playbackGroup.append(toStart, playBtn, recBtn, loopBtn, metroBtn, countInBtn);
-    const editGroup = el("div", "daw-transport-group");
-    editGroup.append(tools, snapBtn, zoomOut, zoomIn);
+    timingGroup.append(bpmWrap, sigWrap, clockReadout);
+    const toolsGroup = el("div", "daw-transport-group daw-transport-tools");
+    toolsGroup.append(tools);
+    const gridGroup = el("div", "daw-transport-group daw-transport-grid");
+    gridGroup.append(snapBtn, zoomOut, zoomIn);
+    const historyGroup = el("div", "daw-transport-group daw-transport-history");
+    historyGroup.append(undoBtn, redoBtn);
+
+    const outputGroup = el("label", "daw-transport-group daw-output-group");
+    const outputIcon = svgEl("svg", "daw-output-icon");
+    outputIcon.setAttribute("viewBox", "0 0 24 24");
+    outputIcon.setAttribute("aria-hidden", "true");
+    const speakerBody = svgEl("path");
+    speakerBody.setAttribute("d", "M3.5 9.2H8l5-4v13.6l-5-4H3.5z");
+    const speakerWave = svgEl("path");
+    speakerWave.setAttribute("d", "M16 9.2c1.3 1.5 1.3 4.1 0 5.6m2.8-8.2c2.6 3 2.6 7.8 0 10.8");
+    outputIcon.append(speakerBody, speakerWave);
+    outputGroup.appendChild(outputIcon);
+    const output = el("input", "daw-output-level");
+    output.type = "range"; output.min = "0"; output.max = "1.4"; output.step = "0.01"; output.value = String(song.master.gain);
+    output.setAttribute("aria-label", "Studio master output level");
+    let outputPending = false;
+    output.addEventListener("pointerdown", () => { outputPending = true; });
+    output.addEventListener("input", () => {
+      if (outputPending) { pushState(); outputPending = false; }
+      song.master.gain = +output.value;
+      engine?.refreshMixParams?.();
+    });
+    output.addEventListener("change", () => save());
+    outputGroup.appendChild(output);
+
+    const settingsShortcut = iconBtn("daw-tbtn daw-console-icon", "⚙", "Open Studio settings");
+    settingsShortcut.addEventListener("click", () => document.getElementById("settings-btn")?.click());
+    const themeShortcut = iconBtn("daw-tbtn daw-console-icon", "◐", "Change appearance");
+    themeShortcut.addEventListener("click", () => document.getElementById("theme-btn")?.click());
     const utilityGroup = el("div", "daw-transport-group daw-transport-utility");
-    utilityGroup.append(undoBtn, redoBtn, markerBtn, file, kbToggle, chToggle, guideBtn, shortcutsBtn);
-    tp.append(titleWrap, timingGroup, playbackGroup, editGroup, setupBtn, el("span", "daw-flex"), utilityGroup);
+    utilityGroup.append(guideBtn, shortcutsBtn, themeShortcut, settingsShortcut, file);
+
+    tp.append(
+      brand,
+      playbackGroup,
+      togglesGroup,
+      timingGroup,
+      toolsGroup,
+      gridGroup,
+      historyGroup,
+      el("span", "daw-flex"),
+      outputGroup,
+      utilityGroup,
+    );
 
     // --- body: track headers + timeline ---
     const body = el("div", "daw-body");
     const heads = el("div", "daw-heads");
     heads.id = "daw-heads";
-    const headsTop = el("div", "daw-heads-top", "TRACKS");
+    const headsTop = el("div", "daw-heads-top daw-track-toolbar");
     const headsScroll = el("div", "daw-heads-scroll");
     headsScroll.id = "daw-heads-scroll";
-    const addWrap = el("div", "daw-addtrack");
     const addSel = el("select", "daw-add-sel");
     [["", "＋ Add track…"], ["chord", "Synth — Chords & Keys"], ["bass", "Synth — Bass"], ["lead", "Synth — Lead"], ["chorus", "Synth — Chorus / Atmosphere"], ["drums", "Drum kit"], ["audio", "Audio (record)"]]
       .forEach(([v, l]) => { const o = el("option", null, l); o.value = v; addSel.appendChild(o); });
@@ -1122,8 +1218,10 @@ export const DAW = (() => {
       if (!v) return;
       addTrackFromChoice(v);
     });
-    addWrap.appendChild(addSel);
-    heads.append(headsTop, headsScroll, addWrap);
+    addSel.classList.add("daw-add-sel-inline");
+    addSel.setAttribute("aria-label", "Add track");
+    headsTop.appendChild(addSel);
+    heads.append(headsTop, headsScroll);
     const headsHandle = el("div", "daw-heads-resize");
     headsHandle.title = "Drag to resize the track list";
     headsHandle.setAttribute("role", "separator");
@@ -1246,22 +1344,55 @@ export const DAW = (() => {
     saveRead.id = "daw-save-read";
     status.append(snapLabel, zoomRead, followBtn, selectionRead, quantizeBtn, duplicateBtn, deleteBtn, saveRead, audioRead);
 
-    shell.append(tp, quick, body, bottomWrap, status);
+    const inputRack = el("aside", "daw-input-rack");
+    inputRack.id = "daw-input-rack";
+    inputRack.setAttribute("aria-label", "Audio input and monitoring");
+    const workspace = el("section", "daw-workspace");
+    workspace.setAttribute("aria-label", "Studio arrangement and piano roll");
+    workspace.append(body, bottomWrap);
+    const inspector = el("aside", "daw-inspector");
+    inspector.id = "daw-inspector";
+    inspector.setAttribute("aria-label", "Sound designer");
+
+    shell.append(tp, quick, inputRack, workspace, inspector, status);
     root.appendChild(shell);
     el_ = {
       shell, tp, time, pos, playBtn, recBtn, titleIn, ruler, lanes, playhead, tl, headsScroll,
-      editor, keys, chain, mixer, tabs, gutter, kbToggle, chToggle, status, snapSel, snapBtn,
+      editor, keys, chain, mixer, tabs, gutter, status, snapSel, snapBtn,
       zoomRead, followBtn, selectionRead, duplicateBtn, deleteBtn, audioRead, saveRead,
+      inputRack, inspector, output,
     };
 
     if (bottom.headsW) shell.style.setProperty("--daw-heads-w", bottom.headsW + "px");
+    if (bottom.inputCollapsed) shell.classList.add("input-collapsed");
     attachRulerInteractions(ruler);
     attachLaneInteractions(lanes);
     attachTimelineDrop(tl);
     attachTimelineNav(tl);
     attachBottomResize(gutter);
+    // The console's lower panel begins as an editable piano roll whenever
+    // the current session contains a MIDI/drum region. Opening that focused
+    // state makes the result useful on first launch instead of a blank drawer.
+    if (!editRegion) {
+      const primary = activeTrack();
+      const candidate = primary?.regions?.find((r) => primary.kind !== "audio")
+        || song.tracks.find((t) => t.kind !== "audio" && t.regions?.length)?.regions?.[0]
+        || null;
+      if (candidate) editRegion = candidate;
+    }
+    if (editRegion && (!bottom.open.length || bottom.open.includes("editor"))) {
+      bottom.open = ["editor", ...(panelIsOpen("keys") ? ["keys"] : [])];
+    } else if (!editRegion && bottom.open.includes("editor")) {
+      bottom.open = bottom.open.filter((p) => p !== "editor");
+      if (!bottom.open.length) bottom.open = ["chain"];
+    }
+    if (!bottom.reopen.includes("editor")) bottom.reopen.unshift("editor");
     buildKeyboardPanel();
     applyPanels();
+    if (editorOpen()) renderEditor();
+    if (panelIsOpen("mixer")) renderMixer();
+    renderInputRack();
+    renderConsoleInspector();
     buildShortcutOverlay();
     // The studio <main> is hidden at boot, so clientHeight is 0 until the view
     // is shown — re-clamp the panel height whenever the shell gains real size.
@@ -1271,10 +1402,8 @@ export const DAW = (() => {
 
   const panelIsOpen = (id) => bottom.open.includes(id);
   const editorOpen = () => panelIsOpen("editor") && !!editRegion;
-  // Editor never survives a reload/collapse-restore: its region identity dies
-  // with the session, so restored sets are scrubbed through here.
   const sanitizeOpen = (list) => [...new Set((Array.isArray(list) ? list : [])
-    .filter((p) => ["keys", "chain", "mixer"].includes(p)))];
+    .filter((p) => ["editor", "keys", "chain", "mixer"].includes(p)))];
 
   function loadBottomState() {
     try {
@@ -1296,6 +1425,7 @@ export const DAW = (() => {
       bottom.h = Math.max(BOTTOM_MIN, Math.min(BOTTOM_MAX, +s.h || BOTTOM_DEF));
       const hw = Math.round(+s.headsW || 0);
       bottom.headsW = hw >= 156 && hw <= 420 ? hw : 0;
+      bottom.inputCollapsed = typeof s.inputCollapsed === "boolean" ? s.inputCollapsed : false;
     } catch {}
   }
   function saveBottomState() {
@@ -1303,18 +1433,24 @@ export const DAW = (() => {
       localStorage.setItem(PANELS_KEY, JSON.stringify({
         open: sanitizeOpen(bottom.open), reopen: sanitizeOpen(bottom.reopen),
         h: bottom.h, headsW: bottom.headsW || 0,
+        inputCollapsed: !!bottom.inputCollapsed,
       }));
     } catch {}
   }
 
   function toggleBottomPanel(id) {
     if (id === "editor" && !editRegion) {
-      // No region open in the roll yet — open the selected one, so a plain
-      // "select region, hit EDITOR" flow works for recorded takes too.
+      // No region open in the roll yet — open the selected one, or pick the first candidate
       const p = primarySel();
       const track = p && trackById(p.trackId);
       const region = p && regionById(track, p.regionId);
       if (track && region) { openEditor(track, region); return; }
+      const primary = activeTrack();
+      const candidate = primary?.regions?.[0] || song.tracks.flatMap((t) => t.regions || [])[0] || null;
+      if (candidate) {
+        const tr = song.tracks.find((t) => (t.regions || []).includes(candidate));
+        if (tr) { openEditor(tr, candidate); return; }
+      }
       _toast("Select or double-click a region to edit it");
       return;
     }
@@ -1322,8 +1458,13 @@ export const DAW = (() => {
       bottom.open = bottom.open.filter((p) => p !== id);
       if (!bottom.open.length) bottom.reopen = [id];
     } else {
-      bottom.open = [...bottom.open, id];
-      if (id === "mixer") bottom.h = Math.max(bottom.h, 300);
+      if (id !== "keys") {
+        bottom.open = [id, ...(panelIsOpen("keys") ? ["keys"] : [])];
+      } else {
+        bottom.open = [...bottom.open, "keys"];
+      }
+      if (id === "mixer") bottom.h = Math.max(bottom.h, 280);
+      else if (id === "editor") bottom.h = Math.max(bottom.h, BOTTOM_DEF);
     }
     applyPanels(); saveBottomState();
   }
@@ -1358,6 +1499,7 @@ export const DAW = (() => {
     el_.shell.style.setProperty("--daw-bh", Math.min(bottom.h, maxH) + "px");
     el_.shell.style.setProperty("--daw-bmax", budget + "px");
     el_.shell.classList.toggle("bottom-collapsed", openSet.size === 0);
+    el_.shell.classList.toggle("utility-open", [...openSet].some((panel) => panel !== "editor"));
     el_.tabs.querySelectorAll(".daw-tab").forEach((b) => {
       const on = openSet.has(b.dataset.panel);
       b.classList.toggle("active", on);
@@ -1368,8 +1510,14 @@ export const DAW = (() => {
         b.setAttribute("aria-disabled", editable ? "false" : "true");
       }
     });
+    el_.editorToggle?.setAttribute("aria-pressed", openSet.has("editor") ? "true" : "false");
+    el_.editorToggle?.classList.toggle("active", openSet.has("editor"));
     el_.kbToggle?.setAttribute("aria-pressed", openSet.has("keys") ? "true" : "false");
+    el_.kbToggle?.classList.toggle("active", openSet.has("keys"));
     el_.chToggle?.setAttribute("aria-pressed", openSet.has("chain") ? "true" : "false");
+    el_.chToggle?.classList.toggle("active", openSet.has("chain"));
+    el_.mixerToggle?.setAttribute("aria-pressed", openSet.has("mixer") ? "true" : "false");
+    el_.mixerToggle?.classList.toggle("active", openSet.has("mixer"));
     // The editor DOM is only valid while visible: model edits made while it was
     // hidden (quantize, snap change) skip its re-render, so a reopen — via tab,
     // gutter drag or dblclick — must rebuild it, whatever path un-hid it.
@@ -1509,7 +1657,7 @@ export const DAW = (() => {
       const ctx = _getCtx();
       const track = activeTrack();
       const input = track?.kind === "audio"
-        ? audioInputState === "ready" ? "input ready" : audioInputState === "blocked" ? "input blocked" : "input not set"
+        ? getAudioInputSession().open ? "input ready" : audioInputState === "blocked" ? "input blocked" : inputDevices.length ? "input available" : "input not set"
         : "Audio ready";
       el_.audioRead.textContent = `${(ctx.sampleRate / 1000).toFixed(1)} kHz · ${ctx.state === "running" ? input : "Audio suspended"}`;
     } catch {
@@ -1524,6 +1672,8 @@ export const DAW = (() => {
     renderHeads();
     renderTimeline();
     renderChain();
+    renderInputRack();
+    renderConsoleInspector();
     if (panelIsOpen("mixer")) renderMixer();
     if (editorOpen()) renderEditor();
     syncStatus();
@@ -1541,6 +1691,7 @@ export const DAW = (() => {
       loopBtn.classList.toggle("active", !!song.loop?.on);
       loopBtn.setAttribute("aria-pressed", song.loop?.on ? "true" : "false");
     }
+    if (el_.output) el_.output.value = String(song.master?.gain ?? 0.9);
   }
 
   /**
@@ -1653,6 +1804,10 @@ export const DAW = (() => {
       name.setAttribute("aria-label", "Track name");
       name.addEventListener("change", () => { pushState(); t.name = name.value.slice(0, 24) || t.name; renderAll(); save(); });
       name.addEventListener("pointerdown", () => setActiveTrack(t.id));
+      const kind = el("span", "daw-head-kind",
+        t.kind === "audio" ? "Audio input" : t.kind === "drums" ? (KIT_LABELS[t.kit] || "Studio kit") : (SOUND_LABELS[t.family]?.[t.sound] || t.family));
+      const title = el("div", "daw-head-title");
+      title.append(name, kind);
       const row = el("div", "daw-head-btns");
       const mk = (cls, txt, label, on, fn) => {
         const b = iconBtn("daw-hbtn " + cls, txt, label);
@@ -1711,9 +1866,6 @@ export const DAW = (() => {
       // Per-track level (boostable past unity to +3 dB) and pan, right on the
       // head — no need to open DEVICES or the mixer to trim a signal.
       row.append(headKnob(t, "gain"), headKnob(t, "pan"));
-      const kind = el("span", "daw-head-kind",
-        t.kind === "audio" ? "AUDIO" : t.kind === "drums" ? (KIT_LABELS[t.kit] || "DRUMS") : (SOUND_LABELS[t.family]?.[t.sound] || t.family));
-      row.appendChild(kind);
       const delBtn = iconBtn("daw-hbtn daw-head-x", "×", `Delete ${t.name}`);
       let armedDel = false, delT = null;
       delBtn.addEventListener("click", (e) => {
@@ -1741,7 +1893,7 @@ export const DAW = (() => {
       meter.dataset.meterTrack = t.id;
       meter.setAttribute("aria-hidden", "true");
       meter.appendChild(el("i"));
-      h.append(strip, name, row, meter, dupBtn, delBtn);
+      h.append(strip, title, row, meter, dupBtn, delBtn);
       h.addEventListener("pointerdown", () => setActiveTrack(t.id));
       wrap.appendChild(h);
     }
@@ -1816,7 +1968,7 @@ export const DAW = (() => {
   function setActiveTrack(id) {
     if (activeTrackId === id) return;
     activeTrackId = id;
-    renderHeads(); renderChain();
+    renderHeads(); renderChain(); renderInputRack(); renderConsoleInspector();
     if (panelIsOpen("mixer")) renderMixer();
   }
 
@@ -1835,8 +1987,10 @@ export const DAW = (() => {
     const viewB = Math.min(end, ((el_.tl?.scrollLeft || 0) + viewportW) / pxPerBeat + overscan);
     const firstBar = Math.max(0, Math.floor(viewA / bpb) * bpb);
     for (let b = firstBar; b <= viewB + 1e-7; b += bpb) {
-      const barN = Math.round(b / bpb) + 1;
-      const tick = el("div", "daw-ruler-bar", String(barN));
+      // The reference console uses absolute beat labels every bar: 1, 5, 9…
+      // This is clearer when composing against a long linear arrangement
+      // than a short bar counter, and remains correct in non-4/4 meters.
+      const tick = el("div", "daw-ruler-bar", String(Math.round(b) + 1));
       tick.style.left = b * pxPerBeat + "px";
       ruler.appendChild(tick);
     }
@@ -2795,6 +2949,17 @@ export const DAW = (() => {
 
   function quantizeSelected() {
     if (!snapActive()) { _toast("Turn snap on to quantize"); return; }
+    if (rollCtx?.r === editRegion && rollSel.size > 0) {
+      pushState();
+      const updated = quantizeRegionNotes(rollCtx.track.kind, editRegion, snapStep, (item) => rollSel.has(item));
+      Object.assign(editRegion, updated);
+      renderRollNotes();
+      paintVelLane();
+      redrawRegion(rollCtx.track, editRegion);
+      save();
+      _toast(`Quantized ${rollSel.size} selected note${rollSel.size === 1 ? "" : "s"} to ${snapStep} beat grid`, { severity: "ok" });
+      return;
+    }
     const items = noteTargets();
     if (!items.length) { _toast("Select a region to quantize"); return; }
     pushState();
@@ -2914,22 +3079,25 @@ export const DAW = (() => {
     try {
       const stems = await engine.renderOfflineStems(0, end);
       if (!stems || !stems.size) { _toast("Could not render stems", { severity: "error" }); return; }
-      let count = 0;
+      const files = [];
       for (const [trackId, buf] of stems) {
         const tr = trackById(trackId);
         if (!tr) continue;
-        // Fired in one burst, browsers block all but the first download.
-        if (count) await new Promise((r) => setTimeout(r, 400));
         const wavBlob = await bufferToWavAsync(buf);
-        const url = URL.createObjectURL(wavBlob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `stem-${tr.name.replace(/[^a-z0-9]/gi, "_")}.wav`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 4000);
-        count++;
+        const fileName = `${tr.name.replace(/[^a-z0-9_-]/gi, "_") || "track"}.wav`;
+        files.push({ name: fileName, data: wavBlob });
       }
-      _toast(`Exported ${count} stem WAV files`, { severity: "ok" });
+      if (!files.length) { _toast("No tracks to export", { severity: "error" }); return; }
+      _toast("Zipping stems archive…");
+      const zipBlob = await createZip(files);
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      const title = (song.title || "Project").replace(/[^a-z0-9_-]/gi, "_");
+      a.download = `${title}_Stems.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      _toast(`Exported ${files.length} stems into ${title}_Stems.zip`, { severity: "ok" });
     } catch (e) {
       console.warn(e);
       _toast("Could not render stems", { severity: "error" });
@@ -3026,11 +3194,11 @@ export const DAW = (() => {
   }
 
   function updateTransportButtons() {
-    el_.playBtn.textContent = engine.playing ? "STOP" : "PLAY";
+    el_.playBtn.textContent = engine.playing ? "■ Stop" : "▶ Play";
     el_.playBtn.setAttribute("aria-label", engine.playing ? "Stop playback (Space)" : "Play (Space)");
     el_.playBtn.classList.toggle("playing", engine.playing);
     el_.recBtn.classList.toggle("recording", engine.recording);
-    el_.recBtn.textContent = engine.recording ? "STOP REC" : "REC";
+    el_.recBtn.textContent = engine.recording ? "■ Stop rec" : "◉ Record";
     el_.recBtn.setAttribute("aria-label", engine.recording ? "Stop recording" : "Record onto the armed track");
   }
 
@@ -3247,13 +3415,15 @@ export const DAW = (() => {
     const entry = (meter) => ({
       meter,
       bar: meter.querySelector("i"),
-      vertical: meter.classList.contains("daw-channel-meter"),
+      vertical: meter.classList.contains("daw-channel-meter") || meter.classList.contains("daw-input-meter"),
       lastPct: -1,
       lastClip: false,
     });
     meterEls = {
       tracks: [...root.querySelectorAll("[data-meter-track]")].map((m) => ({ ...entry(m), id: +m.dataset.meterTrack })),
       masters: [...root.querySelectorAll("[data-meter-master]")].map(entry),
+      inputs: [...root.querySelectorAll("[data-meter-input]")].map((m) => ({ ...entry(m), id: +m.dataset.meterInput })),
+      inputReadouts: [...root.querySelectorAll("[data-input-meter-readout]")],
       legacy: root.querySelector("#daw-meter i"),
       lastLegacyPct: -1,
     };
@@ -3284,6 +3454,19 @@ export const DAW = (() => {
       apply(e, tracks instanceof Map ? tracks.get(e.id) : tracks?.[e.id]);
     }
     for (const e of meterEls.masters) apply(e, snapshot?.master ?? fallback);
+    // The persistent rail deliberately uses only the permission-led preview
+    // stream. A disconnected input stays silent instead of mirroring a track
+    // meter and implying that the microphone is active.
+    const inputLevel = engine.inputMeterSnapshot?.();
+    for (const e of meterEls.inputs) {
+      apply(e, inputLevel || 0);
+    }
+    const inputPeak = +inputLevel?.peak || +inputLevel?.rms || 0;
+    const inputDb = inputPeak > 0.0001 ? Math.max(-60, 20 * Math.log10(inputPeak)) : null;
+    for (const readout of meterEls.inputReadouts) {
+      if (!readout.isConnected) { meterEls = null; return; }
+      readout.textContent = inputDb == null ? "−∞ dB" : `${inputDb.toFixed(1)} dB`;
+    }
     if (meterEls.legacy) {
       if (!meterEls.legacy.isConnected) { meterEls = null; return; }
       const pct = Math.round(meterPercent(snapshot?.master ?? fallback) * 2) / 2;
@@ -3316,12 +3499,301 @@ export const DAW = (() => {
     }
   }
 
+  function setAudioInputErrorState(error) {
+    audioInputState = error?.name === "NotAllowedError" || error?.name === "SecurityError"
+      ? "blocked"
+      : error?.name === "NotSupportedError"
+        ? "unsupported"
+        : "unknown";
+  }
+
+  function getAudioInputSession() {
+    return engine?.getInputState?.() || {
+      open: false, deviceId: null, requestedDeviceId: null, monitoring: false, inputGain: 1,
+    };
+  }
+
+  /** Explicit, permission-led bridge between the UI and the persistent input
+   * preview. This is the only Studio surface that keeps a microphone stream
+   * open; device enumeration by itself never makes a fake “input ready” state. */
+  async function connectAudioInput(track = consoleAudioTrack(), { deviceId } = {}) {
+    const selectedId = deviceId ?? track?.inputId ?? preferredInputId ?? null;
+    try {
+      await engine?.openInput?.({
+        deviceId: selectedId,
+        monitor: !!track?.monitor,
+        inputGain: track?.inputGain ?? preferredInputGain,
+      });
+      await refreshAudioInputs();
+      if (getAudioInputSession().open) audioInputState = "ready";
+      return getAudioInputSession().open;
+    } catch (error) {
+      setAudioInputErrorState(error);
+      return false;
+    }
+  }
+
   function audioInputSummary(track = activeTrack()) {
     if (audioInputState === "unsupported") return "Audio input is not supported in this browser";
     if (audioInputState === "blocked") return "Microphone permission is blocked";
     if (!inputDevices.length) return "Choose Enable inputs to reveal your microphone or interface";
     const chosen = inputDevices.find((d) => d.deviceId === track?.inputId);
-    return `Input ready · ${chosen?.label || "Default input"}`;
+    return `${getAudioInputSession().open ? "Input ready" : "Input available"} · ${chosen?.label || "Default input"}`;
+  }
+
+  /** The permanent left rail is deliberately permission-led: its visible
+   * state comes from the browser/device APIs, never from a decorative fake
+   * meter or phantom-power switch. */
+  function consoleAudioTrack() {
+    const current = activeTrack();
+    return current?.kind === "audio" ? current : song.tracks.find((track) => track.kind === "audio") || null;
+  }
+
+  function inputLatencyLabel() {
+    try {
+      const ctx = _getCtx();
+      const seconds = Math.max(0, Number(ctx.baseLatency) || 0) + Math.max(0, Number(ctx.outputLatency) || 0);
+      if (!(seconds > 0)) return "Measured when audio starts";
+      const ms = seconds * 1000;
+      return `${ms < 12 ? "Low" : ms < 32 ? "Moderate" : "High"} (${ms.toFixed(ms < 10 ? 1 : 0)} ms)`;
+    } catch {
+      return "Measured when audio starts";
+    }
+  }
+
+  function renderInputRack() {
+    const rack = el_.inputRack;
+    if (!rack || !song) return;
+    // Rebuilding this rail replaces its meter element. Let the next animation
+    // frame collect the live element instead of painting a detached one.
+    meterEls = null;
+    const track = consoleAudioTrack();
+    const session = getAudioInputSession();
+    const ready = !!session.open;
+    const selectedInputId = ready
+      ? (session.requestedDeviceId ?? session.deviceId ?? null)
+      : (track?.inputId ?? preferredInputId ?? null);
+    const monitoringOn = ready ? !!session.monitoring : !!track?.monitor;
+    const isCollapsed = el_.shell ? el_.shell.classList.contains("input-collapsed") : !!bottom.inputCollapsed;
+    rack.innerHTML = "";
+    rack.classList.toggle("input-ready", ready);
+    rack.classList.toggle("is-collapsed", isCollapsed);
+
+    if (isCollapsed) {
+      // Clean minimized bar — ONLY the expand icon, status dot, and vertical INPUTS label
+      const collapsedBar = el("div", "daw-input-collapsed-bar");
+      collapsedBar.title = "Click to expand Audio Input rail";
+      collapsedBar.setAttribute("role", "button");
+      collapsedBar.setAttribute("aria-label", "Expand audio input rail");
+      collapsedBar.tabIndex = 0;
+      const expandBtn = iconBtn("daw-input-expand-icon", "»", "Expand audio input rail");
+      const statusDotCol = el("i", "daw-input-status-dot" + (ready ? " ready" : audioInputState === "blocked" ? " blocked" : ""));
+      const vlabel = el("span", "daw-input-vlabel", "INPUTS");
+      collapsedBar.append(expandBtn, statusDotCol, vlabel);
+      const expandRail = () => {
+        const shell = rack.closest(".daw-console") || el_.shell;
+        shell?.classList.remove("input-collapsed");
+        bottom.inputCollapsed = false;
+        saveBottomState();
+        renderInputRack();
+        window.dispatchEvent(new Event("resize"));
+      };
+      collapsedBar.addEventListener("click", expandRail);
+      collapsedBar.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); expandRail(); } });
+      rack.appendChild(collapsedBar);
+      return;
+    }
+
+    // Expanded view — render all controls cleanly
+    const status = audioInputState === "blocked"
+      ? "Input blocked"
+      : ready ? "Input ready" : inputDevices.length ? "Input available" : "Input setup";
+
+    const head = el("div", "daw-rack-head");
+    const headTitle = el("div", "daw-rack-head-title");
+    headTitle.append(el("strong", null, status), el("i", "daw-input-status-dot" + (ready ? " ready" : audioInputState === "blocked" ? " blocked" : "")));
+    const collapseHeadBtn = iconBtn("daw-input-head-collapse", "«", "Collapse audio input rail");
+    collapseHeadBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const shell = rack.closest(".daw-console") || el_.shell;
+      shell?.classList.add("input-collapsed");
+      bottom.inputCollapsed = true;
+      saveBottomState();
+      renderInputRack();
+      window.dispatchEvent(new Event("resize"));
+    });
+    head.append(headTitle, collapseHeadBtn);
+    rack.appendChild(head);
+
+    const field = el("label", "daw-input-field");
+    field.appendChild(el("span", null, "Input device"));
+    const inputRow = el("div", "daw-input-select-row");
+    const input = el("select", "daw-input-select");
+    input.setAttribute("aria-label", "Audio input device");
+    if (!inputDevices.length) {
+      const option = el("option", null, audioInputState === "blocked" ? "Permission blocked" : "Enable inputs");
+      option.value = ""; option.selected = true; input.appendChild(option);
+    } else {
+      const offOpt = el("option", null, "◌ Off / Disabled");
+      offOpt.value = "";
+      if (!ready) offOpt.selected = true;
+      input.appendChild(offOpt);
+      inputDevices.forEach((device, index) => {
+        const option = el("option", null, device.label || `Input ${index + 1}`);
+        option.value = device.deviceId;
+        if (ready && selectedInputId === device.deviceId) option.selected = true;
+        input.appendChild(option);
+      });
+      if (ready && selectedInputId) input.value = selectedInputId;
+    }
+    input.disabled = !inputDevices.length && !ready;
+    input.addEventListener("change", async () => {
+      if (!input.value) {
+        if (session.open) {
+          engine?.closeInput?.();
+          if (track) track.monitor = false;
+          preferredInputId = null;
+          renderInputRack(); renderChain(); syncStatus();
+          _toast("Audio inputs disconnected.", { severity: "ok" });
+        }
+        return;
+      }
+      const previousId = track?.inputId || null;
+      preferredInputId = input.value || null;
+      if (track) {
+        pushState(); track.inputId = preferredInputId; save();
+      }
+      input.disabled = true;
+      const switched = await connectAudioInput(track, { deviceId: preferredInputId });
+      input.disabled = false;
+      if (!switched) {
+        if (track) track.inputId = previousId;
+        preferredInputId = previousId;
+        save();
+        _toast(engine?.recording
+          ? "Finish the current take before changing the audio input."
+          : "That input could not be opened. Your current input is still connected.", { severity: "error" });
+      }
+      renderInputRack(); renderChain(); syncStatus();
+    });
+    const phantom = iconBtn("daw-input-phantom", "48V", "Phantom power is controlled on your audio interface");
+    phantom.disabled = true;
+    inputRow.append(input, phantom);
+    field.appendChild(inputRow);
+    rack.appendChild(field);
+
+    if (!ready) {
+      const enable = el("button", "daw-input-enable", inputDevices.length ? "Connect audio input" : "Enable inputs");
+      enable.type = "button";
+      enable.addEventListener("click", async () => {
+        enable.disabled = true; enable.textContent = "Connecting input…";
+        const connected = await connectAudioInput(track);
+        enable.disabled = false;
+        renderInputRack(); renderChain(); syncStatus();
+        if (!connected) {
+          _toast(audioInputState === "blocked"
+            ? "Microphone permission is blocked. Open your browser site settings, then try again."
+            : "No audio input could be connected. Check the device and try again.", { severity: "error" });
+        } else {
+          _toast("Audio input connected.", { severity: "ok" });
+        }
+      });
+      rack.appendChild(enable);
+    } else {
+      const disable = el("button", "daw-input-disable", "Disable audio inputs");
+      disable.type = "button";
+      disable.addEventListener("click", async () => {
+        if (!engine?.closeInput?.()) {
+          _toast("Finish the current take before disconnecting the input.", { severity: "error" });
+          return;
+        }
+        if (track) track.monitor = false;
+        preferredInputId = null;
+        renderInputRack(); renderChain(); renderConsoleInspector(); syncStatus();
+        _toast("Audio inputs disabled.", { severity: "ok" });
+      });
+      rack.appendChild(disable);
+    }
+
+    const meterRow = el("div", "daw-input-meter-row");
+    const scale = el("div", "daw-input-meter-scale");
+    [0, -6, -12, -18, -24, -30, -36, -48, -60].forEach((db) => scale.appendChild(el("span", null, String(db))));
+    const meterStack = el("div", "daw-input-meter-stack");
+    const meter = el("div", "daw-input-meter");
+    meter.dataset.meterInput = "preview";
+    meter.setAttribute("aria-label", track ? `${track.name} input level meter` : "Live input level meter");
+    meter.appendChild(el("i"));
+    const meterReadout = el("output", "daw-input-db", "−∞ dB");
+    meterReadout.dataset.inputMeterReadout = "true";
+    meterReadout.setAttribute("aria-label", "Input level in decibels");
+    meterStack.append(meter, meterReadout);
+    const gainArea = el("div", "daw-input-gain");
+    const gain = knob("Gain", () => ready ? getAudioInputSession().inputGain : (track?.inputGain ?? preferredInputGain), (value) => {
+      preferredInputGain = value;
+      if (track) track.inputGain = value;
+      engine?.setInputGain?.(value);
+    }, {
+      min: 0, max: 2,
+      fmt: (value) => value <= 0.001 ? "−∞" : `${Math.round(value * 100)}%`,
+    });
+    gainArea.appendChild(gain);
+    meterRow.append(scale, meterStack, gainArea);
+    rack.appendChild(meterRow);
+
+    const monitoring = el("section", "daw-monitoring");
+    monitoring.appendChild(el("strong", null, "Monitoring"));
+    const direct = el("button", "daw-monitor-choice" + (monitoringOn ? " active" : ""), "◉ Input (Direct)");
+    direct.type = "button";
+    direct.setAttribute("aria-pressed", monitoringOn ? "true" : "false");
+    direct.title = "Browser monitoring. It is not a hardware zero-latency path.";
+    direct.addEventListener("click", async () => {
+      const audio = track || ensureAudioTrack();
+      if (!getAudioInputSession().open && !await connectAudioInput(audio)) {
+        renderInputRack();
+        showStudioSetup();
+        return;
+      }
+      pushState(); audio.monitor = true;
+      if (!audio.inputId && preferredInputId) audio.inputId = preferredInputId;
+      engine?.setInputMonitoring?.(true); save(); renderInputRack(); renderChain();
+    });
+    const off = el("button", "daw-monitor-choice" + (!monitoringOn ? " active" : ""), "◌ Off");
+    off.type = "button";
+    off.setAttribute("aria-pressed", !monitoringOn ? "true" : "false");
+    off.addEventListener("click", () => {
+      if (!track) return;
+      pushState(); track.monitor = false; engine?.setInputMonitoring?.(false); save(); renderInputRack(); renderChain();
+    });
+    monitoring.append(direct, off);
+    rack.appendChild(monitoring);
+
+    const latency = el("button", "daw-input-latency", inputLatencyLabel());
+    latency.type = "button";
+    latency.title = "Open setup to adjust the recording latency trim";
+    latency.addEventListener("click", showStudioSetup);
+    const latencyGroup = el("section", "daw-latency-readout");
+    latencyGroup.append(el("strong", null, "Latency"), latency);
+    rack.appendChild(latencyGroup);
+
+    if (track) {
+      const arm = el("button", "daw-input-arm", track.armed ? "Audio track armed" : "Arm audio track");
+      arm.type = "button";
+      arm.addEventListener("click", async () => {
+        await armTrack(track);
+        renderInputRack();
+      });
+      rack.appendChild(arm);
+    }
+    const collapse = iconBtn("daw-input-collapse", "«", "Collapse audio input rail");
+    collapse.addEventListener("click", () => {
+      const shell = rack.closest(".daw-console") || el_.shell;
+      shell?.classList.add("input-collapsed");
+      bottom.inputCollapsed = true;
+      saveBottomState();
+      renderInputRack();
+      window.dispatchEvent(new Event("resize"));
+    });
+    rack.appendChild(collapse);
   }
 
   async function enableMidiInput() {
@@ -3378,48 +3850,78 @@ export const DAW = (() => {
 
     const paintAudio = () => {
       const track = setupTrack;
-      audioStatus.textContent = track
-        ? audioInputSummary(track)
-        : "Add an audio track when you are ready to record or import audio.";
+      const session = getAudioInputSession();
+      const selectedId = session.open
+        ? (session.requestedDeviceId ?? session.deviceId ?? null)
+        : (track?.inputId ?? preferredInputId ?? null);
+      audioStatus.textContent = session.open
+        ? `Input ready · ${inputDevices.find((device) => device.deviceId === selectedId)?.label || "Default input"}`
+        : track
+          ? audioInputSummary(track)
+          : "Choose an input now, then add an audio track when you are ready to record.";
       inputSel.replaceChildren();
       const first = el("option", null, inputDevices.length ? "Default input" : "Enable inputs first");
       first.value = ""; inputSel.appendChild(first);
       inputDevices.forEach((device, index) => {
         const option = el("option", null, device.label || `Input ${index + 1}`);
         option.value = device.deviceId;
-        option.selected = device.deviceId === track?.inputId;
         inputSel.appendChild(option);
       });
-      inputSel.disabled = !track || !inputDevices.length;
+      inputSel.value = selectedId || "";
+      inputSel.disabled = !inputDevices.length;
       monitor.disabled = !track;
       latencyIn.disabled = !track;
-      monitor.textContent = `Monitor: ${track?.monitor ? "on" : "off"}`;
-      monitor.classList.toggle("active", !!track?.monitor);
+      monitor.textContent = `Monitor: ${session.open ? (session.monitoring ? "on" : "off") : (track?.monitor ? "on" : "off")}`;
+      monitor.classList.toggle("active", session.open ? !!session.monitoring : !!track?.monitor);
       latencyIn.value = String(track?.recOffsetMs || 0);
       addAudio.hidden = !!track;
+      enableInputs.textContent = session.open
+        ? "Disconnect audio input"
+        : inputDevices.length ? "Connect audio input" : "Enable audio inputs";
     };
     addAudio.addEventListener("click", () => { setupTrack = addTrackFromChoice("audio"); paintAudio(); });
     enableInputs.addEventListener("click", async () => {
-      enableInputs.disabled = true; enableInputs.textContent = "Requesting input…";
-      await refreshAudioInputs({ requestPermission: true });
-      enableInputs.disabled = false; enableInputs.textContent = inputDevices.length ? "Refresh audio inputs" : "Enable audio inputs";
-      paintAudio(); renderChain(); syncStatus();
-      if (audioInputState === "blocked") _toast("Microphone permission is blocked. Enable it in your browser site settings, then refresh.", { severity: "error" });
+      if (getAudioInputSession().open) {
+        if (!engine?.closeInput?.()) {
+          _toast("Finish the current take before disconnecting the input.", { severity: "error" });
+          return;
+        }
+        paintAudio(); renderChain(); renderInputRack(); syncStatus();
+        return;
+      }
+      enableInputs.disabled = true; enableInputs.textContent = "Connecting input…";
+      const connected = await connectAudioInput(setupTrack);
+      enableInputs.disabled = false;
+      paintAudio(); renderChain(); renderInputRack(); syncStatus();
+      if (!connected && audioInputState === "blocked") _toast("Microphone permission is blocked. Enable it in your browser site settings, then refresh.", { severity: "error" });
     });
-    inputSel.addEventListener("change", () => {
+    inputSel.addEventListener("change", async () => {
+      const track = setupTrack;
+      const previousId = track?.inputId ?? preferredInputId ?? null;
+      preferredInputId = inputSel.value || null;
+      if (track) track.inputId = preferredInputId;
+      save();
+      if (getAudioInputSession().open && !await connectAudioInput(track, { deviceId: preferredInputId })) {
+        if (track) track.inputId = previousId;
+        preferredInputId = previousId;
+        save();
+        _toast(engine?.recording
+          ? "Finish the current take before changing the audio input."
+          : "That input could not be opened. Your current input is still connected.", { severity: "error" });
+      }
+      paintAudio(); renderChain(); renderInputRack(); syncStatus();
+    });
+    monitor.addEventListener("click", async () => {
       const track = setupTrack;
       if (!track) return;
-      track.inputId = inputSel.value || null; save(); paintAudio(); renderChain(); syncStatus();
-    });
-    monitor.addEventListener("click", () => {
-      const track = setupTrack;
-      if (!track) return;
-      pushState(); track.monitor = !track.monitor; save(); paintAudio(); renderChain();
+      const next = !track.monitor;
+      if (next && !getAudioInputSession().open && !await connectAudioInput(track)) return;
+      pushState(); track.monitor = next; engine?.setInputMonitoring?.(next); save(); paintAudio(); renderChain(); renderInputRack();
     });
     latencyIn.addEventListener("change", () => {
       const track = setupTrack;
       if (!track) return;
-      track.recOffsetMs = Math.round(clampFinite(latencyIn.value, -150, 150, 0)); save(); paintAudio(); renderChain();
+      track.recOffsetMs = Math.round(clampFinite(latencyIn.value, -150, 150, 0)); save(); paintAudio(); renderChain(); renderInputRack();
     });
     inputLabel.appendChild(inputSel);
     audioCard.append(audioStatus, addAudio, enableInputs, inputLabel, monitor, latency);
@@ -3459,7 +3961,7 @@ export const DAW = (() => {
     const on = !t.armed;
     song.tracks.forEach((x) => { x.armed = false; });
     t.armed = on;
-    renderHeads(); renderChain(); save();
+    renderHeads(); renderChain(); renderInputRack(); save();
     if (on && t.kind === "audio") {
       _toast(`${t.name} armed · ${audioInputSummary(t)}. Press REC when ready.`);
     } else if (on) _toast(`${t.name} armed — press REC to record`);
@@ -3470,14 +3972,14 @@ export const DAW = (() => {
     if (engine.recording) { await finishRecording(); return; }
     const t = song.tracks.find((x) => x.armed);
     if (!t) { _toast("Arm a track first (⏺ on its header)"); return; }
-    if (t.kind === "audio" && !inputDevices.length) {
-      await refreshAudioInputs({ requestPermission: true });
-      if (!inputDevices.length) {
+    if (t.kind === "audio" && !getAudioInputSession().open) {
+      const connected = await connectAudioInput(t);
+      if (!connected) {
         _toast(audioInputState === "blocked" ? "Microphone permission is blocked — open SETUP for help." : "No audio input is available — open SETUP to choose one.", { severity: "error" });
         showStudioSetup();
         return;
       }
-      renderChain(); syncStatus();
+      renderChain(); renderInputRack(); syncStatus();
     }
     const pending = engine.record(t, { deviceId: t.inputId });
     updateTransportButtons();              // light ● immediately, incl. count-in
@@ -3486,12 +3988,15 @@ export const DAW = (() => {
     if (ok) _toast(`Recording ${t.name}…`, { severity: "ok" });
   }
 
-  async function finishRecording() {
+  async function finishRecording({ quietEmpty = false } = {}) {
     const wasCountIn = engine.pendingRecord;
     const take = await engine.stopRecord();
     removeLiveRecordingRegion();
     updateTransportButtons();
-    if (!take) { _toast(wasCountIn ? "Count-in cancelled" : "Nothing was recorded"); return; }
+    if (!take) {
+      if (!quietEmpty) _toast(wasCountIn ? "Count-in cancelled" : "Nothing was recorded");
+      return;
+    }
     const t = trackById(take.trackId);
     if (!t) return;
     pushState();
@@ -3856,7 +4361,9 @@ export const DAW = (() => {
   function openEditor(track, region) {
     if (editRegion !== region) rollSel = new Set();
     editRegion = region;
-    if (!bottom.open.includes("editor")) bottom.open = [...bottom.open, "editor"];
+    bottom.open = bottom.open.includes("editor")
+      ? bottom.open
+      : ["editor", ...(panelIsOpen("keys") ? ["keys"] : [])];
     bottom.h = Math.max(bottom.h, 280);   // the roll needs vertical room
     applyPanels();
     renderEditor();
@@ -3885,44 +4392,66 @@ export const DAW = (() => {
     nameIn.value = r.name || "New Region";
     nameIn.setAttribute("aria-label", "Region name");
     nameIn.addEventListener("change", () => { pushState(); r.name = nameIn.value.slice(0, 32); renderTimeline(); save(); });
-    head.append(el("span", "daw-panel-title", "EDIT — " + track.name), nameIn);
+    nameIn.classList.add("daw-roll-region-name");
+    head.append(el("span", "daw-panel-title", "Piano roll"), nameIn);
 
     const toolsWrap = el("div", "daw-roll-header-tools");
-    const preview = iconBtn("daw-hbtn daw-roll-preview", "PLAY", "Play from the start of this region");
+    const rollTools = el("div", "daw-roll-tools");
+    for (const [id, glyph, label] of [
+      ["draw", "✎", "Draw notes"], ["erase", "⌫", "Erase notes"],
+      ["select", "▣", "Select notes"], ["pointer", "↖", "Move selected notes"],
+    ]) {
+      const button = iconBtn("daw-hbtn daw-roll-tool" + (rollTool === id ? " active" : ""), glyph, label);
+      button.dataset.rollTool = id;
+      button.setAttribute("aria-pressed", rollTool === id ? "true" : "false");
+      button.addEventListener("click", () => {
+        rollTool = id;
+        renderEditor();
+      });
+      rollTools.appendChild(button);
+    }
+    const preview = iconBtn("daw-hbtn daw-roll-preview", "▶", "Play from the start of this region");
     preview.addEventListener("click", () => {
       if (engine.playing) engine.stop();
       else engine.play(r.start);
       updateTransportButtons(); updateClock();
     });
     const gridLabel = SNAP_OPTIONS.find((option) => option.beats === snapStep)?.label || String(snapStep);
-    const rollGrid = iconBtn("daw-hbtn daw-roll-grid", `GRID ${gridLabel}`, "Change the piano-roll grid");
+    const rollGrid = iconBtn("daw-hbtn daw-roll-grid", gridLabel, "Change the piano-roll grid");
     rollGrid.addEventListener("click", () => {
       const choices = SNAP_OPTIONS.map((option) => option.beats).filter((beats) => beats > 0);
       const index = Math.max(0, choices.indexOf(snapStep));
       snapStep = choices[(index + 1) % choices.length]; song.view.snap = snapStep; snapOn = true;
       syncSnapButton(); syncStatus(); renderEditor(); save();
     });
-    toolsWrap.append(preview, rollGrid);
+    const more = el("details", "daw-roll-more");
+    const moreSummary = el("summary", "daw-hbtn daw-roll-more-sum", "•••");
+    moreSummary.title = "More piano-roll operations";
+    const moreBody = el("div", "daw-roll-more-body");
+    moreBody.appendChild(preview);
+    more.append(moreSummary, moreBody);
+    toolsWrap.append(rollTools, rollGrid);
     if (track.kind === "midi") {
-      const nLeft = iconBtn("daw-hbtn", "◀", "Shift notes left");
+      const nLeft = iconBtn("daw-hbtn daw-roll-nudge", "◀", "Shift notes left");
       nLeft.addEventListener("click", () => nudgeRegionNotes(-gridStep()));
-      const nRight = iconBtn("daw-hbtn", "▶", "Shift notes right");
+      const nRight = iconBtn("daw-hbtn daw-roll-nudge", "▶", "Shift notes right");
       nRight.addEventListener("click", () => nudgeRegionNotes(gridStep()));
-      const tDown12 = iconBtn("daw-hbtn", "-12", "Transpose octave down");
+      const tDown12 = iconBtn("daw-hbtn daw-roll-transpose", "-12", "Transpose octave down");
       tDown12.addEventListener("click", () => transposeSelected(-12));
-      const tDown1 = iconBtn("daw-hbtn", "-1", "Transpose semitone down");
+      const tDown1 = iconBtn("daw-hbtn daw-roll-transpose", "-1", "Transpose semitone down");
       tDown1.addEventListener("click", () => transposeSelected(-1));
-      const tUp1 = iconBtn("daw-hbtn", "+1", "Transpose semitone up");
+      const tUp1 = iconBtn("daw-hbtn daw-roll-transpose", "+1", "Transpose semitone up");
       tUp1.addEventListener("click", () => transposeSelected(1));
-      const tUp12 = iconBtn("daw-hbtn", "+12", "Transpose octave up");
+      const tUp12 = iconBtn("daw-hbtn daw-roll-transpose", "+12", "Transpose octave up");
       tUp12.addEventListener("click", () => transposeSelected(12));
-      toolsWrap.append(nLeft, nRight, tDown12, tDown1, tUp1, tUp12);
+      moreBody.append(nLeft, nRight, tDown12, tDown1, tUp1, tUp12);
     }
     if (track.kind !== "audio") {
-      const qBtn = iconBtn("daw-hbtn", "Q", "Quantize notes (Q)");
+      const qBtn = iconBtn("daw-hbtn daw-roll-quantize", "Quantize", "Quantize notes (Q)");
       qBtn.addEventListener("click", quantizeSelected);
       toolsWrap.appendChild(qBtn);
     }
+    toolsWrap.appendChild(more);
     const close = iconBtn("daw-hbtn", "×", "Close editor");
     close.addEventListener("click", closeEditor);
     head.append(toolsWrap, close);
@@ -4184,6 +4713,15 @@ export const DAW = (() => {
       }
       if (e.button !== 0) return;
 
+      // The visible pencil/eraser/select toolbar maps to the same real note
+      // operations as the keyboard and pointer gestures. Erase is deliberately
+      // a left-click mode (right-click remains the fast expert shortcut).
+      if (rollTool === "erase") {
+        rdrag = { mode: "erase", pushed: false };
+        eraseNote(noteEl);
+        return;
+      }
+
       if (noteEl) {
         const n = noteEl._note;
         const rect = noteEl.getBoundingClientRect();
@@ -4204,7 +4742,7 @@ export const DAW = (() => {
         return;
       }
 
-      if (e.ctrlKey || e.metaKey) {
+      if (rollTool === "select" || rollTool === "pointer" || e.ctrlKey || e.metaKey) {
         const rect = inner.getBoundingClientRect();
         const mEl = el("div", "daw-marquee");
         inner.appendChild(mEl);
@@ -4953,7 +5491,7 @@ export const DAW = (() => {
     const paintReset = () => { reset.disabled = !Object.keys(track.patch || {}).length; };
     paintReset();
     reset.addEventListener("click", () => {
-      pushState(); track.patch = {}; engine?.refreshTrackParams?.(); renderChain(); save();
+      pushState(); track.patch = {}; engine?.refreshTrackParams?.(); renderChain(); renderConsoleInspector(); save();
       _toast(`${track.name} restored to its factory sound`, { severity: "ok" });
     });
     head.append(title, el("span", "daw-device-meta", active.engine.toUpperCase()), reset);
@@ -5031,6 +5569,361 @@ export const DAW = (() => {
     return card;
   }
 
+  function svgEl(name, className = "") {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+    if (className) node.setAttribute("class", className);
+    return node;
+  }
+
+  function patchValue(track, key) {
+    return resolvePatch(track.family, track.sound, track.patch).params[key];
+  }
+
+  function setPatchValue(track, key, value) {
+    (track.patch ||= {})[key] = value;
+    // A custom slot is a snapshot. Editing any parameter creates a fresh
+    // variation rather than misleadingly leaving the old custom name chosen.
+    track.customPresetId = null;
+    engine?.refreshTrackParams?.();
+  }
+
+  const CUSTOM_PATCHES_KEY = "sxratch.daw.custom-patches";
+  function customPatchesForFamily(family) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(CUSTOM_PATCHES_KEY) || "[]");
+      return Array.isArray(saved)
+        ? saved.filter((item) => item && item.family === family && typeof item.id === "string" && typeof item.sound === "string" && item.patch && typeof item.patch === "object")
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveCustomPatch(track) {
+    let saved;
+    try { saved = JSON.parse(localStorage.getItem(CUSTOM_PATCHES_KEY) || "[]"); } catch { saved = []; }
+    if (!Array.isArray(saved)) saved = [];
+    const familySlots = saved.filter((item) => item?.family === track.family);
+    const label = `Custom ${familySlots.length + 1}`;
+    const entry = {
+      id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      family: track.family,
+      sound: track.sound,
+      name: label,
+      patch: { ...(track.patch || {}) },
+    };
+    try {
+      localStorage.setItem(CUSTOM_PATCHES_KEY, JSON.stringify([...saved, entry]));
+      track.customPresetId = entry.id;
+      save();
+      _toast(`${label} saved in this browser`, { severity: "ok" });
+      return entry;
+    } catch {
+      _toast("Could not save this custom sound in the browser.", { severity: "error" });
+      return null;
+    }
+  }
+
+  function consolePatchKnob(track, key, label, spec) {
+    const control = knob(label, () => patchValue(track, key), (value) => setPatchValue(track, key, value), spec);
+    control.classList.add("daw-console-knob");
+    return control;
+  }
+
+  /** A small responsive plot calculated from the active patch. It does not
+   * claim analyser data: every point follows the same cutoff/type/Q values
+   * the synthesis engine is currently using. */
+  function buildFilterPlot(params) {
+    const svg = svgEl("svg", "daw-filter-plot");
+    svg.setAttribute("viewBox", "0 0 300 132");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", `Filter response, ${FILTER_TYPES[params.type] || "filter"}, cutoff ${fmtHz(params.cutoff || 0)}`);
+    for (let i = 1; i < 5; i++) {
+      const line = svgEl("line", "daw-plot-grid");
+      line.setAttribute("x1", "0"); line.setAttribute("x2", "300");
+      line.setAttribute("y1", String(i * 26)); line.setAttribute("y2", String(i * 26));
+      svg.appendChild(line);
+    }
+    for (let i = 1; i < 6; i++) {
+      const line = svgEl("line", "daw-plot-grid");
+      line.setAttribute("y1", "0"); line.setAttribute("y2", "132");
+      line.setAttribute("x1", String(i * 50)); line.setAttribute("x2", String(i * 50));
+      svg.appendChild(line);
+    }
+    const log = (value) => (Math.log(Math.max(60, value)) - Math.log(60)) / (Math.log(16000) - Math.log(60));
+    const cutoff = Math.max(0.03, Math.min(0.97, log(params.cutoff || 1200)));
+    const q = Math.max(0, Math.min(1, ((params.q ?? 0.7) - 0.2) / 11.8));
+    const type = Math.round(params.type || 0);
+    const points = [];
+    for (let i = 0; i <= 54; i++) {
+      const x = i / 54;
+      const distance = (x - cutoff) * 7.3;
+      let response;
+      if (type === 1) response = 1 / (1 + Math.exp(-distance));          // high pass
+      else if (type === 2) response = Math.exp(-Math.pow(distance * .72, 2)); // band pass
+      else response = 1 / (1 + Math.exp(distance));                       // low pass
+      if (type !== 2) response = Math.min(1.08, response + Math.exp(-Math.pow(distance * 2.7, 2)) * q * .24);
+      const y = 115 - response * 86;
+      points.push(`${(x * 292 + 4).toFixed(1)},${y.toFixed(1)}`);
+    }
+    const fill = svgEl("path", "daw-filter-fill");
+    fill.setAttribute("d", `M ${points.join(" L ")} L 296,128 L 4,128 Z`);
+    const curve = svgEl("polyline", "daw-filter-curve");
+    curve.setAttribute("points", points.join(" "));
+    const marker = svgEl("circle", "daw-filter-marker");
+    marker.setAttribute("cx", String(cutoff * 292 + 4));
+    marker.setAttribute("cy", String(115 - (type === 2 ? 1 : .88 + q * .16) * 86));
+    marker.setAttribute("r", "4");
+    svg.append(fill, curve, marker);
+    return svg;
+  }
+
+  function buildEnvelopePlot(params) {
+    const svg = svgEl("svg", "daw-envelope-plot");
+    svg.setAttribute("viewBox", "0 0 300 132");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "Amplitude envelope");
+    for (let i = 1; i < 5; i++) {
+      const line = svgEl("line", "daw-plot-grid");
+      line.setAttribute("x1", "0"); line.setAttribute("x2", "300");
+      line.setAttribute("y1", String(i * 26)); line.setAttribute("y2", String(i * 26));
+      svg.appendChild(line);
+    }
+    const attack = Math.max(.035, Math.min(.28, (params.attack || .01) / 2.4));
+    const decay = Math.max(.08, Math.min(.28, (params.decay || .1) / 4));
+    const sustain = Math.max(.06, Math.min(.95, params.sustain ?? .75));
+    const release = Math.max(.1, Math.min(.3, (params.release || .2) / 3.5));
+    const x0 = 8, x1 = x0 + attack * 284, x2 = x1 + decay * 284;
+    const x3 = 292 - release * 284, yPeak = 14, ySustain = 116 - sustain * 84;
+    const path = svgEl("polyline", "daw-envelope-curve");
+    path.setAttribute("points", `${x0},116 ${x1},${yPeak} ${x2},${ySustain} ${x3},${ySustain} 292,116`);
+    const fill = svgEl("path", "daw-envelope-fill");
+    fill.setAttribute("d", `M ${x0},116 L ${x1},${yPeak} L ${x2},${ySustain} L ${x3},${ySustain} L 292,116 Z`);
+    const nodes = [[x0, 116], [x1, yPeak], [x2, ySustain], [x3, ySustain], [292, 116]];
+    svg.appendChild(fill); svg.appendChild(path);
+    nodes.forEach(([x, y]) => {
+      const node = svgEl("circle", "daw-envelope-node");
+      node.setAttribute("cx", String(x)); node.setAttribute("cy", String(y)); node.setAttribute("r", "3.8"); svg.appendChild(node);
+    });
+    return svg;
+  }
+
+  /** The Filter view retains a compact, truthful readout of the amplitude
+   * shape below the filter controls, matching the console's one-glance sound
+   * designer. The AMP tab remains the editing surface for these values. */
+  function buildEnvelopeReadout(params) {
+    const section = el("section", "daw-inspector-envelope-inline");
+    const labels = el("div", "daw-envelope-tabs");
+    ["ENV", "A", "D", "S", "R"].forEach((label, index) => {
+      labels.appendChild(el("span", index === 0 ? "active" : "", label));
+    });
+    const values = el("div", "daw-envelope-values");
+    const readouts = [
+      ["Attack", params.attack, (value) => value < 1 ? `${Math.round(value * 1000)} ms` : `${value.toFixed(2)} s`],
+      ["Decay", params.decay, (value) => value < 1 ? `${Math.round(value * 1000)} ms` : `${value.toFixed(2)} s`],
+      ["Sustain", params.sustain, (value) => `${Math.round(value * 100)}%`],
+      ["Release", params.release, (value) => value < 1 ? `${Math.round(value * 1000)} ms` : `${value.toFixed(2)} s`],
+    ];
+    readouts.forEach(([label, value, format]) => {
+      const item = el("div", "daw-envelope-value");
+      item.append(el("span", null, label), el("strong", null, format(value)));
+      values.appendChild(item);
+    });
+    section.append(labels, buildEnvelopePlot(params), values);
+    return section;
+  }
+
+  function consoleInspectorTabs(track) {
+    const tabs = el("div", "daw-inspector-tabs");
+    tabs.setAttribute("role", "tablist");
+    const available = new Set((ENGINE_SCHEMA[resolvePatch(track.family, track.sound, track.patch).engine] || [])
+      .flatMap((section) => section.params.map((param) => param.key)));
+    const specs = [
+      ["osc", "OSC", ["wave1", "wave2", "detune2"]],
+      ["filter", "FILTER", ["cutoff", "q"]],
+      ["amp", "AMP", ["attack", "decay", "sustain", "release"]],
+      ["lfo", "LFO", ["lfoRate", "lfoDepth", "vibRate"]],
+      ["fx", "FX", ["drive", "noise", "chorus"]],
+    ];
+    if (!specs.find(([id]) => id === inspectorTab)?.[2].some((key) => available.has(key))) inspectorTab = "amp";
+    specs.forEach(([id, label, keys]) => {
+      const button = el("button", "daw-inspector-tab" + (inspectorTab === id ? " active" : ""), label);
+      button.type = "button";
+      button.disabled = !keys.some((key) => available.has(key));
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-selected", inspectorTab === id ? "true" : "false");
+      button.addEventListener("click", () => { inspectorTab = id; renderConsoleInspector(); });
+      tabs.appendChild(button);
+    });
+    return { tabs, available };
+  }
+
+  function renderConsoleInspector() {
+    const panel = el_.inspector;
+    if (!panel || !song) return;
+    const track = activeTrack();
+    panel.innerHTML = "";
+    const top = el("div", "daw-inspector-head");
+    top.appendChild(el("strong", null, track?.kind === "midi" ? "Sound designer" : "Track controls"));
+    const close = iconBtn("daw-inspector-close", "×", "Collapse sound designer");
+    close.addEventListener("click", () => panel.closest(".daw")?.classList.toggle("inspector-collapsed"));
+    top.appendChild(close);
+    panel.appendChild(top);
+    if (!track) {
+      panel.appendChild(el("p", "daw-inspector-empty", "Select a track to edit its sound."));
+      return;
+    }
+
+    if (track.kind !== "midi") {
+      const body = el("div", "daw-inspector-generic");
+      body.appendChild(el("strong", null, track.kind === "drums" ? "Drum kit" : "Audio input"));
+      if (track.kind === "drums") {
+        const kit = el("select", "daw-console-select");
+        DRUM_KIT_IDS.forEach((id) => {
+          const option = el("option", null, KIT_LABELS[id] || id);
+          option.value = id; option.selected = id === track.kit; kit.appendChild(option);
+        });
+        kit.setAttribute("aria-label", "Drum kit");
+        kit.addEventListener("change", () => { pushState(); track.kit = kit.value; engine?.rebuildTrack?.(track.id); save(); renderAll(); });
+        body.appendChild(kit);
+      } else {
+        body.appendChild(el("p", "daw-inspector-copy", audioInputSummary(track)));
+        const setup = el("button", "daw-inspector-action", "Set up input");
+        setup.type = "button"; setup.addEventListener("click", showStudioSetup); body.appendChild(setup);
+      }
+      const knobs = el("div", "daw-console-knobs two");
+      knobs.append(
+        knob("Level", () => track.gain, (value) => { track.gain = value; engine?.refreshTrackParams?.(); }, { min: 0, max: 1.4, fmt: (value) => `${Math.round(value * 100)}%` }),
+        knob("Pan", () => track.pan, (value) => { track.pan = value; engine?.refreshTrackParams?.(); syncHeadKnobs(); }, { min: -1, max: 1, fmt: (value) => Math.abs(value) < .02 ? "C" : `${value < 0 ? "L" : "R"}${Math.round(Math.abs(value) * 100)}` }),
+      );
+      body.appendChild(knobs); panel.appendChild(body); return;
+    }
+
+    const soundRow = el("div", "daw-inspector-sound-row");
+    const sound = el("select", "daw-console-select");
+    const factorySounds = Object.keys(FACTORY_PATCHES[track.family] || {});
+    factorySounds.forEach((id) => {
+      const option = el("option", null, SOUND_LABELS[track.family]?.[id] || id);
+      option.value = id; sound.appendChild(option);
+    });
+    const customSounds = customPatchesForFamily(track.family);
+    customSounds.forEach((entry) => {
+      const option = el("option", null, entry.name);
+      option.value = `custom:${entry.id}`; sound.appendChild(option);
+    });
+    sound.value = track.customPresetId ? `custom:${track.customPresetId}` : track.sound;
+    sound.setAttribute("aria-label", "Instrument sound");
+    sound.addEventListener("change", () => {
+      pushState();
+      if (sound.value.startsWith("custom:")) {
+        const entry = customSounds.find((item) => `custom:${item.id}` === sound.value);
+        if (!entry) return;
+        track.sound = entry.sound;
+        track.patch = { ...entry.patch };
+        track.customPresetId = entry.id;
+      } else {
+        track.sound = sound.value;
+        track.patch = {};
+        track.customPresetId = null;
+      }
+      engine?.refreshTrackParams?.(); renderAll(); save();
+    });
+    const cycleSound = (direction) => {
+      const slots = [
+        ...factorySounds.map((id) => ({ value: id, sound: id, patch: {}, customId: null })),
+        ...customSounds.map((entry) => ({ value: `custom:${entry.id}`, sound: entry.sound, patch: entry.patch, customId: entry.id })),
+      ];
+      if (!slots.length) return;
+      const current = track.customPresetId ? `custom:${track.customPresetId}` : track.sound;
+      const index = Math.max(0, slots.findIndex((slot) => slot.value === current));
+      const next = slots[(index + direction + slots.length) % slots.length];
+      pushState(); track.sound = next.sound; track.patch = { ...next.patch }; track.customPresetId = next.customId;
+      engine?.refreshTrackParams?.(); renderAll(); save();
+    };
+    const previous = iconBtn("daw-inspector-preset-btn", "‹", "Previous sound preset");
+    previous.addEventListener("click", () => cycleSound(-1));
+    const next = iconBtn("daw-inspector-preset-btn", "›", "Next sound preset");
+    next.addEventListener("click", () => cycleSound(1));
+    const savePreset = iconBtn("daw-inspector-preset-btn", "▣", "Save current sound as a custom preset");
+    savePreset.addEventListener("click", () => { if (saveCustomPatch(track)) renderConsoleInspector(); });
+    soundRow.append(sound, previous, next, savePreset);
+    panel.appendChild(soundRow);
+
+    const { tabs, available } = consoleInspectorTabs(track);
+    panel.appendChild(tabs);
+    const params = resolvePatch(track.family, track.sound, track.patch).params;
+    const content = el("div", "daw-inspector-content");
+    if (inspectorTab === "filter" && available.has("cutoff")) {
+      content.appendChild(buildFilterPlot(params));
+      const selects = el("div", "daw-inspector-selects");
+      const filterType = el("select", "daw-console-select");
+      FILTER_TYPES.forEach((type, index) => {
+        const option = el("option", null, type.replace(/^./, (letter) => letter.toUpperCase()));
+        option.value = String(index); option.selected = index === params.type; filterType.appendChild(option);
+      });
+      filterType.setAttribute("aria-label", "Filter type");
+      filterType.addEventListener("change", () => { pushState(); setPatchValue(track, "type", +filterType.value); renderConsoleInspector(); save(); });
+      const curveInfo = el("span", "daw-filter-info", "12 dB / octave");
+      // The concept reads left-to-right as slope then type. The slope remains
+      // an honest fixed 12 dB/octave until the engine offers a cascaded mode.
+      selects.append(curveInfo, filterType); content.appendChild(selects);
+      const knobs = el("div", "daw-console-knobs");
+      [
+        consolePatchKnob(track, "cutoff", "Cutoff", { min: 60, max: 16000, fmt: fmtHz }),
+        consolePatchKnob(track, "q", "Resonance", { min: .2, max: 12, fmt: (value) => `${Math.round(((value - .2) / 11.8) * 100)}%` }),
+        available.has("drive") ? consolePatchKnob(track, "drive", "Drive", { min: 1, max: 4, fmt: (value) => `${Math.round(((value - 1) / 3) * 100)}%` }) : null,
+        consolePatchKnob(track, "keyTrack", "Key track", { min: 0, max: 1, fmt: (value) => `${Math.round(value * 100)}%` }),
+      ].filter(Boolean).forEach((node) => knobs.appendChild(node));
+      content.appendChild(knobs);
+      if (available.has("attack")) content.appendChild(buildEnvelopeReadout(params));
+    } else if (inspectorTab === "amp" && available.has("attack")) {
+      content.appendChild(buildEnvelopePlot(params));
+      const knobs = el("div", "daw-console-knobs");
+      knobs.append(
+        consolePatchKnob(track, "attack", "Attack", { min: .001, max: 2, fmt: (value) => value < 1 ? `${Math.round(value * 1000)} ms` : `${value.toFixed(2)} s` }),
+        consolePatchKnob(track, "decay", "Decay", { min: .01, max: 3, fmt: (value) => value < 1 ? `${Math.round(value * 1000)} ms` : `${value.toFixed(2)} s` }),
+        consolePatchKnob(track, "sustain", "Sustain", { min: 0, max: 1, fmt: (value) => `${Math.round(value * 100)}%` }),
+        consolePatchKnob(track, "release", "Release", { min: .02, max: 3, fmt: (value) => value < 1 ? `${Math.round(value * 1000)} ms` : `${value.toFixed(2)} s` }),
+      );
+      content.appendChild(knobs);
+    } else {
+      const sections = (ENGINE_SCHEMA[resolvePatch(track.family, track.sound, track.patch).engine] || []);
+      const relevant = sections.flatMap((section) => section.params).filter((param) => {
+        if (inspectorTab === "osc") return /wave|detune|sub|noise|voice|spread/.test(param.key);
+        if (inspectorTab === "lfo") return /lfo|vib|mod/.test(param.key);
+        return /drive|fx|chorus|delay|reverb/.test(param.key);
+      });
+      if (!relevant.length) content.appendChild(el("p", "daw-inspector-empty", "This instrument has no controls in this section."));
+      else {
+        const compact = el("div", "daw-inspector-advanced");
+        relevant.forEach((param) => {
+          const row = el("label", "daw-inspector-param");
+          row.appendChild(el("span", null, param.label));
+          if (param.unit === "wave" || param.unit === "filtertype") {
+            const select = el("select", "daw-console-select");
+            const choices = param.unit === "wave" ? WAVES : FILTER_TYPES;
+            choices.forEach((choice, index) => {
+              const option = el("option", null, choice.replace(/^./, (letter) => letter.toUpperCase()));
+              option.value = String(index); option.selected = index === params[param.key]; select.appendChild(option);
+            });
+            select.addEventListener("change", () => { pushState(); setPatchValue(track, param.key, +select.value); save(); });
+            row.appendChild(select);
+          } else {
+            const range = el("input", "daw-inspector-range");
+            range.type = "range"; range.min = String(param.min); range.max = String(param.max); range.step = String(param.step); range.value = String(params[param.key]);
+            range.addEventListener("pointerdown", () => pushState());
+            range.addEventListener("input", () => setPatchValue(track, param.key, +range.value));
+            range.addEventListener("change", save);
+            row.appendChild(range);
+          }
+          compact.appendChild(row);
+        });
+        content.appendChild(compact);
+      }
+    }
+    panel.appendChild(content);
+  }
+
   function renderChain() {
     const p = el_.chain;
     const t = activeTrack();
@@ -5099,7 +5992,7 @@ export const DAW = (() => {
       sel.setAttribute("aria-label", "Instrument sound");
       sel.addEventListener("change", () => {
         pushState(); t.sound = sel.value; t.patch = {};
-        engine?.refreshTrackParams?.(); renderHeads(); renderChain(); save();
+        engine?.refreshTrackParams?.(); renderHeads(); renderChain(); renderConsoleInspector(); save();
         _toast(`Loaded ${SOUND_LABELS[t.family]?.[t.sound] || t.sound}`, { severity: "ok" });
       });
       instBody.appendChild(sel);
@@ -5109,7 +6002,7 @@ export const DAW = (() => {
       // params would silently play the acoustic kit.
       DRUM_KIT_IDS.forEach((id) => { const o = el("option", null, KIT_LABELS[id] || id); o.value = id; if (id === t.kit) o.selected = true; sel.appendChild(o); });
       sel.setAttribute("aria-label", "Drum kit");
-      sel.addEventListener("change", () => { pushState(); t.kit = sel.value; renderHeads(); save(); });
+      sel.addEventListener("change", () => { pushState(); t.kit = sel.value; renderHeads(); renderConsoleInspector(); save(); });
       instBody.appendChild(sel);
     } else {
       const sel = el("select", "daw-dev-sel");
@@ -5117,10 +6010,26 @@ export const DAW = (() => {
       dflt.value = ""; sel.appendChild(dflt);
       inputDevices.forEach((d, i) => { const o = el("option", null, d.label || `Input ${i + 1}`); o.value = d.deviceId; if (d.deviceId === t.inputId) o.selected = true; sel.appendChild(o); });
       sel.setAttribute("aria-label", "Audio input device");
-      sel.addEventListener("change", () => { t.inputId = sel.value || null; save(); syncStatus(); });
+      sel.addEventListener("change", async () => {
+        const previousId = t.inputId || null;
+        t.inputId = sel.value || null;
+        if (getAudioInputSession().open && !await connectAudioInput(t, { deviceId: t.inputId })) {
+          t.inputId = previousId;
+          _toast(engine?.recording
+            ? "Finish the current take before changing the audio input."
+            : "That input could not be opened. Your current input is still connected.", { severity: "error" });
+        }
+        save(); syncStatus(); renderInputRack();
+      });
       const monBtn = iconBtn("daw-hbtn daw-mon", "🎧", `Live Input Monitor: ${t.monitor ? "ON" : "OFF"}`);
       monBtn.classList.toggle("active", !!t.monitor);
-      monBtn.addEventListener("click", () => { pushState(); t.monitor = !t.monitor; renderChain(); save(); _toast(t.monitor ? "Live monitoring ON" : "Live monitoring OFF"); });
+      monBtn.addEventListener("click", async () => {
+        const next = !t.monitor;
+        if (next && !getAudioInputSession().open && !await connectAudioInput(t)) return;
+        pushState(); t.monitor = next; engine?.setInputMonitoring?.(next);
+        renderChain(); renderInputRack(); renderConsoleInspector(); save();
+        _toast(next ? "Browser input monitoring ON" : "Input monitoring OFF");
+      });
       const imp = el("button", "daw-fbtn", "Import audio file");
       imp.type = "button";
       imp.addEventListener("click", () => importAudioFile(t));
@@ -5623,10 +6532,7 @@ export const DAW = (() => {
 
   function newSong() {
     pushState();
-    song = defaultSong();
-    const t = makeTrack("midi", { family: "chord" });
-    song.tracks.push(t);
-    activeTrackId = t.id;
+    song = starterSong();
     sel = [];
     closeEditor();
     snapStep = nearestSnap(song.view.snap);
@@ -5773,6 +6679,31 @@ export const DAW = (() => {
       getClip: (id) => clips.get(id),
       onPlayhead: () => {},
       onRecordFail: (m) => _toast(m, { severity: "error" }),
+      onInputStateChange: (state, { reason } = {}) => {
+        if (state?.open) {
+          preferredInputGain = state.inputGain ?? preferredInputGain;
+          // `null` deliberately means “browser default”; do not silently
+          // replace that preference with the browser's resolved device id.
+          if (Object.prototype.hasOwnProperty.call(state, "requestedDeviceId")) {
+            preferredInputId = state.requestedDeviceId;
+          } else {
+            preferredInputId = state.deviceId ?? preferredInputId;
+          }
+        }
+        // Device loss can happen outside any click handler. Keep the console
+        // rail, status line and temporary chain truthful in that case.
+        requestAnimationFrame(() => {
+          if (!root) return;
+          renderInputRack();
+          renderChain();
+          syncStatus();
+        });
+        if (reason === "ended" && engine?.rec?.kind === "audio") {
+          // Finalise the safe portion of the take and leave the UI out of a
+          // false recording state. The engine has already reported the loss.
+          void finishRecording({ quietEmpty: true });
+        }
+      },
     });
 
     buildShell();
@@ -5804,6 +6735,9 @@ export const DAW = (() => {
   async function stopPreview() {
     if (engine?.recording) await finishRecording();
     else engine?.stop();
+    // Input capture is intentionally session-scoped while the Studio is open,
+    // but should never remain active after the user navigates back to Decks.
+    engine?.closeInput?.();
     if (el_.playBtn) updateTransportButtons();
   }
 

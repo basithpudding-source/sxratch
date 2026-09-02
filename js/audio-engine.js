@@ -73,6 +73,12 @@ export class Deck {
     this.analyser.connect(this.crossGain);
     this.crossGain.connect(engine.masterBus);
 
+    // Pre-Fade Listen (PFL) headphone cue tap (post-EQ/filter/FX, pre-volume-fader)
+    this.pflGain = ctx.createGain();
+    this.pflGain.gain.value = 0;
+    this.fx.output.connect(this.pflGain);
+    this.pflGain.connect(engine.cueBus);
+
     // State
     this.buffer = null;       // decoded AudioBuffer (kept for waveform peaks)
     this.duration = 0;
@@ -80,8 +86,12 @@ export class Deck {
     this.position = 0;        // 0..1
     this.playing = false;
     this.cuePoint = 0;        // 0..1
-    this.tempo = 0;           // -8..+8 percent
+    this.cuePfl = false;      // headphone cue active
+    this.cueAuditioning = false; // CDJ-style hold-audition active
+    this.tempo = 0;           // percent within ±tempoRange
+    this.tempoRange = 8;      // 6, 8, 10, 16, 100
     this.bpm = 120;           // used for auto-loop length (set on load when known)
+    this.beatOffset = 0;      // detected downbeat offset in seconds
     this.loop = { active: false, start: -1, end: -1 };
 
     this.onPosition = null;   // callback(position, playing, rate)
@@ -145,6 +155,62 @@ export class Deck {
   setCue() { this.cuePoint = this.position; this.node.port.postMessage({ type: "cue", position: this.position }); }
   goToCue() { this.node.port.postMessage({ type: "seek", position: this.cuePoint }); this.position = this.cuePoint; }
 
+  /**
+   * Pioneer CDJ-style CUE button press.
+   * When playing: pauses and seeks back to cue.
+   * When paused: begins audition playback while held down.
+   */
+  cueDown() {
+    if (this.playing) {
+      this.pause();
+      this.goToCue();
+      return "stopped";
+    }
+    this.cueAuditioning = true;
+    this.goToCue();
+    this.play();
+    return "auditioning";
+  }
+
+  /** Release CDJ-style CUE button: stops and rewinds if auditioning. */
+  cueUp() {
+    if (this.cueAuditioning) {
+      this.cueAuditioning = false;
+      this.pause();
+      this.goToCue();
+      return "rewound";
+    }
+    return "idle";
+  }
+
+  setCuePfl(enabled) {
+    this.cuePfl = !!enabled;
+    this.pflGain.gain.setTargetAtTime(this.cuePfl ? 1 : 0, this.engine.ctx.currentTime, 0.01);
+  }
+
+  toggleCuePfl() {
+    this.setCuePfl(!this.cuePfl);
+    return this.cuePfl;
+  }
+
+  setTempoRange(range) {
+    this.tempoRange = Math.max(4, Math.min(100, Number(range) || 8));
+    this.setTempo(this.tempo);
+  }
+
+  /** Momentarily nudge playback speed (+1 = fast forward nudge, -1 = slow down nudge). */
+  nudgeStart(direction) {
+    const base = 1 + this.tempo / 100;
+    const factor = direction > 0 ? 1.04 : 0.96;
+    this.node.port.postMessage({ type: "rate", value: base * factor });
+  }
+
+  /** Release momentary nudge, restoring the base pitch/tempo rate. */
+  nudgeEnd() {
+    const base = 1 + this.tempo / 100;
+    this.node.port.postMessage({ type: "rate", value: base });
+  }
+
   touchStart() { this.node.port.postMessage({ type: "touchStart" }); }
   touchEnd() { this.node.port.postMessage({ type: "touchEnd" }); }
   jog(velocity) {
@@ -183,10 +249,11 @@ export class Deck {
     this.fx.setBpm(this.bpm * (1 + this.tempo / 100));
   }
 
-  /** tempo in percent, e.g. -8..+8 */
+  /** tempo in percent, clamped to ±tempoRange */
   setTempo(percent) {
-    this.tempo = percent;
-    this.node.port.postMessage({ type: "rate", value: 1 + percent / 100 });
+    const lim = this.tempoRange || 8;
+    this.tempo = Math.max(-lim, Math.min(lim, Number(percent) || 0));
+    this.node.port.postMessage({ type: "rate", value: 1 + this.tempo / 100 });
     this.fx.setBpm(this.bpm * (1 + this.tempo / 100));
   }
 
@@ -235,6 +302,9 @@ export class AudioEngine {
     this.ready = false;
     this.crossfadeCurve = "power"; // "linear" | "power" | "cut"
     this.hamster = false; // hamster reverse mode
+    this.cueMode = "stereo"; // "stereo" | "split"
+    this.cueMix = 0; // 0 = 100% CUE, 1 = 100% MASTER
+    this.cueVolume = 0.8; // 0..1
   }
 
   /** Must be called from a user gesture (click/touch). */
@@ -272,13 +342,70 @@ export class AudioEngine {
     // for a full-scale mix regardless of how quiet the user is monitoring.
     this.masterBus.connect(this.limiter);
     this.limiter.connect(this.master);
-    this.master.connect(this.ctx.destination);
+
+    // Headphone Cue / Pre-Fade Listen (PFL) bus
+    this.cueBus = this.ctx.createGain();
+    this.cueMasterTap = this.ctx.createGain();
+    this.cueMasterTap.gain.value = this.cueMix;
+    this.limiter.connect(this.cueMasterTap);
+    this.cueMasterTap.connect(this.cueBus);
+
+    this.cueVolumeNode = this.ctx.createGain();
+    this.cueVolumeNode.gain.value = this.cueVolume;
+    this.cueBus.connect(this.cueVolumeNode);
+
+    // Split Cue routing: Left = Master, Right = Cue
+    this.splitMerger = this.ctx.createChannelMerger(2);
+    this.masterMono = this.ctx.createGain();
+    this.cueMono = this.ctx.createGain();
+    this.master.connect(this.masterMono);
+    this.masterMono.connect(this.splitMerger, 0, 0); // Left = Master
+    this.cueVolumeNode.connect(this.cueMono);
+    this.cueMono.connect(this.splitMerger, 0, 1);    // Right = Cue
+
+    // Stereo routing
+    this.cueStereoGain = this.ctx.createGain();
+    this.cueStereoGain.gain.value = 1;
+    this.cueVolumeNode.connect(this.cueStereoGain);
+
+    this._updateOutputRouting();
 
     this.decks.A = new Deck(this, "A");
     this.decks.B = new Deck(this, "B");
 
     this.setCrossfade(0.5);
     this.ready = true;
+  }
+
+  _updateOutputRouting() {
+    if (!this.ctx) return;
+    try { this.master.disconnect(this.ctx.destination); } catch {}
+    try { this.cueStereoGain.disconnect(this.ctx.destination); } catch {}
+    try { this.splitMerger.disconnect(this.ctx.destination); } catch {}
+
+    if (this.cueMode === "split") {
+      this.splitMerger.connect(this.ctx.destination);
+    } else {
+      this.master.connect(this.ctx.destination);
+      this.cueStereoGain.connect(this.ctx.destination);
+    }
+  }
+
+  setCueMode(mode) {
+    this.cueMode = mode === "split" ? "split" : "stereo";
+    this._updateOutputRouting();
+  }
+
+  setCueVolume(v) {
+    const val = Math.max(0, Math.min(1, Number(v) || 0));
+    this.cueVolume = val;
+    this.cueVolumeNode?.gain.setTargetAtTime(val, this.ctx.currentTime, 0.01);
+  }
+
+  setCueMix(x) {
+    const val = Math.max(0, Math.min(1, Number(x) || 0));
+    this.cueMix = val;
+    this.cueMasterTap?.gain.setTargetAtTime(val, this.ctx.currentTime, 0.01);
   }
 
   async resume() {

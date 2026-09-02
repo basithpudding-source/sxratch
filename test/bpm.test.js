@@ -66,3 +66,25 @@ test("returns null for too-short audio", () => {
   const x = clickTrack(120, 3); // < 8 s analysis window
   assert.equal(detectBPMFromChannels(x, x, SR, x.length), null);
 });
+
+test("detectBeatGridFromChannels reports tempo and downbeat offset", () => {
+  const bpm = 120;
+  const leadSilenceSec = 0.4;
+  const n = Math.floor(SR * 40);
+  const x = new Float32Array(n);
+  const beat = (60 / bpm) * SR;
+  const startSample = Math.round(leadSilenceSec * SR);
+  for (let b = 0; ; b++) {
+    const at = startSample + Math.round(b * beat);
+    if (at >= n) break;
+    for (let i = 0; i < 2000 && at + i < n; i++) {
+      x[at + i] += Math.sin((2 * Math.PI * 100 * i) / SR) * Math.exp(-i / 900) * 0.8;
+    }
+  }
+  const grid = detectBPMFromChannels(x, x, SR, x.length, { detailed: true });
+  assert.ok(grid && typeof grid === "object", "grid should be an object");
+  assert.ok(Math.abs(grid.bpm - bpm) <= 0.5, `expected ${bpm} bpm, got ${grid.bpm}`);
+  // hop is 256 samples (approx 5.8 ms at 44.1 kHz); offset should be within ~20 ms of 0.4 s
+  assert.ok(Math.abs(grid.offset - leadSilenceSec) < 0.05, `expected offset near 0.4s, got ${grid.offset}`);
+});
+

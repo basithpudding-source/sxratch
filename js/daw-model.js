@@ -294,22 +294,28 @@ export function trimRegionStartContent(kind, region, delta, secondsPerBeat) {
   return { notes };
 }
 
-export function quantizeRegionNotes(kind, region, step = DEFAULT_SNAP) {
+export function quantizeRegionNotes(kind, region, step = DEFAULT_SNAP, filterFn = null) {
   if (kind === "drums") {
     return {
-      hits: (region.hits || []).map((h) => ({
-        ...h,
-        b: quantizeBeat(h.b, step),
-      })),
+      hits: (region.hits || []).map((h) => {
+        if (filterFn && !filterFn(h)) return h;
+        return {
+          ...h,
+          b: quantizeBeat(h.b, step),
+        };
+      }),
     };
   }
   if (kind === "midi") {
     return {
-      notes: (region.notes || []).map((n) => ({
-        ...n,
-        b: quantizeBeat(n.b, step),
-        d: Math.max(step, quantizeBeat(n.d, step)),
-      })),
+      notes: (region.notes || []).map((n) => {
+        if (filterFn && !filterFn(n)) return n;
+        return {
+          ...n,
+          b: quantizeBeat(n.b, step),
+          d: Math.max(step, quantizeBeat(n.d, step)),
+        };
+      }),
     };
   }
   return {};

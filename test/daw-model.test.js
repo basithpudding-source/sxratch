@@ -259,6 +259,17 @@ test("quantizeRegionNotes aligns MIDI notes and drum hits to step grid", () => {
   });
 });
 
+test("quantizeRegionNotes quantizes only selected notes when filterFn provided", () => {
+  const n1 = { b: 0.22, d: 0.9, m: 60 };
+  const n2 = { b: 0.73, d: 0.5, m: 62 };
+  const midi = { notes: [n1, n2] };
+
+  // Only quantize n1
+  const res = quantizeRegionNotes("midi", midi, 0.25, (n) => n === n1);
+  assert.equal(res.notes[0].b, 0.25);
+  assert.equal(res.notes[1].b, 0.73); // untouched
+});
+
 test("quantizeBeat: snap Off passes beats through; triplet grids are not clamped away", () => {
   assert.equal(quantizeBeat(1.137, 0), 1.137);
   assert.equal(quantizeBeat(-2, 0), 0);
