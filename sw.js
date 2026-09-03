@@ -5,7 +5,7 @@
 // is cached so the app still boots fully offline. Cross-origin requests (e.g.
 // user-supplied direct audio URLs) are left untouched.
 
-const CACHE = "sxratch-v46"; // bump when the shell changes so clients refresh
+const CACHE = "sxratch-v47"; // bump when the shell changes so clients refresh
 const SHELL = [
   "/",
   "/index.html",

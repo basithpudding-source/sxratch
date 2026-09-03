@@ -2108,7 +2108,9 @@ body.view-studio { background: #080a0c; }
 .daw-console {
   height: 100%;
   display: grid;
-  grid-template-columns: 237px minmax(0, 1fr) 351px;
+  --daw-input-w: 42px;
+  --daw-inspector-w: 0px;
+  grid-template-columns: var(--daw-input-w, 42px) minmax(0, 1fr) var(--daw-inspector-w, 0px);
   grid-template-rows: 70px minmax(0, 1fr) 32px;
   grid-template-areas:
     "transport transport transport"
@@ -2119,7 +2121,30 @@ body.view-studio { background: #080a0c; }
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-  overflow: visible;
+  overflow: hidden;
+}
+
+.daw-console.input-collapsed {
+  --daw-input-w: 42px;
+}
+.daw-console:not(.input-collapsed) {
+  --daw-input-w: 237px;
+}
+.daw-console.input-hidden {
+  --daw-input-w: 0px;
+}
+.daw-console.input-hidden .daw-input-rack {
+  display: none !important;
+}
+
+.daw-console:not(.inspector-open) {
+  --daw-inspector-w: 0px;
+}
+.daw-console:not(.inspector-open) .daw-inspector {
+  display: none !important;
+}
+.daw-console.inspector-open {
+  --daw-inspector-w: 340px;
 }
 .daw-console .daw-quickstart { display: none; }
 
@@ -2309,6 +2334,23 @@ body.view-studio { background: #080a0c; }
   width: 44px;
   height: 56px;
   font-size: 20px;
+}
+
+/* Dock & Panels View Toggles in Transport */
+.daw-console .daw-transport-panels .daw-tbtn {
+  height: 56px;
+  min-width: 44px;
+  padding: 0 10px;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.daw-console .daw-transport-panels .daw-tbtn.active {
+  border-color: #477cf5;
+  background: linear-gradient(180deg, #2a5ac4, #1b3e8c);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.2);
 }
 
 
@@ -2586,7 +2628,7 @@ body.view-studio { background: #080a0c; }
 }
 
 /* Collapsed Input Rail */
-.daw-console.input-collapsed { grid-template-columns: 42px minmax(0, 1fr) 351px; }
+.daw-console.input-collapsed { --daw-input-w: 42px; }
 .daw-console.input-collapsed .daw-input-rack,
 .daw-input-rack.is-collapsed {
   width: 42px;
@@ -2679,6 +2721,43 @@ body.view-studio { background: #080a0c; }
 .daw-console .daw-head-title { min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-right: 58px; }
 .daw-console .daw-head-name { width: 100%; padding: 0; border: 0; background: transparent; color: #f0f1f3; font-size: 16px; font-weight: 650; line-height: 1.15; }
 .daw-console .daw-head-kind { margin: 0; color: #8f96a3; font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.daw-console .daw-head-kind-btn {
+  margin: 3px 0 0;
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #9cb2d6;
+  font: 600 11.5px/1.2 Inter, system-ui, sans-serif;
+  text-align: left;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all .15s ease;
+}
+.daw-console .daw-head-kind-btn:hover {
+  border-color: #4f84eb;
+  background: rgba(79, 132, 235, 0.16);
+  color: #f0f5ff;
+}
+.daw-console .daw-head-btns .daw-device-toggle {
+  color: #79a8ff;
+}
+.daw-console .daw-head-btns .daw-device-toggle:hover {
+  border-color: #4f84eb;
+  color: #e4eeff;
+}
+.daw-console .daw-head-btns .daw-device-toggle.active {
+  background: #254a8e;
+  border-color: #4a82ea;
+  color: #fff;
+}
 
 /* Track Duplicate & Delete actions */
 .daw-console .daw-head-dup,
@@ -3132,8 +3211,8 @@ body.view-studio { background: #080a0c; }
 
 /* --- Sound designer ---------------------------------------------------- */
 .daw-inspector { grid-area: inspector; min-width: 0; min-height: 0; padding: 18px 14px 15px; overflow: auto; scrollbar-color: var(--sx-line-strong) transparent; scrollbar-width: thin; }
-.daw-console.inspector-collapsed { grid-template-columns: 237px minmax(0,1fr) 0; }
-.daw-console.inspector-collapsed .daw-inspector { visibility: hidden; padding: 0; border: 0; }
+.daw-console.inspector-collapsed { --daw-inspector-w: 0px; }
+.daw-console.inspector-collapsed .daw-inspector { display: none !important; }
 .daw-inspector-head { display: flex; align-items: center; justify-content: space-between; margin: 3px 0 21px; }
 .daw-inspector-close,
 .daw-inspector-preset-btn { width: 34px; min-width: 34px; min-height: 40px; padding: 0; border: 1px solid var(--sx-line); border-radius: 5px; background: #171a20; color: var(--sx-text-2); font-size: 22px; cursor: pointer; }

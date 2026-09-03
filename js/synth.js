@@ -637,6 +637,29 @@ export const FACTORY_PATCHES = {
       trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
       chorus: 0.8,
     }),
+    rhodes_mk1: FM({
+      ratio: 1, index: 4.8, indexDecay: 0.12, indexVel: 1.5,
+      otRatio: 4, otLevel: 0.18, otDecay: 0.6,
+      attack: 0.002, decay: 1.8, decayAdd: 0.6, sustain: 0.28, release: 0.45, level: 0.18, velCurve: 1.25,
+      panSpread: 0.25, chorus: 0.45,
+    }),
+    wurlitzer: FM({
+      ratio: 3, index: 5.2, indexDecay: 0.08, indexVel: 1.6,
+      otRatio: 5, otLevel: 0.22, otDecay: 0.35,
+      attack: 0.002, decay: 1.2, decayAdd: 0.3, sustain: 0.2, release: 0.28, level: 0.19, velCurve: 1.35,
+      panSpread: 0.15, chorus: 0.2,
+    }),
+    kalimba: PLK({
+      ring: 0.997, brightness: 0.65, brightVel: 0.4, tone: 4800, toneVel: 1200, pick: 0.25, thump: 0.08,
+      strum: 0, panSpread: 0.3, durAdd: 0.5, durMax: 3.2,
+      level: 0.45, body: 1, seed: 15, chorus: 0.1,
+    }),
+    vibraphone: FM({
+      ratio: 3.98, index: 2.2, indexDecay: 0.4, indexVel: 1.2,
+      otRatio: 9.8, otLevel: 0.08, otDecay: 0.2,
+      attack: 0.003, decay: 2.8, decayAdd: 0.8, sustain: 0.25, release: 0.9, level: 0.16, velCurve: 1.1,
+      panSpread: 0.35, chorus: 0.5,
+    }),
   },
   bass: {
     electric: SUB({
@@ -748,6 +771,46 @@ export const FACTORY_PATCHES = {
       vibRate: 0, vibCents: 0, vibDelay: 0.2,
       trLevel: 0.03, trHp: 900, trLp: 2400, trDecay: 0.002,
       chorus: 0.1,
+    }),
+    moog_bass: SUB({
+      wave1: 2, level1: 1, wave2: 3, level2: 0.8, detune2: -7, sub: 0.6, noise: 0, noiseTone: 1900, drive: 2.6,
+      voices: 3, detune: 5, spread: 0,
+      type: 0, cutoff: 280, keyTrack: 0.3, q: 4.5, envAmount: 1800, envTime: 0.11, velToCutoff: 900, envVel: 0.75,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.003, attackKey: 0, decay: 0.22, sustain: 0.6, release: 0.15, level: 0.32,
+      vibRate: 0, vibCents: 0, vibDelay: 0.2,
+      trLevel: 0.05, trHp: 500, trLp: 2200, trDecay: 0.002,
+      chorus: 0,
+    }),
+    sub_boom: SUB({
+      wave1: 0, level1: 1, wave2: 1, level2: 0.3, detune2: 0, sub: 0.8, noise: 0, noiseTone: 1900, drive: 2.8,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 1800, keyTrack: 0, q: 0.7, envAmount: 400, envTime: 0.08, velToCutoff: 300, envVel: 0.4,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.004, attackKey: 0, decay: 0.55, sustain: 0.8, release: 0.3, level: 0.35,
+      vibRate: 0, vibCents: 0, vibDelay: 0,
+      trLevel: 0.02, trHp: 600, trLp: 2000, trDecay: 0.002,
+      chorus: 0,
+    }),
+    dub_reggae: SUB({
+      wave1: 1, level1: 1, wave2: 0, level2: 0.7, detune2: -1200, sub: 0.9, noise: 0, noiseTone: 1900, drive: 1.8,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 220, keyTrack: 0.1, q: 1.2, envAmount: 250, envTime: 0.15, velToCutoff: 200, envVel: 0.5,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.008, attackKey: 0, decay: 0.25, sustain: 0.8, release: 0.22, level: 0.36,
+      vibRate: 0, vibCents: 0, vibDelay: 0,
+      trLevel: 0.01, trHp: 400, trLp: 1800, trDecay: 0.003,
+      chorus: 0,
+    }),
+    funk_synth: SUB({
+      wave1: 2, level1: 1, wave2: 2, level2: 0.5, detune2: 8, sub: 0.3, noise: 0, noiseTone: 1900, drive: 2.2,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 350, keyTrack: 0.5, q: 7.5, envAmount: 3200, envTime: 0.08, velToCutoff: 1400, envVel: 0.85,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.002, attackKey: 0, decay: 0.18, sustain: 0.45, release: 0.12, level: 0.31,
+      vibRate: 0, vibCents: 0, vibDelay: 0,
+      trLevel: 0.04, trHp: 650, trLp: 2600, trDecay: 0.002,
+      chorus: 0.05,
     }),
   },
   lead: {
@@ -889,6 +952,46 @@ export const FACTORY_PATCHES = {
       trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
       chorus: 0.2,
     }),
+    analog_saw_lead: SUB({
+      wave1: 2, level1: 1, wave2: 2, level2: 0.8, detune2: 15, sub: 0.25, noise: 0, noiseTone: 1900, drive: 1.3,
+      voices: 2, detune: 10, spread: 0.4,
+      type: 0, cutoff: 3800, keyTrack: 0.8, q: 1.8, envAmount: 2200, envTime: 0.08, velToCutoff: 1500, envVel: 0.6,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.005, attackKey: 0, decay: 0.2, sustain: 0.8, release: 0.22, level: 0.15,
+      vibRate: 5.6, vibCents: 9, vibDelay: 0.2,
+      trLevel: 0.02, trHp: 1200, trLp: 5000, trDecay: 0.002,
+      chorus: 0.25,
+    }),
+    hyper_saw: SUB({
+      wave1: 2, level1: 1, wave2: 2, level2: 0.9, detune2: -18, sub: 0.35, noise: 0, noiseTone: 1900, drive: 1.25,
+      voices: 7, detune: 28, spread: 0.9,
+      type: 0, cutoff: 6500, keyTrack: 0.6, q: 1.1, envAmount: 2800, envTime: 0.12, velToCutoff: 1800, envVel: 0.55,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.006, attackKey: 0, decay: 0.35, sustain: 0.82, release: 0.3, level: 0.1,
+      vibRate: 5.2, vibCents: 5, vibDelay: 0.22,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.45,
+    }),
+    pan_flute: SUB({
+      wave1: 1, level1: 1, wave2: 0, level2: 0.5, detune2: 0, sub: 0, noise: 0.045, noiseTone: 2600, drive: 1,
+      voices: 1, detune: 0, spread: 0,
+      type: 0, cutoff: 5500, keyTrack: 0.9, q: 0.8, envAmount: -600, envTime: 0.12, velToCutoff: 800, envVel: 0.5,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.045, attackKey: 0.1, decay: 0.15, sustain: 0.9, release: 0.25, level: 0.16,
+      vibRate: 5.4, vibCents: 11, vibDelay: 0.25,
+      trLevel: 0.03, trHp: 2200, trLp: 6000, trDecay: 0.008,
+      chorus: 0.15,
+    }),
+    synth_pluck: SUB({
+      wave1: 2, level1: 1, wave2: 3, level2: 0.7, detune2: 12, sub: 0.15, noise: 0, noiseTone: 1900, drive: 1.15,
+      voices: 3, detune: 8, spread: 0.6,
+      type: 0, cutoff: 850, keyTrack: 0.7, q: 2.1, envAmount: 4800, envTime: 0.07, velToCutoff: 1800, envVel: 0.75,
+      lfoRate: 0, lfoDepth: 0,
+      attack: 0.001, attackKey: 0, decay: 0.22, sustain: 0.04, release: 0.18, level: 0.16,
+      vibRate: 0, vibCents: 0, vibDelay: 0,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.2,
+    }),
   },
   chorus: {
     choir_vox: SUB({
@@ -980,6 +1083,22 @@ export const FACTORY_PATCHES = {
       vibRate: 0, vibCents: 0, vibDelay: 0.2,
       trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
       chorus: 0.4,
+    }),
+    analog_warmth: SUB({
+      wave1: 2, level1: 1, wave2: 1, level2: 0.8, detune2: 14, sub: 0.4, noise: 0.005, noiseTone: 1800, drive: 1.05,
+      voices: 5, detune: 16, spread: 0.85,
+      type: 0, cutoff: 1100, keyTrack: 0.5, q: 0.75, envAmount: 1400, envTime: 0.6, velToCutoff: 800, envVel: 0.4,
+      lfoRate: 0.14, lfoDepth: 220,
+      attack: 0.25, attackKey: 0, decay: 0.7, sustain: 0.88, release: 1.1, level: 0.095,
+      vibRate: 4.8, vibCents: 6, vibDelay: 0.35,
+      trLevel: 0, trHp: 1000, trLp: 6000, trDecay: 0.0015,
+      chorus: 0.7,
+    }),
+    dream_space: FM({
+      ratio: 2.01, index: 3.8, indexDecay: 0.8, indexVel: 0.9,
+      otRatio: 6.02, otLevel: 0.25, otDecay: 1.2,
+      attack: 0.15, decay: 2.8, decayAdd: 0.8, sustain: 0.45, release: 1.5, level: 0.13, velCurve: 0.85,
+      panSpread: 0.45, chorus: 0.65,
     }),
   },
 };
@@ -1309,11 +1428,17 @@ function synthKick(sr, p, rand, key = 'kick') {
     const t = i / sr;
     const f = p.f1 + (p.f0 - p.f1) * Math.exp(-t / p.pt);
     phase += (2 * Math.PI * f) / sr;
-    out[i] = Math.sin(phase) * Math.exp(-t / p.dec);
+    const harm = p.harm ? Math.sin(phase * 2) * p.harm * Math.exp(-t / (p.dec * 0.35)) : 0;
+    out[i] = (Math.sin(phase) + harm) * Math.exp(-t / p.dec);
   }
   if (p.click) { // beater / click transient
-    const cn = Math.floor(0.005 * sr);
-    for (let i = 0; i < cn && i < n; i++) out[i] += (rand() * 2 - 1) * Math.exp(-i / (0.0011 * sr)) * p.click;
+    const cn = Math.floor(Math.min(0.006 * sr, n));
+    const clickFreq = p.clickFreq || 2800;
+    for (let i = 0; i < cn; i++) {
+      const t = i / sr;
+      const beater = Math.sin(2 * Math.PI * clickFreq * t) * 0.55 + (rand() * 2 - 1) * 0.45;
+      out[i] += beater * Math.exp(-i / (0.0011 * sr)) * p.click;
+    }
   }
   if (p.drive) applyDrive(out, p.drive);
   if (p.lp) biquadApply(out, sr, "lowpass", p.lp, 0.7);
@@ -1339,14 +1464,16 @@ function synthSnare(sr, p, rand, key = 'snare') {
     fadeIn(out, sr, 0.6);
     return normalizeLoudness(out, sr, key, p.peak);
   }
-  // shell: two detuned partials with a fast pitch settle
-  let ph1 = 0, ph2 = 0;
+  // shell: two or three detuned partials with a fast pitch settle
+  let ph1 = 0, ph2 = 0, ph3 = 0;
   for (let i = 0; i < n; i++) {
     const t = i / sr;
-    const bend = 1 + 0.06 * Math.exp(-t / 0.03);
+    const bend = 1 + 0.07 * Math.exp(-t / 0.03);
     ph1 += (2 * Math.PI * p.tone * bend) / sr;
     ph2 += (2 * Math.PI * p.tone * 1.78 * bend) / sr;
-    out[i] = (Math.sin(ph1) * 0.6 + Math.sin(ph2) * 0.35) * Math.exp(-t / 0.055) * p.toneAmt;
+    if (p.tone3) ph3 += (2 * Math.PI * p.tone * 2.45 * bend) / sr;
+    const tones = Math.sin(ph1) * 0.6 + Math.sin(ph2) * 0.35 + (p.tone3 ? Math.sin(ph3) * 0.18 : 0);
+    out[i] = tones * Math.exp(-t / 0.055) * p.toneAmt;
   }
   // wires: snappy dual-stage noise
   const noiz = new Float32Array(n);
@@ -1354,10 +1481,14 @@ function synthSnare(sr, p, rand, key = 'snare') {
     const t = i / sr;
     noiz[i] = (rand() * 2 - 1) * (Math.exp(-t / 0.012) * 0.7 + Math.exp(-t / p.ndec) * 0.55);
   }
-  biquadApply(noiz, sr, "bandpass", 1800, 0.6);
+  biquadApply(noiz, sr, "bandpass", p.bp || 1800, 0.65);
   biquadApply(noiz, sr, "highpass", p.hp, 0.75);
   for (let i = 0; i < n; i++) out[i] += noiz[i] * p.noiseAmt * 2.2;
-  applyDrive(out, 1.35);
+  if (p.snap) {
+    const sn = Math.min(n, Math.floor(0.005 * sr));
+    for (let i = 0; i < sn; i++) out[i] += (rand() * 2 - 1) * Math.exp(-i / (0.0009 * sr)) * p.snap;
+  }
+  applyDrive(out, p.drive || 1.35);
   if (p.lp) biquadApply(out, sr, "lowpass", p.lp, 0.7);
   if (p.bits) bitcrush(out, p.bits);
   fadeIn(out, sr, 0.6);
@@ -1500,23 +1631,23 @@ function synthTom(sr, p, base, rand, key = 'tom') {
 
 const DRUM_PARAMS = {
   acoustic: {
-    kick: { f0: 165, f1: 54, pt: 0.035, dec: 0.17, click: 0.5, drive: 1.5, peak: 0.85 },
-    snare: { tone: 196, hp: 1000, ndec: 0.14, toneAmt: 0.7, noiseAmt: 1, peak: 0.78 },
-    hat: { base: 40, bp: 10000, hp: 7200, noiseMix: 0.3, peak: 0.42, peakOpen: 0.4 },
+    kick: { f0: 175, f1: 52, pt: 0.028, dec: 0.18, click: 0.65, clickFreq: 3400, harm: 0.22, drive: 1.6, peak: 0.85 },
+    snare: { tone: 205, hp: 1100, bp: 2200, ndec: 0.15, toneAmt: 0.75, tone3: true, snap: 0.5, noiseAmt: 1.05, peak: 0.78 },
+    hat: { base: 42, bp: 9800, hp: 7400, noiseMix: 0.55, peak: 0.42, peakOpen: 0.4 },
     crash: { base: 62, hp: 4200, len: 1.5, peak: 0.5 },
     tom: { dec: 0.3, peak: 0.66 },
   },
   "808": {
-    kick: { f0: 120, f1: 41, pt: 0.05, dec: 0.55, click: 0.16, drive: 2.4, peak: 0.9 },
-    snare: { tone: 180, hp: 1600, ndec: 0.1, toneAmt: 0.5, noiseAmt: 1, peak: 0.74 },
+    kick: { f0: 120, f1: 41, pt: 0.05, dec: 0.65, click: 0.16, clickFreq: 1400, drive: 2.4, peak: 0.9 },
+    snare: { tone: 178, hp: 1600, bp: 1600, ndec: 0.11, toneAmt: 0.55, snap: 0.25, noiseAmt: 1.05, peak: 0.74 },
     hat: { base: 40, bp: 10500, hp: 8200, noiseMix: 0, peak: 0.38, peakOpen: 0.36 },
     crash: { base: 58, hp: 5200, len: 1.9, peak: 0.46 },
     tom: { dec: 0.48, peak: 0.68 },
   },
   electronic: {
-    kick: { f0: 210, f1: 48, pt: 0.02, dec: 0.15, click: 0.8, drive: 1.9, peak: 0.9 },
-    snare: { tone: 220, hp: 1400, ndec: 0.19, toneAmt: 0.62, noiseAmt: 1.05, peak: 0.8 },
-    hat: { base: 44, bp: 9800, hp: 7800, noiseMix: 0.15, peak: 0.42, peakOpen: 0.4 },
+    kick: { f0: 225, f1: 48, pt: 0.018, dec: 0.16, click: 0.85, clickFreq: 3200, harm: 0.1, drive: 2.1, peak: 0.9 },
+    snare: { tone: 220, hp: 1400, bp: 2000, ndec: 0.19, toneAmt: 0.62, snap: 0.55, noiseAmt: 1.05, peak: 0.8 },
+    hat: { base: 44, bp: 9800, hp: 7800, noiseMix: 0.18, peak: 0.42, peakOpen: 0.4 },
     crash: { base: 66, hp: 4600, len: 1.35, peak: 0.5 },
     tom: { dec: 0.24, peak: 0.66 },
   },
@@ -1528,8 +1659,8 @@ const DRUM_PARAMS = {
     tom: { dec: 0.26, peak: 0.5 },
   },
   lofi: {
-    kick: { f0: 130, f1: 44, pt: 0.04, dec: 0.2, click: 0.3, drive: 2.8, lp: 1500, bits: 10, peak: 0.82 },
-    snare: { tone: 175, hp: 900, ndec: 0.13, toneAmt: 0.7, noiseAmt: 0.9, lp: 3800, bits: 9, peak: 0.7 },
+    kick: { f0: 135, f1: 45, pt: 0.04, dec: 0.22, click: 0.35, clickFreq: 1800, harm: 0.15, drive: 2.9, lp: 1600, bits: 10, peak: 0.82 },
+    snare: { tone: 175, hp: 850, bp: 1700, ndec: 0.14, toneAmt: 0.72, snap: 0.4, noiseAmt: 0.95, lp: 3600, bits: 9, peak: 0.7 },
     hat: { base: 40, bp: 8600, hp: 6100, noiseMix: 0.25, lp: 7600, bits: 9, peak: 0.34, peakOpen: 0.32 },
     crash: { base: 60, hp: 4000, len: 1.2, lp: 6800, peak: 0.4 },
     tom: { dec: 0.26, lp: 3200, peak: 0.58 },
@@ -1537,26 +1668,26 @@ const DRUM_PARAMS = {
   // 909: the techno workhorse — punchy solid kick, sizzling noise-forward
   // snare, and noisy (not metallic-cluster) hats.
   "909": {
-    kick: { f0: 220, f1: 49, pt: 0.022, dec: 0.34, click: 0.62, drive: 2.1, peak: 0.9 },
-    snare: { tone: 245, hp: 1250, ndec: 0.17, toneAmt: 0.55, noiseAmt: 1.25, peak: 0.8 },
-    hat: { base: 46, bp: 11200, hp: 8800, noiseMix: 0.6, peak: 0.42, peakOpen: 0.4 },
+    kick: { f0: 240, f1: 50, pt: 0.02, dec: 0.32, click: 0.75, clickFreq: 2600, harm: 0.14, drive: 2.2, peak: 0.9 },
+    snare: { tone: 245, hp: 1250, bp: 1950, ndec: 0.17, toneAmt: 0.55, snap: 0.6, noiseAmt: 1.25, peak: 0.8 },
+    hat: { base: 46, bp: 11200, hp: 8800, noiseMix: 0.7, peak: 0.42, peakOpen: 0.4 },
     crash: { base: 70, hp: 5000, len: 1.7, peak: 0.5 },
     tom: { dec: 0.38, peak: 0.66 },
   },
   // Trap / drill: long saturated 808 sub kick, tight cracking snare, bright
   // metallic closed hats built for fast rolls, long dark crash.
   trap: {
-    kick: { f0: 105, f1: 35, pt: 0.06, dec: 0.85, click: 0.22, drive: 3.2, peak: 0.92 },
-    snare: { tone: 210, hp: 2100, ndec: 0.08, toneAmt: 0.45, noiseAmt: 1.15, peak: 0.78 },
-    hat: { base: 48, bp: 12200, hp: 9500, noiseMix: 0.08, peak: 0.4, peakOpen: 0.38 },
+    kick: { f0: 110, f1: 36, pt: 0.065, dec: 0.92, click: 0.25, clickFreq: 2200, drive: 3.4, peak: 0.92 },
+    snare: { tone: 210, hp: 2100, bp: 2200, ndec: 0.08, toneAmt: 0.45, snap: 0.35, noiseAmt: 1.15, peak: 0.78 },
+    hat: { base: 48, bp: 12200, hp: 9500, noiseMix: 0.12, peak: 0.4, peakOpen: 0.38 },
     crash: { base: 64, hp: 5600, len: 2.2, peak: 0.46 },
     tom: { dec: 0.55, lp: 6000, peak: 0.68 },
   },
   // 80s synthwave: punchy gated kick, the huge long noisy snare, and big
   // rounded hex-pad style toms.
   synthwave: {
-    kick: { f0: 190, f1: 52, pt: 0.024, dec: 0.24, click: 0.55, drive: 1.8, lp: 9000, peak: 0.88 },
-    snare: { tone: 172, hp: 700, ndec: 0.26, toneAmt: 0.65, noiseAmt: 1.3, lp: 9500, peak: 0.82 },
+    kick: { f0: 195, f1: 52, pt: 0.024, dec: 0.25, click: 0.58, clickFreq: 2400, harm: 0.12, drive: 1.9, lp: 9000, peak: 0.88 },
+    snare: { tone: 172, hp: 700, bp: 1750, ndec: 0.26, toneAmt: 0.65, snap: 0.55, noiseAmt: 1.3, lp: 9500, peak: 0.82 },
     hat: { base: 42, bp: 10200, hp: 7600, noiseMix: 0.35, peak: 0.4, peakOpen: 0.38 },
     crash: { base: 60, hp: 4400, len: 1.6, peak: 0.48 },
     tom: { dec: 0.5, lp: 7800, peak: 0.7 },
@@ -1564,9 +1695,9 @@ const DRUM_PARAMS = {
   // Afrobeats / amapiano: round boomy kick, short woody tonal snare (log-drum
   // adjacent), shaker-like hats, percussion-forward toms.
   afrobeats: {
-    kick: { f0: 135, f1: 57, pt: 0.03, dec: 0.28, click: 0.18, drive: 1.5, peak: 0.85 },
-    snare: { tone: 240, hp: 1500, ndec: 0.07, toneAmt: 0.85, noiseAmt: 0.6, peak: 0.7 },
-    hat: { base: 39, bp: 9200, hp: 6400, noiseMix: 0.62, peak: 0.36, peakOpen: 0.34 },
+    kick: { f0: 140, f1: 58, pt: 0.035, dec: 0.3, click: 0.25, clickFreq: 1600, harm: 0.38, drive: 1.5, peak: 0.85 },
+    snare: { tone: 255, hp: 1500, bp: 2500, ndec: 0.07, toneAmt: 0.88, snap: 0.65, noiseAmt: 0.55, peak: 0.7 },
+    hat: { base: 39, bp: 9200, hp: 6400, noiseMix: 0.75, peak: 0.36, peakOpen: 0.34 },
     crash: { base: 56, hp: 4000, len: 1.2, peak: 0.4 },
     tom: { dec: 0.42, peak: 0.7 },
   },

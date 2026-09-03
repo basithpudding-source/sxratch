@@ -156,6 +156,10 @@ export const DAW = (() => {
       pipe_organ: "Church pipe organ",
       accordion: "Musette accordion",
       synth_strings: "80s string machine",
+      rhodes_mk1: "Rhodes Mark I",
+      wurlitzer: "Wurlitzer 200A",
+      kalimba: "African kalimba",
+      vibraphone: "Jazz vibraphone",
     },
     bass: {
       electric: "Vintage precision bass",
@@ -170,6 +174,10 @@ export const DAW = (() => {
       reese_bass: "DnB reese bass",
       fretless_bass: "Fretless mwah bass",
       synthwave_bass: "80s square chug bass",
+      moog_bass: "Analog Minimoog bass",
+      sub_boom: "808 Sub boom bass",
+      dub_reggae: "Jamaican dub bass",
+      funk_synth: "Parliament funk bass",
     },
     lead: {
       synth: "Classic saw lead",
@@ -186,6 +194,10 @@ export const DAW = (() => {
       harmonica: "Blues harmonica",
       theremin: "Theremin sine",
       vocal_lead: "Talky wah lead",
+      analog_saw_lead: "Analog 70s saw lead",
+      hyper_saw: "Trance hyper-saw lead",
+      pan_flute: "Andean pan flute",
+      synth_pluck: "Bright synth pluck",
     },
     chorus: {
       choir_vox: "Vocal choir ensemble",
@@ -197,6 +209,8 @@ export const DAW = (() => {
       shimmer_bells: "Shimmer bell pad",
       breath_pad: "Airy breath pad",
       brass_pad: "Cinematic brass pad",
+      analog_warmth: "Vintage analog warmth pad",
+      dream_space: "Dream space atmosphere",
     },
   };
   const TRACK_COLORS = ["var(--sx-lane-bass)", "var(--sx-lane-chords)", "var(--sx-brand-b)", "var(--sx-hot)", "var(--sx-lane-drums)", "var(--sx-purple)"];
@@ -267,7 +281,7 @@ export const DAW = (() => {
   // The sound/device inspector is the most useful default. The keyboard is a
   // deliberate performance surface rather than consuming launch-space before
   // the user has selected an instrument.
-  let bottom = { open: ["editor"], h: BOTTOM_DEF, reopen: ["editor"], headsW: 0, inputCollapsed: false };
+  let bottom = { open: ["editor"], h: BOTTOM_DEF, reopen: ["editor"], headsW: 0, inputCollapsed: false, inspectorOpen: true };
   let heldKeys = new Map();                // code → {trackId, midi, tOn}
   let inputDevices = [];
   let preferredInputId = null;             // remembered until an audio track is chosen/created
@@ -1189,6 +1203,30 @@ export const DAW = (() => {
     const utilityGroup = el("div", "daw-transport-group daw-transport-utility");
     utilityGroup.append(guideBtn, shortcutsBtn, themeShortcut, settingsShortcut, file);
 
+    const panelsGroup = el("div", "daw-transport-group daw-transport-panels");
+    const edNav = iconBtn("daw-tbtn", "🎹 Editor", "Toggle Piano Roll / Waveform Editor");
+    edNav.addEventListener("click", () => toggleBottomPanel("editor"));
+    const devNav = iconBtn("daw-tbtn", "🎛 Devices", "Toggle Sound Designer & Device Chain");
+    devNav.addEventListener("click", () => toggleBottomPanel("chain"));
+    const keysNav = iconBtn("daw-tbtn", "⌨ Keys", "Toggle Virtual Keyboard & Drum Pads");
+    keysNav.addEventListener("click", () => toggleBottomPanel("keys"));
+    const mixNav = iconBtn("daw-tbtn", "🎚 Mixer", "Toggle Studio Mixer");
+    mixNav.addEventListener("click", () => toggleBottomPanel("mixer"));
+    const inNav = iconBtn("daw-tbtn", "🎙 Inputs", "Toggle Audio Inputs Rail");
+    inNav.addEventListener("click", () => {
+      bottom.inputCollapsed = !bottom.inputCollapsed;
+      saveBottomState();
+      renderInputRack();
+      applyPanels();
+      window.dispatchEvent(new Event("resize"));
+    });
+    panelsGroup.append(edNav, devNav, keysNav, mixNav, inNav);
+    el_.navEditor = edNav;
+    el_.navDevices = devNav;
+    el_.navKeys = keysNav;
+    el_.navMixer = mixNav;
+    el_.navInputs = inNav;
+
     tp.append(
       brand,
       playbackGroup,
@@ -1197,6 +1235,7 @@ export const DAW = (() => {
       toolsGroup,
       gridGroup,
       historyGroup,
+      panelsGroup,
       el("span", "daw-flex"),
       outputGroup,
       utilityGroup,
@@ -1364,7 +1403,9 @@ export const DAW = (() => {
     };
 
     if (bottom.headsW) shell.style.setProperty("--daw-heads-w", bottom.headsW + "px");
-    if (bottom.inputCollapsed) shell.classList.add("input-collapsed");
+    shell.classList.toggle("input-collapsed", !!bottom.inputCollapsed);
+    shell.classList.toggle("inspector-open", !!bottom.inspectorOpen);
+    shell.classList.toggle("inspector-collapsed", !bottom.inspectorOpen);
     attachRulerInteractions(ruler);
     attachLaneInteractions(lanes);
     attachTimelineDrop(tl);
@@ -1424,8 +1465,8 @@ export const DAW = (() => {
       if (!bottom.reopen.length) bottom.reopen = ["chain"];
       bottom.h = Math.max(BOTTOM_MIN, Math.min(BOTTOM_MAX, +s.h || BOTTOM_DEF));
       const hw = Math.round(+s.headsW || 0);
-      bottom.headsW = hw >= 156 && hw <= 420 ? hw : 0;
       bottom.inputCollapsed = typeof s.inputCollapsed === "boolean" ? s.inputCollapsed : false;
+      bottom.inspectorOpen = typeof s.inspectorOpen === "boolean" ? s.inspectorOpen : true;
     } catch {}
   }
   function saveBottomState() {
@@ -1434,6 +1475,7 @@ export const DAW = (() => {
         open: sanitizeOpen(bottom.open), reopen: sanitizeOpen(bottom.reopen),
         h: bottom.h, headsW: bottom.headsW || 0,
         inputCollapsed: !!bottom.inputCollapsed,
+        inspectorOpen: !!bottom.inspectorOpen,
       }));
     } catch {}
   }
@@ -1451,6 +1493,17 @@ export const DAW = (() => {
         const tr = song.tracks.find((t) => (t.regions || []).includes(candidate));
         if (tr) { openEditor(tr, candidate); return; }
       }
+      if (primary && primary.kind !== "audio") {
+        pushState();
+        const r = makeRegion(primary, 0, beatsPerBar() * 4, {
+          name: primary.kind === "drums" ? "Drum Pattern" : "MIDI Region",
+        });
+        sel = [{ trackId: primary.id, regionId: r.id }];
+        renderTimeline(); save();
+        openEditor(primary, r);
+        _toast("Created initial region and opened editor", { severity: "ok" });
+        return;
+      }
       _toast("Select or double-click a region to edit it");
       return;
     }
@@ -1465,8 +1518,14 @@ export const DAW = (() => {
       }
       if (id === "mixer") bottom.h = Math.max(bottom.h, 280);
       else if (id === "editor") bottom.h = Math.max(bottom.h, BOTTOM_DEF);
+      else if (id === "chain") bottom.h = Math.max(bottom.h, BOTTOM_DEF);
     }
     applyPanels(); saveBottomState();
+  }
+
+  function openBottomPanel(id) {
+    if (!panelIsOpen(id)) toggleBottomPanel(id);
+    else { applyPanels(); saveBottomState(); }
   }
 
   /** Close the piano roll; any other open panels keep their space. */
@@ -1500,6 +1559,9 @@ export const DAW = (() => {
     el_.shell.style.setProperty("--daw-bmax", budget + "px");
     el_.shell.classList.toggle("bottom-collapsed", openSet.size === 0);
     el_.shell.classList.toggle("utility-open", [...openSet].some((panel) => panel !== "editor"));
+    el_.shell.classList.toggle("input-collapsed", !!bottom.inputCollapsed);
+    el_.shell.classList.toggle("inspector-open", !!bottom.inspectorOpen);
+    el_.shell.classList.toggle("inspector-collapsed", !bottom.inspectorOpen);
     el_.tabs.querySelectorAll(".daw-tab").forEach((b) => {
       const on = openSet.has(b.dataset.panel);
       b.classList.toggle("active", on);
@@ -1518,6 +1580,20 @@ export const DAW = (() => {
     el_.chToggle?.classList.toggle("active", openSet.has("chain"));
     el_.mixerToggle?.setAttribute("aria-pressed", openSet.has("mixer") ? "true" : "false");
     el_.mixerToggle?.classList.toggle("active", openSet.has("mixer"));
+    el_.navEditor?.setAttribute("aria-pressed", openSet.has("editor") ? "true" : "false");
+    el_.navEditor?.classList.toggle("active", openSet.has("editor"));
+    el_.navDevices?.setAttribute("aria-pressed", openSet.has("chain") ? "true" : "false");
+    el_.navDevices?.classList.toggle("active", openSet.has("chain"));
+    el_.navKeys?.setAttribute("aria-pressed", openSet.has("keys") ? "true" : "false");
+    el_.navKeys?.classList.toggle("active", openSet.has("keys"));
+    el_.navMixer?.setAttribute("aria-pressed", openSet.has("mixer") ? "true" : "false");
+    el_.navMixer?.classList.toggle("active", openSet.has("mixer"));
+    el_.navInputs?.setAttribute("aria-pressed", !bottom.inputCollapsed ? "true" : "false");
+    el_.navInputs?.classList.toggle("active", !bottom.inputCollapsed);
+    el_.headsScroll?.querySelectorAll(".daw-head").forEach((headEl) => {
+      const isTrActive = +headEl.dataset.track === activeTrackId;
+      headEl.querySelector(".daw-device-toggle")?.classList.toggle("active", isTrActive && openSet.has("chain"));
+    });
     // The editor DOM is only valid while visible: model edits made while it was
     // hidden (quantize, snap change) skip its re-render, so a reopen — via tab,
     // gutter drag or dblclick — must rebuild it, whatever path un-hid it.
@@ -1804,8 +1880,19 @@ export const DAW = (() => {
       name.setAttribute("aria-label", "Track name");
       name.addEventListener("change", () => { pushState(); t.name = name.value.slice(0, 24) || t.name; renderAll(); save(); });
       name.addEventListener("pointerdown", () => setActiveTrack(t.id));
-      const kind = el("span", "daw-head-kind",
-        t.kind === "audio" ? "Audio input" : t.kind === "drums" ? (KIT_LABELS[t.kit] || "Studio kit") : (SOUND_LABELS[t.family]?.[t.sound] || t.family));
+      const kindLabel = t.kind === "audio"
+        ? "Audio input"
+        : t.kind === "drums"
+          ? (KIT_LABELS[t.kit] || "Studio kit")
+          : (SOUND_LABELS[t.family]?.[t.sound] || t.family);
+      const kind = el("button", "daw-head-kind daw-head-kind-btn", kindLabel);
+      kind.type = "button";
+      kind.title = `Click to edit sound & devices for ${t.name}`;
+      kind.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setActiveTrack(t.id);
+        openBottomPanel("chain");
+      });
       const title = el("div", "daw-head-title");
       title.append(name, kind);
       const row = el("div", "daw-head-btns");
@@ -1820,6 +1907,10 @@ export const DAW = (() => {
         mk("daw-mute", "M", `Mute ${t.name}`, t.mute, () => { pushState(); t.mute = !t.mute; engine.refreshTrackParams(); renderHeads(); save(); }),
         mk("daw-solo", "S", `Solo ${t.name}`, t.solo, () => { pushState(); t.solo = !t.solo; engine.refreshTrackParams(); renderHeads(); save(); }),
         mk("daw-arm", "ARM", `Arm ${t.name} for recording`, t.armed, () => armTrack(t)),
+        mk("daw-device-toggle", "🎛", `Open sound designer & devices for ${t.name}`, panelIsOpen("chain") && t.id === activeTrackId, () => {
+          setActiveTrack(t.id);
+          openBottomPanel("chain");
+        }),
         mk("daw-auto-toggle", "A", `Show automation for ${t.name}`, t.automationVisible, () => {
           // A pure VIEW toggle: never seed points here. A seeded 1-point lane
           // would permanently pin the parameter (automationValueAt returns a
@@ -1895,6 +1986,11 @@ export const DAW = (() => {
       meter.appendChild(el("i"));
       h.append(strip, title, row, meter, dupBtn, delBtn);
       h.addEventListener("pointerdown", () => setActiveTrack(t.id));
+      h.addEventListener("dblclick", (e) => {
+        if (e.target.closest("input, button, select")) return;
+        setActiveTrack(t.id);
+        openBottomPanel("chain");
+      });
       wrap.appendChild(h);
     }
   }
@@ -5766,7 +5862,12 @@ export const DAW = (() => {
     const top = el("div", "daw-inspector-head");
     top.appendChild(el("strong", null, track?.kind === "midi" ? "Sound designer" : "Track controls"));
     const close = iconBtn("daw-inspector-close", "×", "Collapse sound designer");
-    close.addEventListener("click", () => panel.closest(".daw")?.classList.toggle("inspector-collapsed"));
+    close.addEventListener("click", () => {
+      bottom.inspectorOpen = false;
+      saveBottomState();
+      applyPanels();
+      window.dispatchEvent(new Event("resize"));
+    });
     top.appendChild(close);
     panel.appendChild(top);
     if (!track) {
