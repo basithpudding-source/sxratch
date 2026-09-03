@@ -2,23 +2,57 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <meta name="theme-color" content="#0a0b10" />
-  <title>Sxratch/Pad — browser DJ</title>
+  <!-- Pinch-zoom stays available (low-vision users); the performance surfaces
+       opt out individually via touch-action, not by disabling zoom app-wide. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0f1c" />
+  <title>Sxratch / Pad — Browser DJ &amp; Multitrack Studio</title>
+  <meta name="description" content="Sxratch / Pad — a two-deck scratch &amp; mix DJ rig with a multitrack recording studio, entirely in your browser. Works on desktop and mobile." />
+  <meta property="og:title" content="Sxratch / Pad — Browser DJ &amp; Multitrack Studio" />
+  <meta property="og:description" content="Two decks, a real scratch engine, and a multitrack studio for MIDI, drums, and audio — entirely in your browser." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://sxratchpad.com/" />
+  <meta property="og:image" content="https://sxratchpad.com/icon-512.png" />
+  <meta name="twitter:card" content="summary" />
+  <link rel="canonical" href="https://sxratchpad.com/" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-192.png" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Sxratch" />
+  <!-- Stamp the RESOLVED theme BEFORE the stylesheets paint. `const config =
+       loadConfig()` in app.js runs at module scope — i.e. after first
+       paint — so without this a user who forced Light on a dark-preferring
+       OS would get a dark flash on every load. "Auto" is resolved here via
+       matchMedia (and again by js/theme.js on OS changes): tokens.css keys
+       its single light block off [data-theme="light"], never a media query.
+       Note the storage envelope: the value lives under `.data` (js/store.js). -->
+  <script>
+    var _t = null;
+    try {
+      var _r = localStorage.getItem("sxratch.config");
+      var _d = _r ? JSON.parse(_r) : null;
+      _t = _d && (_d.data || _d).theme;
+    } catch (e) {}
+    try {
+      if (_t !== "light" && _t !== "dark")
+        _t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      document.documentElement.dataset.theme = _t;
+    } catch (e) {}
+  </script>
+  <link rel="stylesheet" href="css/tokens.css" />
   <link rel="stylesheet" href="css/styles.css" />
-  <link rel="stylesheet" href="css/studio.css" />
+  <link rel="stylesheet" href="css/daw.css" />
+  <link rel="stylesheet" href="css/decks.css" />
 </head>
 <body>
+  <a id="skip-link" class="skip-link" href="#console">Skip to the decks</a>
   <!-- Audio needs a user gesture to start -->
   <div id="start-overlay">
     <div class="start-card">
-      <h1 class="brand">SXRATCH/PAD</h1>
+      <h1 class="brand"><span class="brand-s">SXRATCH</span><span class="brand-sep">/</span><span class="brand-p">PAD</span></h1>
       <p class="tagline">Two decks. One surface. Scratch with your trackpad or thumbs.</p>
       <button id="start-btn">Enter the booth</button>
       <p class="hint">Headphones recommended · works on desktop &amp; mobile</p>
@@ -26,23 +60,30 @@
   </div>
 
   <header id="topbar">
-    <div class="brandnav" role="tablist">
-      <button id="nav-decks" class="brand-seg active" title="Decks — scratch &amp; mix">SXRATCH</button>
-      <span class="brand-slash">/</span>
-      <button id="nav-studio" class="brand-seg" title="PAD — Studio Song Builder">PAD</button>
-    </div>
+    <nav class="brandnav" aria-label="View">
+      <button id="nav-decks" class="brand-seg active" title="Decks — scratch &amp; mix" aria-current="page">SXRATCH</button>
+      <span class="brand-slash" aria-hidden="true">/</span>
+      <button id="nav-studio" class="brand-seg" title="PAD Studio — write, record and arrange">STUDIO</button>
+    </nav>
     <div class="master deck-only">
       <label for="master-vol">MASTER</label>
       <input id="master-vol" type="range" min="0" max="1" step="0.01" value="0.9" />
     </div>
-    <button id="stack-btn" class="deck-only" title="Stacked beat-match waveform view">⤢</button>
+    <button id="drawer-btn" class="deck-only" title="Show / hide the pads &amp; FX drawer">🎛 Sampler/FX</button>
     <button id="practice-btn" class="deck-only" title="Practice mode — guided tutorials">🎓 Practice</button>
     <button id="record-btn" class="deck-only" title="Record mix">🔴 REC</button>
-    <button id="settings-btn" class="deck-only" title="Customize keys &amp; gestures">⚙</button>
-    <button id="help-btn" title="Controls">?</button>
+    <!-- Not .deck-only: the theme applies to PAD too. -->
+    <!-- Revealed by app.js when the app is installable (or on iOS Safari,
+         where installing is manual and needs instructions). -->
+    <button id="install-btn" hidden title="Install Sxratch on this device">⤓ Install</button>
+    <button id="theme-btn" title="Appearance — follow system / light / dark" aria-label="Appearance: follow system">◐</button>
+    <!-- Not .deck-only: remapping keys/gestures should be reachable from the studio too. -->
+    <button id="settings-btn" title="Customize keys &amp; gestures" aria-label="Settings — keys and gestures">⚙</button>
+    <button id="help-btn" title="Controls" aria-label="Help — controls and shortcuts">?</button>
   </header>
 
-  <main id="console">
+  <main id="console" tabindex="-1">
+    <h1 class="sr-only">Sxratch — DJ decks</h1>
     <!-- Waveforms + track meta, left/right -->
     <section class="decks-top">
       <div class="deck-meta" data-deck="A">
@@ -121,6 +162,11 @@
         <div class="rail-label">TEMPO</div>
         <div class="fader v tempo" id="tempo-A" data-deck="A"></div>
         <div class="rail-read" id="tempo-A-read">±0.0%</div>
+        <div class="bend-row" data-deck="A">
+          <button class="btn bend-btn bend-down" data-deck="A" type="button" title="Pitch bend − (nudge slower)">−</button>
+          <button class="btn bend-btn bend-range" data-deck="A" type="button" title="Tempo range (click to cycle ±6%, ±8%, ±10%, ±16%, ±100%)">±8%</button>
+          <button class="btn bend-btn bend-up" data-deck="A" type="button" title="Pitch bend ＋ (nudge faster)">＋</button>
+        </div>
       </div>
 
       <div class="jog-pad" id="pad-A" data-deck="A">
@@ -136,8 +182,6 @@
         </div>
         <div class="pad-hint">drag ← → to scratch</div>
       </div>
-
-      <div class="center-divider"></div>
 
       <div class="jog-pad" id="pad-B" data-deck="B">
         <div class="armed-tag">DECK B — left&nbsp;Ctrl</div>
@@ -157,6 +201,11 @@
         <div class="rail-label">TEMPO</div>
         <div class="fader v tempo" id="tempo-B" data-deck="B"></div>
         <div class="rail-read" id="tempo-B-read">±0.0%</div>
+        <div class="bend-row" data-deck="B">
+          <button class="btn bend-btn bend-down" data-deck="B" type="button" title="Pitch bend − (nudge slower)">−</button>
+          <button class="btn bend-btn bend-range" data-deck="B" type="button" title="Tempo range (click to cycle ±6%, ±8%, ±10%, ±16%, ±100%)">±8%</button>
+          <button class="btn bend-btn bend-up" data-deck="B" type="button" title="Pitch bend ＋ (nudge faster)">＋</button>
+        </div>
       </div>
     </section>
 
@@ -215,6 +264,7 @@
           <button class="btn fx-on" data-deck="A">FX ON</button>
         </div>
         <div class="vfader">
+          <button class="btn pfl-btn" data-deck="A" type="button" title="Deck A Headphone Cue (PFL)">🎧 CUE</button>
           <div class="vol-row">
             <div class="vu" id="vu-A"></div>
             <div class="fader v vol" id="vol-A" data-deck="A"></div>
@@ -227,19 +277,12 @@
         <div class="sampler-inline">
           <div class="sampler-head">
             <span class="sampler-title">SAMPLER</span>
-            <span class="sampler-hint">click a pad to load · click to fire · ■ to stop · double-click to clear</span>
+            <span class="sampler-hint">click a pad to load · click to fire · ■ to stop · hold to clear</span>
             <button class="btn samp-stopall" id="samp-stopall" title="Stop all samples">■ STOP</button>
             <span class="samp-vol-wrap"><label>VOL</label><input id="sampler-vol" type="range" min="0" max="1" step="0.01" value="0.9" /></span>
+            <span class="cue-vol-wrap" title="Headphone cue volume & mix"><label for="hp-vol">🎧</label><input id="hp-vol" type="range" min="0" max="1" step="0.01" value="0.8" title="Headphone volume" /><label for="hp-mix">MIX</label><input id="hp-mix" type="range" min="0" max="1" step="0.01" value="0" title="Cue/Master mix" /></span>
           </div>
           <div class="sampler-pads" id="sampler-pads"></div>
-        </div>
-        <div class="visualizers-container">
-          <div class="visualizer-wrap deck-viz-wrap" data-deck="A">
-            <canvas id="viz-A" width="145" height="34"></canvas>
-          </div>
-          <div class="visualizer-wrap deck-viz-wrap" data-deck="B">
-            <canvas id="viz-B" width="145" height="34"></canvas>
-          </div>
         </div>
         <div class="crossfader-wrap">
           <div class="xf-end">A</div>
@@ -274,6 +317,7 @@
           <button class="btn fx-on" data-deck="B">FX ON</button>
         </div>
         <div class="vfader">
+          <button class="btn pfl-btn" data-deck="B" type="button" title="Deck B Headphone Cue (PFL)">🎧 CUE</button>
           <div class="vol-row">
             <div class="vu" id="vu-B"></div>
             <div class="fader v vol" id="vol-B" data-deck="B"></div>
@@ -284,13 +328,13 @@
     </section>
   </main>
 
-  <!-- PAD — Studio Song Builder -->
-  <main id="studio" hidden>
-    <div class="studio-head">
-      <h2>🎹 PAD · Song Builder</h2>
-      <p class="studio-sub">Compose a multi-track backing — chords, bass, lead &amp; drums across arranged sections — then send it to a deck to scratch &amp; mix, or download it.</p>
+  <!-- PAD — multitrack Studio -->
+  <main id="studio" tabindex="-1" hidden>
+    <div class="studio-head sr-only">
+      <h1>🎹 PAD · Studio</h1>
+      <p class="studio-sub">A multitrack studio — arrange synth, drum and audio regions on a timeline, record your own audio input, then send the mix to a deck to scratch, or download it.</p>
     </div>
-    <div id="song-builder" class="song-builder"></div>
+    <div id="daw-root" class="daw-root"></div>
   </main>
 
   <!-- URL load dialog -->
@@ -310,6 +354,7 @@
   <div id="help-dialog" class="dialog" hidden>
     <div class="dialog-card">
       <h3>How to play</h3>
+      <h4 class="help-section">SXRATCH — decks</h4>
       <ul class="help-list">
         <li><b>Scratch (trackpad):</b> hold <kbd>Ctrl</kbd> and move <b>one finger</b> up/down — no click, no second finger.
           Hold <b>right</b> Ctrl (left hand scratches) → Deck&nbsp;A; hold <b>left</b> Ctrl (right hand scratches) → Deck&nbsp;B.</li>
@@ -321,10 +366,15 @@
         <li><b>Scratch (mouse / touch):</b> press-drag left/right on a platter.</li>
         <li><b>Waveforms are interactive:</b> drag to scrub (you hear it), click to jump,
           <kbd>Shift</kbd>-click to drop a hot cue, double-click a cue to clear. <kbd>＋</kbd>/<kbd>－</kbd> zoom.</li>
-        <li><b>Hot cues:</b> <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd> Deck A, <kbd>6</kbd><kbd>7</kbd><kbd>8</kbd><kbd>9</kbd> Deck B
-          (tap to set/recall, <kbd>Shift</kbd>+ to clear).</li>
+        <li><b>Hot cues:</b> <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd> + <kbd>Z</kbd><kbd>X</kbd><kbd>C</kbd><kbd>V</kbd> Deck A,
+          <kbd>6</kbd><kbd>7</kbd><kbd>8</kbd><kbd>9</kbd> + <kbd>B</kbd><kbd>N</kbd><kbd>M</kbd><kbd>,</kbd> Deck B
+          (tap to set/recall, <kbd>Shift</kbd>+ or double-click to clear).</li>
         <li><b>Transport:</b> <kbd>Q</kbd>/<kbd>P</kbd> play, <kbd>W</kbd>/<kbd>O</kbd> jump cue, <kbd>E</kbd>/<kbd>I</kbd> set cue.
-          Each deck also has ⏮ to-start, ⏪/⏩ hold-to-rewind/forward, and <b>SYNC</b>.</li>
+          Each deck also has <b>● START</b> (to start), <b>◀◀ REW</b> / <b>▶▶ FF</b> (hold to scan), and <b>SYNC</b>.</li>
+        <li><b>Shared centre toolbar:</b> the <b>A | B</b> switch above the waveforms picks which deck
+          LINK · DBL · Presets · zoom and the LOOP row control. It follows the deck you last touched.</li>
+        <li><b>Sampler &amp; FX:</b> the <b>PADS + FX</b> button opens 8 sample pads and each deck's
+          BRAKE / SPIN + Beat FX. Map a loop to a pad with <b>TO PAD</b>.</li>
         <li><b>Both decks &amp; sync:</b> <kbd>Space</kbd> plays/pauses both at once; <kbd>T</kbd>/<kbd>Y</kbd> beat-match A→B / B→A
           (or the <b>SYNC</b> / <b>BOTH</b> buttons).</li>
         <li><b>Crossfade:</b> center fader, or ← / → keys (↓ re-centers).</li>
@@ -332,6 +382,25 @@
           <b>Double-click</b> any of them to snap back to neutral (tempo → 0%, crossfader → centre).</li>
         <li><b>Load:</b> drop a file onto a deck, click “Load file”, or paste a URL.</li>
       </ul>
+      <h4 class="help-section">PAD — studio</h4>
+      <ul class="help-list">
+        <li><b>Tracks:</b> synth (chords / bass / lead), drum kits, and audio. <b>M</b> mutes, <b>S</b> solos,
+          <b>⏺</b> arms a track for recording; <b>＋ Add track</b> lives under the headers.</li>
+        <li><b>Regions:</b> drag to move, pull an edge to resize, double-click to edit notes in the piano roll.
+          The <b>✏</b> tool draws new regions, <b>✂</b> splits at the click point, <kbd>Del</kbd> deletes the selection.</li>
+        <li><b>Record:</b> arm an <b>audio</b> track and press <b>●</b> — your mic or audio interface is captured in sync
+          while the other tracks play, and the take lands as a waveform region. Arm a <b>synth</b> track to capture
+          what you play on the keyboard instead.</li>
+        <li><b>Keyboard:</b> the on-screen keys (and <kbd>Q</kbd>–<kbd>P</kbd> with digits as sharps) play the selected
+          track live; − / ＋ shifts the octave.</li>
+        <li><b>Devices:</b> the chain panel shapes the selected track — instrument or input pick, a 5-knob EQ and a reverb,
+          plus pan, fader, mute/solo.</li>
+        <li><b>Loop:</b> drag on the bar ruler to set the range, 🔁 toggles it; click the ruler to move the playhead.</li>
+        <li><b>Undo:</b> <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> — every edit, delete and import.</li>
+        <li><b>Ship it:</b> <b>⋯ File</b> sends the mix to Deck A/B (region starts land on hot cues), downloads a WAV,
+          or exports/imports the song as JSON.</li>
+      </ul>
+      <div id="help-keys"></div>
       <div class="dialog-actions">
         <button class="btn primary" id="help-close">Got it</button>
       </div>
@@ -369,9 +438,12 @@
   <script type="module" src="js/app.js"></script>
   <script>
     // Register the service worker (no-ops on insecure origins, e.g. plain-http LAN).
-    if ("serviceWorker" in navigator) {
+    const isLocalDev = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+    if ("serviceWorker" in navigator && !isLocalDev) {
       window.addEventListener("load", () => {
-        navigator.serviceWorker.register("/sw.js").catch(() => {});
+        navigator.serviceWorker.register("/sw.js")
+          .then((reg) => { reg.update(); })
+          .catch(() => {});
       });
     }
   </script>

@@ -6,6 +6,15 @@
 // Technique + history sourced from turntablism literature (Grand Wizzard Theodore,
 // Grandmaster Flash, GrandMixer DXT, DJ QBert) — see README for references.
 
+// Lesson copy adapts to the input device: touch users are told to press-drag
+// the platter, pointer users get the trackpad grab (RIGHT Ctrl) idiom.
+import { createMetronome } from "./metronome.js";
+
+const COARSE = typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
+const GRAB = COARSE
+  ? "press and drag the platter"
+  : "hold RIGHT Ctrl and move one finger on the trackpad";
+
 /** Synthesize a simple drum loop into an AudioBuffer so users can practice
  *  immediately without uploading anything. */
 export function makeBeat(ctx, bpm = 100, bars = 24) {
@@ -46,7 +55,7 @@ export const LESSONS = [
         check: (c) => c.playing("A") },
       { text: "Nice. Press it again to pause — a DJ is always starting and stopping.",
         highlight: "#play-A", check: (c) => !c.playing("A") },
-      { text: "Now hold RIGHT Ctrl and move ONE finger up/down on Deck A. Holding Ctrl 'grabs' the record — exactly what Grand Wizzard Theodore did when he invented scratching in 1975. Give it a few nudges.",
+      { text: `Now ${GRAB} on Deck A. That 'grabs' the record — exactly what Grand Wizzard Theodore did when he invented scratching in 1975. Give it a few nudges.`,
         highlight: "#pad-A", target: 4, progress: (c) => c.scratch.A, check: (c) => c.scratch.A >= 4 },
       { text: "That hand-on-the-record control is the root of everything here. On to cue points.",
         manual: true },
@@ -100,7 +109,7 @@ export const LESSONS = [
     id: "t1", cat: "Timing", title: "On-beat scratch",
     blurb: "Scratch in time — a metronome scores every hit.",
     steps: [
-      { text: "A metronome is clicking at 100 BPM — watch the pulsing dot below. Hold RIGHT Ctrl and scratch Deck A so each stroke lands ON the click. Land 6 on the beat.",
+      { text: `A metronome is clicking at 100 BPM — watch the pulsing dot below. Scratch Deck A (${GRAB}) so each stroke lands ON the click. Land 6 on the beat.`,
         onEnter: (c) => { c.ensureBeat("A", 100); c.setCross(0); c.startTiming(100, 6); }, highlight: "#pad-A",
         progress: (c) => (c.tm ? `${c.tm.good} / ${c.tm.target} on beat` : ""), check: (c) => c.tm && c.tm.good >= c.tm.target },
       { text: "Timing is everything: a scratch on the beat sounds musical, off the beat sounds like noise. Drill with the metronome until it's automatic.",
@@ -151,7 +160,7 @@ export const LESSONS = [
     id: "s1", cat: "Scratching", title: "Baby scratch",
     blurb: "The first scratch every turntablist learns.",
     steps: [
-      { text: "The BABY SCRATCH is the foundation of all scratching. Hold RIGHT Ctrl and move one finger up & down on Deck A in steady back-and-forth strokes. Do 8.",
+      { text: `The BABY SCRATCH is the foundation of all scratching. On Deck A, ${GRAB} in steady back-and-forth strokes. Do 8.`,
         onEnter: (c) => c.ensureBeat("A", 100), highlight: "#pad-A",
         target: 8, progress: (c) => c.scratch.A, check: (c) => c.scratch.A >= 8 },
       { text: "That's it — the same move Theodore stumbled onto as a teenager. Keep your wrist loose and the rhythm even; everything else is built on this.",
@@ -273,7 +282,7 @@ export class PracticeCoach {
   playing(id) { return this.engine.decks[id].playing; }
   lowDb(id) { return this.engine.decks[id].low.gain.value; }
   effBpm(id) { return this.beatBpm[id] * (1 + this.engine.decks[id].tempo / 100); }
-  setCross(v) { this.engine.setCrossfade(v); this.ui.syncCrossfade(v); }
+  setCross(v) { this.engine.setCrossfade(v); } // UI sync fans out from engine.onCrossfade
 
   ensureBeat(deck, bpm) {
     const d = this.engine.decks[deck];
@@ -475,33 +484,16 @@ export class PracticeCoach {
 
   startMetronome(bpm) {
     this.stopMetronome();
-    const ctx = this.engine.ctx;
-    const period = 60 / bpm;
-    const t0 = ctx.currentTime + 0.12;
-    this.metro = { bpm, t0, next: t0, beat: 0, timer: null };
-    const schedule = () => {
-      while (this.metro && this.metro.next < ctx.currentTime + 0.25) {
-        this._click(this.metro.next, this.metro.beat % 4 === 0);
-        this.metro.next += period;
-        this.metro.beat++;
-      }
-      if (this.metro) this.metro.timer = setTimeout(schedule, 50);
-    };
-    schedule();
+    if (!this._metronome) {
+      // Shared scheduler (js/metronome.js) routed pre-limiter: audible AND recorded.
+      this._metronome = createMetronome(this.engine.ctx, this.engine.masterBus);
+    }
+    const t0 = this._metronome.start({ bpm });
+    this.metro = { bpm, t0 }; // grading (_gradeHit) reads metro.t0 against the audio clock
   }
   stopMetronome() {
-    if (this.metro) { clearTimeout(this.metro.timer); this.metro = null; }
-  }
-  _click(time, accent) {
-    const ctx = this.engine.ctx;
-    const osc = ctx.createOscillator();
-    const g = ctx.createGain();
-    osc.frequency.value = accent ? 1600 : 1050;
-    g.gain.setValueAtTime(0.0001, time);
-    g.gain.exponentialRampToValueAtTime(accent ? 0.5 : 0.32, time + 0.001);
-    g.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
-    osc.connect(g); g.connect(this.engine.master);
-    osc.start(time); osc.stop(time + 0.06);
+    this._metronome?.stop();
+    this.metro = null;
   }
 
   /** Grade an action against the metronome's beat grid (audio clock). */

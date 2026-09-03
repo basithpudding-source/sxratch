@@ -1,13 +1,16 @@
 // Sxratch waveform worker — owns a transferred OffscreenCanvas and does all the
 // per-frame stroking off the main thread. The main thread keeps the peak data
-// for geometry/interaction and just streams it position/cue/loop updates.
+// for geometry/interaction and just streams it position/cue/loop/grid updates.
 
 import { drawWaveform } from "./waveform-draw.js";
 
 let ctx = null;
 const s = {
-  w: 1, h: 1, bg: "transparent", color: "#37e6c8", dim: "rgba(255,255,255,0.18)",
-  peaks: null, peakCount: 0, position: 0, pixelsPerPeak: 1, cues: [], loop: null,
+  // color fallback = tokens.css --sx-brand-a (dark); real values arrive via init/theme messages
+  w: 1, h: 1, bg: "transparent", color: "#48ddd3",
+  levels: null, baseCount: 0, duration: 0, grid: null,
+  position: 0, pixelsPerPeak: 1, cues: [], loop: null,
+  ink: null,   // theme colours; null = drawWaveform's dark defaults
 };
 
 self.onmessage = (e) => {
@@ -16,16 +19,33 @@ self.onmessage = (e) => {
     case "init": {
       const canvas = m.canvas;
       ctx = canvas.getContext("2d");
-      s.color = m.color; s.dim = m.dim; s.bg = m.bg;
+      s.color = m.color; s.bg = m.bg;
+      if (m.ink) s.ink = m.ink;
       resize(canvas, m.w, m.h, m.dpr);
       break;
     }
+    // The canvas is transferred, so the main thread can never repaint it
+    // directly — a theme change HAS to arrive as a message.
+    case "theme":
+      if (m.color) s.color = m.color;
+      if (m.bg != null) s.bg = m.bg;
+      s.ink = m.ink || null;
+      draw();
+      break;
     case "resize":
       if (ctx) resize(ctx.canvas, m.w, m.h, m.dpr);
       break;
     case "peaks":
-      s.peaks = m.peaks ? new Float32Array(m.peaks) : null;
-      s.peakCount = m.peakCount || 0;
+      s.levels = m.levels
+        ? m.levels.map((L) => ({ count: L.count, total: new Float32Array(L.total), low: new Float32Array(L.low) }))
+        : null;
+      s.baseCount = m.baseCount || 0;
+      s.duration = m.duration || 0;
+      draw();
+      break;
+    case "grid":
+      s.grid = m.grid || null;
+      if (m.duration != null) s.duration = m.duration;
       draw();
       break;
     case "draw":

@@ -7,8 +7,11 @@
     "start": "node server.js",
     "dev": "node server.js",
     "build": "node build.js",
+    "deploy": "npm test && node build.js && firebase deploy --only hosting",
     "start:dist": "node server.js --dist",
-    "test": "node --test",
+    "test": "node --test \"test/*.test.js\"",
+    "test:e2e": "npm run build && playwright test",
+    "test:all": "npm test && npm run test:e2e",
     "icons": "node scripts/make-icons.js"
   },
   "keywords": [
@@ -20,7 +23,11 @@
     "mixer"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "esbuild": "^0.28.1",
     "sharp": "^0.35.2"
   }

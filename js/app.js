@@ -5,10 +5,16 @@ import { Waveform } from "./waveform.js";
 import { UI } from "./ui.js";
 import { attachScratchPad, attachKnob, attachTrackpadGestures, attachWaveformScrub, attachFader } from "./input.js";
 import { PracticeCoach, LESSONS, makeBeat } from "./practice.js";
-import { SongBuilder } from "./songbuilder.js";
+import { DAW } from "./daw.js";
 import { generateScratchPreset, generateLaserPreset } from "./presets.js";
 import { MidiInput, DEFAULT_MIDI_MAP } from "./midi.js";
 import { haptic, setHapticsEnabled, hapticsSupported } from "./haptics.js";
+import { detectBPM, detectBeatGrid } from "./bpm.js";
+import { createMixRecorder } from "./recorder.js";
+import { bufferToWav } from "./wav.js";
+import { readVersioned, writeVersioned } from "./store.js";
+import { createTapTempo } from "./taptempo.js";
+import { initTheme, applyTheme, cycleTheme, themeMode, themeColors, onThemeChange, THEME_MODES } from "./theme.js";
 
 let coach = null;
 let sampler = null;
@@ -19,12 +25,378 @@ const analysers = {};
 const discs = {};                               // rotating platter elements
 const vizCache = {};                            // per-deck { canvas, ctx, buf } for the FFT visualizer (reused each frame)
 const rot = { A: { pos: 0, rate: 0, t: 0 }, B: { pos: 0, rate: 0, t: 0 } };
-const hot = { A: [null, null, null, null], B: [null, null, null, null] };
+const HOT_CUE_COUNT = 8;
+const hot = { A: Array(HOT_CUE_COUNT).fill(null), B: Array(HOT_CUE_COUNT).fill(null) };
 let mappingSource = null;                       // { deckId, start, end } for sampler region mapping
 
-const DECK_COLORS = { A: "#37e6c8", B: "#ff5d8f" };
-const CUE_COLORS = ["#ffd23f", "#37e6c8", "#ff5d8f", "#6c7bff"];
+// Live mirrors of the CSS tokens — mutated in place on every theme change so
+// the ~20 call sites that read them keep working. Seeded with the dark values
+// so the first frame before `initTheme`'s rAF is still correct on dark.
+// KEEP THE SEEDS IN SYNC with tokens.css: --sx-deck-a/-b and --sx-cue-1..8.
+const DECK_COLORS = { A: "#48ddd3", B: "#ff6175" };
+const CUE_COLORS = ["#ffd23f", "#48ddd3", "#ff6175", "#6c7bff", "#f89b29", "#79e66b", "#b16cff", "#6ad7ff"];
 const DEG_PER_SEC = 200;                          // 33⅓ RPM platter spin
+
+// BPM truthfulness: only display a number when we actually know it (metadata
+// from a preset / PAD render, or a confident detection) — otherwise "--".
+const bpmKnown = { A: false, B: false };
+const bpmDetectToken = { A: 0, B: 0 };            // invalidates stale async detections
+const arts = {};                                  // per-deck album-art tiles (real thumbnails)
+
+// Live master metering (topbar), created in setupTopbarMaster().
+let masterVuEl = null, masterAnalyser = null, masterBuf = null, masterPeak = 0;
+
+const demoChips = {};                             // per-deck "load a demo" chips on empty decks
+const knobArcs = [];                              // { svg, band, deck } — recoloured on theme change
+
+// Monochrome line icons (inline SVG — crisp at any DPI, no emoji tofu).
+const ICONS = {
+  link: '<svg viewBox="0 0 24 24"><path d="M10.6 13.4a4 4 0 0 0 5.6 0l3.2-3.2a4 4 0 1 0-5.6-5.6l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M13.4 10.6a4 4 0 0 0-5.6 0l-3.2 3.2a4 4 0 1 0 5.6 5.6l1.4-1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  zoomOut: '<svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.6 15.6 21 21M7.5 10.5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  zoomIn: '<svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.6 15.6 21 21M10.5 7.5v6M7.5 10.5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  folder: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4.2l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>',
+  grid: '<svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" fill="currentColor"/></svg>',
+  phones: '<svg viewBox="0 0 24 24"><path d="M4 14a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="3" y="13.5" width="4.2" height="7" rx="1.6" fill="currentColor"/><rect x="16.8" y="13.5" width="4.2" height="7" rx="1.6" fill="currentColor"/></svg>',
+  gear: '<svg viewBox="0 0 24 24"><path d="M12 15.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4zm7.4-3.2c0-.5 0-.9-.1-1.3l2.1-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2.2-1.3L14.4 3H9.6l-.4 2.4a7.6 7.6 0 0 0-2.2 1.3l-2.4-1-2 3.4L4.7 10.7a8 8 0 0 0 0 2.6l-2.1 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 2.2 1.3l.4 2.4h4.8l.4-2.4a7.6 7.6 0 0 0 2.2-1.3l2.4 1 2-3.4-2.1-1.6c.1-.4.1-.8.1-1.3z" fill="currentColor"/></svg>',
+};
+function icon(name) {
+  const s = document.createElement("span");
+  s.className = "ic";
+  s.setAttribute("aria-hidden", "true");
+  s.innerHTML = ICONS[name] || "";
+  return s;
+}
+const label = (text, cls = "") => {
+  const s = document.createElement("span");
+  if (cls) s.className = cls;
+  s.textContent = text;
+  return s;
+};
+
+// Recompose the legacy document bands into one controller chassis. Moving the
+// existing nodes keeps every event target, canvas, and audio control intact.
+composeDeckConsole();
+styleTopbarChrome();
+
+/** Swap the topbar's emoji for line icons + the reference labels. */
+function styleTopbarChrome() {
+  const drawer = document.getElementById("drawer-btn");
+  if (drawer) { drawer.replaceChildren(icon("grid"), label("PADS + FX")); }
+  const practice = document.getElementById("practice-btn");
+  if (practice) { practice.replaceChildren(icon("phones"), label("PRACTICE")); }
+  const rec = document.getElementById("record-btn");
+  if (rec) {
+    rec.replaceChildren();
+    const dot = document.createElement("i");
+    dot.className = "rec-dot";
+    dot.setAttribute("aria-hidden", "true");
+    rec.append(dot, label("REC", "rec-label"));
+  }
+  const settings = document.getElementById("settings-btn");
+  if (settings) { settings.replaceChildren(icon("gear")); }
+}
+
+function composeDeckConsole() {
+  const consoleEl = document.getElementById("console");
+  if (!consoleEl || consoleEl.querySelector(".controller-shell")) return;
+
+  const decksTop = consoleEl.querySelector(".decks-top");
+  const scratchZone = consoleEl.querySelector(".scratch-zone");
+  const transportRow = consoleEl.querySelector(".transport-row");
+  const mixer = consoleEl.querySelector(".mixer");
+  if (!decksTop || !scratchZone || !transportRow || !mixer) return;
+
+  const shell = document.createElement("section");
+  shell.className = "controller-shell";
+  shell.setAttribute("aria-label", "Sxratch dual-deck controller");
+
+  const center = document.createElement("section");
+  center.className = "controller-center";
+  center.setAttribute("aria-label", "Waveforms and mixer");
+
+  const waveConsole = document.createElement("section");
+  waveConsole.className = "wave-console";
+  waveConsole.setAttribute("aria-label", "Deck waveform controls");
+
+  const centerToolbar = document.createElement("div");
+  centerToolbar.className = "wave-toolbar";
+  centerToolbar.dataset.deck = "A";
+
+  const waveStage = document.createElement("div");
+  waveStage.className = "wave-stage";
+  waveStage.setAttribute("aria-label", "Stacked deck waveforms");
+
+  const loopStrip = document.createElement("div");
+  loopStrip.className = "center-loop-strip";
+  loopStrip.dataset.deck = "A";
+
+  // Explicit A | B switch: the centre toolbar + loop strip are shared between
+  // decks, so which deck they control must always be visible and tappable.
+  const deckSwitch = document.createElement("div");
+  deckSwitch.className = "deck-switch";
+  deckSwitch.setAttribute("role", "group");
+  deckSwitch.setAttribute("aria-label", "Toolbar deck");
+  const deckPicks = {};
+  for (const id of ["A", "B"]) {
+    const b = document.createElement("button");
+    b.className = "deck-pick";
+    b.dataset.deck = id;
+    b.type = "button";
+    b.textContent = id;
+    b.title = `Point the toolbar & loop controls at Deck ${id}`;
+    deckSwitch.append(b);
+    deckPicks[id] = b;
+  }
+
+  const activeDeckControls = [];
+  let loopLabelEl = null;
+  const setActiveDeck = (deckId) => {
+    shell.dataset.activeDeck = deckId;
+    centerToolbar.dataset.deck = deckId;
+    loopStrip.dataset.deck = deckId;
+    if (loopLabelEl) loopLabelEl.textContent = `LOOP ${deckId}`;
+    for (const id of ["A", "B"]) {
+      deckPicks[id].classList.toggle("active", id === deckId);
+      deckPicks[id].setAttribute("aria-pressed", id === deckId ? "true" : "false");
+    }
+    // Brief flash so auto-follow (touch a deck → toolbar retargets) is noticed.
+    const pick = deckPicks[deckId];
+    pick.classList.remove("flash");
+    void pick.offsetWidth;
+    pick.classList.add("flash");
+    activeDeckControls.forEach((el) => {
+      el.dataset.deck = deckId;
+      if (el.classList.contains("preset-select")) {
+        el.setAttribute("aria-label", `Preset loader for Deck ${deckId}`);
+      }
+    });
+    Object.values(sides).forEach((side) => {
+      if (side) side.classList.toggle("active", side.dataset.deck === deckId);
+    });
+  };
+  deckPicks.A.addEventListener("click", () => setActiveDeck("A"));
+  deckPicks.B.addEventListener("click", () => setActiveDeck("B"));
+  centerToolbar.append(deckSwitch);
+
+  const sides = {};
+  for (const id of ["A", "B"]) {
+    const side = document.createElement("section");
+    side.className = `deck-side deck-${id.toLowerCase()}`;
+    side.dataset.deck = id;
+    side.setAttribute("aria-label", `Deck ${id}`);
+
+    const meta = decksTop.querySelector(`.deck-meta[data-deck="${id}"]`);
+    const wave = meta?.querySelector(".waveform");
+    const metaLine = meta?.querySelector(".meta-line");
+    const title = meta?.querySelector(".title");
+    const time = meta?.querySelector(".time");
+    const badge = meta?.querySelector(".badge");
+    const hotcues = meta?.querySelector(".hotcues");
+    const loadRow = meta?.querySelector(".load-row");
+    const loopRow = meta?.querySelector(".loop-row");
+    const rail = scratchZone.querySelector(`.deck-rail[data-deck="${id}"]`);
+    const jog = scratchZone.querySelector(`.jog-pad[data-deck="${id}"]`);
+    const transport = transportRow.querySelector(`.transport[data-deck="${id}"]`);
+    if (!meta || !wave || !metaLine || !title || !time || !hotcues || !loadRow || !loopRow || !rail || !jog || !transport) continue;
+
+    const deckLabel = document.createElement("div");
+    deckLabel.className = "deck-heading";
+    deckLabel.innerHTML = `<span>DECK ${id}</span>`;
+
+    const trackCard = document.createElement("div");
+    trackCard.className = "track-card";
+
+    const art = document.createElement("div");
+    art.className = "album-art";
+    art.setAttribute("aria-hidden", "true");
+    arts[id] = art;
+
+    const trackInfo = document.createElement("div");
+    trackInfo.className = "track-info";
+
+    const trackStats = document.createElement("div");
+    trackStats.className = "track-stats";
+    // Live BPM readout — "--" until the value is actually known (preset / PAD
+    // metadata or a confident detection). No fake numbers. Interactive:
+    // click repeatedly to TAP the tempo in, double-click to type one.
+    const bpm = document.createElement("span");
+    bpm.className = "track-bpm";
+    bpm.textContent = "--";
+    bpm.title = "Effective BPM · click to tap tempo · double-click to type";
+    ui.bpmEl[id] = bpm;
+    attachBpmEntry(bpm, id);
+    const bpmUnit = document.createElement("span");
+    bpmUnit.className = "track-bpm-unit";
+    bpmUnit.textContent = "BPM";
+    trackStats.append(bpm, bpmUnit, time);
+
+    if (badge) badge.remove();
+    metaLine.remove();
+    trackInfo.append(title, trackStats);
+
+    const loadBtn = loadRow.querySelector(".load-btn");
+    const fileInput = loadRow.querySelector(".file-input");
+    if (loadBtn) {
+      loadBtn.classList.add("load-tile");
+      loadBtn.replaceChildren(icon("folder"), label("LOAD"));
+    }
+    trackCard.append(art, trackInfo);
+    if (loadBtn) trackCard.append(loadBtn);
+    if (fileInput) trackCard.append(fileInput);
+
+    const hotBlock = document.createElement("div");
+    hotBlock.className = "hotcue-block";
+    const hotLabel = document.createElement("span");
+    hotLabel.className = "section-label";
+    hotLabel.textContent = "HOT CUES";
+    hotBlock.append(hotLabel, hotcues);
+
+    meta.replaceChildren(deckLabel, trackCard, hotBlock);
+
+    if (id === "A") {
+      const urlBtn = loadRow.querySelector(".url-btn");
+      const dblBtn = loadRow.querySelector(".dbl-btn");
+      const preset = loadRow.querySelector(".preset-select");
+      const zoomOut = loadRow.querySelector('.zoom-btn[data-dir="out"]');
+      const zoomIn = loadRow.querySelector('.zoom-btn[data-dir="in"]');
+      if (urlBtn) {
+        urlBtn.replaceChildren(icon("link"), label("LINK"));
+        centerToolbar.append(urlBtn);
+        activeDeckControls.push(urlBtn);
+      }
+      if (dblBtn) {
+        dblBtn.textContent = "DBL";
+        centerToolbar.append(dblBtn);
+        activeDeckControls.push(dblBtn);
+      }
+      if (preset) {
+        const placeholder = preset.querySelector('option[value=""]');
+        if (placeholder) placeholder.textContent = "Default";
+        const presetWrap = document.createElement("label");
+        presetWrap.className = "preset-wrap";
+        presetWrap.innerHTML = `<span>PRESETS</span>`;
+        presetWrap.append(preset);
+        centerToolbar.append(presetWrap);
+        activeDeckControls.push(preset);
+      }
+      const zoomGroup = document.createElement("div");
+      zoomGroup.className = "zoom-group";
+      if (zoomOut) {
+        zoomOut.replaceChildren(icon("zoomOut"));
+        zoomOut.setAttribute("aria-label", "Zoom waveform out");
+        zoomGroup.append(zoomOut);
+        activeDeckControls.push(zoomOut);
+      }
+      if (zoomIn) {
+        zoomIn.replaceChildren(icon("zoomIn"));
+        zoomIn.setAttribute("aria-label", "Zoom waveform in");
+        zoomGroup.append(zoomIn);
+        activeDeckControls.push(zoomIn);
+      }
+      centerToolbar.append(zoomGroup);
+
+      loopStrip.append(loopRow);
+      loopLabelEl = loopRow.querySelector(".loop-label");
+      const toPadBtn = loopRow.querySelector(".loop-to-pad");
+      if (toPadBtn) toPadBtn.textContent = "TO PAD";
+      activeDeckControls.push(...loopRow.querySelectorAll("[data-deck]"));
+    } else {
+      loadRow.remove();
+      loopRow.remove();
+    }
+
+    const waveLane = document.createElement("div");
+    waveLane.className = "wave-lane";
+    waveLane.dataset.deck = id;
+    const laneLabel = document.createElement("span");
+    laneLabel.className = "wave-lane-label";
+    laneLabel.textContent = id;
+    laneLabel.setAttribute("aria-hidden", "true");
+    // Empty-deck demo chip — one tap to sound (wired in setup(), hidden on load).
+    const demo = document.createElement("button");
+    demo.className = "demo-chip";
+    demo.type = "button";
+    demo.dataset.deck = id;
+    demo.textContent = id === "A" ? "▶ LOAD DEMO BEAT" : "▶ LOAD SCRATCH SOUND";
+    demoChips[id] = demo;
+    waveLane.append(laneLabel, wave, demo);
+    waveStage.append(waveLane);
+
+    const deckBody = document.createElement("div");
+    deckBody.className = "deck-body";
+    deckBody.append(rail, jog);
+
+    transport.querySelector(".tp-start")?.replaceChildren(document.createTextNode("● START"));
+    transport.querySelector(".tp-rew")?.replaceChildren(document.createTextNode("◀◀ REW"));
+    transport.querySelector(".tp-ff")?.replaceChildren(document.createTextNode("▶▶ FF"));
+    transport.querySelector(".cue-btn")?.replaceChildren(document.createTextNode("CUE"));
+    transport.querySelector(".set-btn")?.replaceChildren(document.createTextNode("SET"));
+    transport.querySelector(".sync-btn")?.replaceChildren(document.createTextNode("SYNC"));
+    transport.querySelector(".play-btn")?.replaceChildren(document.createTextNode("▶ PLAY"));
+
+    side.append(meta, deckBody, transport);
+    side.addEventListener("pointerdown", () => setActiveDeck(id), { passive: true });
+    side.addEventListener("focusin", () => setActiveDeck(id));
+    sides[id] = side;
+  }
+
+  const transportCenter = transportRow.querySelector(".transport-center");
+  const crossfadeCol = mixer.querySelector(".crossfade-col");
+  if (transportCenter && crossfadeCol) {
+    const crossfader = crossfadeCol.querySelector(".crossfader-wrap");
+    crossfadeCol.insertBefore(transportCenter, crossfader || null);
+  }
+
+  const centerFaders = document.createElement("div");
+  centerFaders.className = "center-faders";
+  const vfaderA = mixer.querySelector('.channel[data-deck="A"] .vfader');
+  const vfaderB = mixer.querySelector('.channel[data-deck="B"] .vfader');
+  if (vfaderA && vfaderB && crossfadeCol) {
+    centerFaders.append(vfaderA, vfaderB);
+    const crossfader = crossfadeCol.querySelector(".crossfader-wrap");
+    crossfadeCol.insertBefore(centerFaders, crossfader || null);
+  }
+
+  // Centre dB meters (reference layout): lift each channel's VU out of its
+  // fader row and pair them between the EQ columns, flanked by dB scales.
+  // The scale labels match the meter's actual dB mapping (see frameLoop).
+  const meterBridge = document.createElement("div");
+  meterBridge.className = "meter-bridge";
+  meterBridge.setAttribute("aria-hidden", "true");
+  const mkScale = (side) => {
+    const sc = document.createElement("div");
+    sc.className = "meter-scale " + side;
+    ["0", "-6", "-12", "-18", "-24", "-30"].forEach((t) => sc.append(label(t)));
+    return sc;
+  };
+  const vuA = document.getElementById("vu-A");
+  const vuB = document.getElementById("vu-B");
+  if (vuA && vuB && crossfadeCol) {
+    meterBridge.append(mkScale("l"), vuA, vuB, mkScale("r"));
+    crossfadeCol.insertBefore(meterBridge, transportCenter && transportCenter.parentElement === crossfadeCol ? transportCenter : crossfadeCol.firstChild);
+  }
+
+  // Truthful ruler chrome: the canvases draw real beat/bar grids, so the
+  // stage can carry the "Bars" caption and one shared centre playhead.
+  const barsCaption = document.createElement("span");
+  barsCaption.className = "wave-caption";
+  barsCaption.textContent = "Bars";
+  barsCaption.title = "Bar ruler — numbers appear when the beat grid is anchored (presets & PAD renders)";
+  const stagePlayhead = document.createElement("div");
+  stagePlayhead.className = "stage-playhead";
+  stagePlayhead.setAttribute("aria-hidden", "true");
+  waveStage.append(barsCaption, stagePlayhead);
+
+  waveConsole.append(centerToolbar, waveStage, loopStrip);
+  center.append(waveConsole, mixer);
+  shell.append(sides.A, center, sides.B);
+  consoleEl.prepend(shell);
+  setActiveDeck("A");
+
+  decksTop.remove();
+  scratchZone.remove();
+  transportRow.remove();
+}
 
 // ---------- Configurable controls (persisted to localStorage) ----------
 const DEFAULT_KEYS = {
@@ -34,6 +406,10 @@ const DEFAULT_KEYS = {
   crossLeft: "ArrowLeft", crossRight: "ArrowRight", crossCenter: "ArrowDown",
   hotA1: "Digit1", hotA2: "Digit2", hotA3: "Digit3", hotA4: "Digit4",
   hotB1: "Digit6", hotB2: "Digit7", hotB3: "Digit8", hotB4: "Digit9",
+  // All 8 chips have keys (5–8 used to be pointer-only): bottom row, split
+  // left hand → Deck A and right hand → Deck B like the digit rows above.
+  hotA5: "KeyZ", hotA6: "KeyX", hotA7: "KeyC", hotA8: "KeyV",
+  hotB5: "KeyB", hotB6: "KeyN", hotB7: "KeyM", hotB8: "Comma",
   samp1: "KeyA", samp2: "KeyS", samp3: "KeyD", samp4: "KeyF",
   samp5: "KeyG", samp6: "KeyH", samp7: "KeyJ", samp8: "KeyK",
   loopA: "KeyR", loopB: "KeyU",
@@ -49,6 +425,13 @@ const DEFAULT_GESTURES = {
   crossfadeCurve: "power",
   hamsterMode: false,
 };
+// Config schema version (legacy raw saves are v0 — same shape, identity step).
+// v1 → v2 adds `theme`; absent means "auto", so the step is additive.
+// Declared BEFORE the loadConfig() call below: module-level `const config =
+// loadConfig()` executes immediately, so these must already be initialized.
+const CONFIG_SCHEMA_V = 2;
+const CONFIG_MIGRATIONS = [(c) => c, (c) => ({ ...c, theme: c.theme ?? "auto" })];
+
 const config = loadConfig();
 let keyMap = {}; // key code -> action name
 const tempoFaders = {}; // { A, B } custom fader handles, for SYNC
@@ -58,8 +441,7 @@ const midiTargets = {};          // action id -> (value 0..1) => void  (set on-s
 const midiJogState = { A: { active: false, timer: null }, B: { active: false, timer: null } };
 
 function loadConfig() {
-  let saved = {};
-  try { saved = JSON.parse(localStorage.getItem("sxratch.config") || "{}"); } catch {}
+  const saved = readVersioned("sxratch.config", CONFIG_SCHEMA_V, CONFIG_MIGRATIONS) || {};
   return {
     keys: { ...DEFAULT_KEYS, ...(saved.keys || {}) },
     gestures: { ...DEFAULT_GESTURES, ...(saved.gestures || {}) },
@@ -68,29 +450,171 @@ function loadConfig() {
       map: { ...DEFAULT_MIDI_MAP, ...(saved.midi?.map || {}) },
     },
     haptics: saved.haptics ?? true,
+    cueMode: saved.cueMode || "stereo",
+    theme: THEME_MODES.includes(saved.theme) ? saved.theme : "auto",
   };
 }
 function saveConfig() {
-  try { localStorage.setItem("sxratch.config", JSON.stringify(config)); } catch {}
+  writeVersioned("sxratch.config", CONFIG_SCHEMA_V, config);
 }
 function rebuildKeyMap() {
   keyMap = {};
   for (const [action, code] of Object.entries(config.keys)) keyMap[code] = action;
 }
 
+// ---------- Theme ----------
+// Applied at module scope (not in setup()) so the start overlay is themed too.
+// The inline <head> script has already set data-theme, so this only agrees
+// with it and starts the OS-preference listener.
+const THEME_LABEL = { auto: "follow system", light: "light", dark: "dark" };
+const THEME_GLYPH = { auto: "◐", light: "☀", dark: "☾" };
+
+onThemeChange((colors) => {
+  DECK_COLORS.A = colors["deck-a"];
+  DECK_COLORS.B = colors["deck-b"];
+  colors.cues.forEach((c, i) => { CUE_COLORS[i] = c; });
+
+  const waveInk = {
+    body: colors["wave-body"],
+    gridBeat: colors["wave-grid-beat"],
+    gridBar: colors["wave-grid-bar"],
+    label: colors["wave-label"],
+    centre: colors["wave-centre"],
+    playhead: colors["wave-playhead"],
+    cueInk: colors["wave-cue-ink"],
+    cueFallback: colors.cues[0],
+  };
+  for (const id of ["A", "B"]) {
+    ui.waves?.[id]?.setColors({ color: DECK_COLORS[id], ink: waveInk });
+    if (arts[id]) drawArtThumb(id);
+    // Cue chip swatches are inline styles, so they need repainting too.
+    document.querySelectorAll(`.hotcues[data-deck="${id}"] .hotcue-chip.set`).forEach((chip, i) => {
+      chip.style.background = CUE_COLORS[i % CUE_COLORS.length];
+    });
+  }
+  knobArcs.forEach(({ svg, band, deck }) => {
+    const path = svg.querySelector("path");
+    if (path) path.setAttribute("stroke", band === "filter" ? colors.accent : DECK_COLORS[deck]);
+  });
+  const btn = document.getElementById("theme-btn");
+  if (btn) {
+    const m = themeMode();
+    btn.textContent = THEME_GLYPH[m];
+    btn.setAttribute("aria-label", `Appearance: ${THEME_LABEL[m]}`);
+    btn.title = `Appearance: ${THEME_LABEL[m]} — click to change`;
+  }
+});
+initTheme(config.theme);
+
+function setTheme(mode) {
+  config.theme = applyTheme(mode);
+  saveConfig();
+  return config.theme;
+}
+
+document.getElementById("theme-btn")?.addEventListener("click", () => {
+  const m = cycleTheme();
+  config.theme = m;
+  saveConfig();
+  const sel = document.getElementById("theme-select");
+  if (sel) sel.value = m;
+});
+
+// ---------- Install (PWA) ----------
+// The app has been installable for a while, but nothing SAID so — the browser
+// omnibox hint is the only affordance Chrome gives and iOS gives none at all.
+// The topbar button appears when installing is actually possible: Chrome et
+// al. fire beforeinstallprompt; iOS Safari never does, so there the button
+// opens Add-to-Home-Screen instructions instead.
+{
+  const btn = document.getElementById("install-btn");
+  const standalone = window.matchMedia?.("(display-mode: standalone)").matches
+    || navigator.standalone === true;   // iOS's non-standard spelling
+  let deferredPrompt = null;
+
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();                 // no unsolicited mini-infobar
+    deferredPrompt = e;
+    if (btn && !standalone) btn.hidden = false;
+  });
+  window.addEventListener("appinstalled", () => { if (btn) btn.hidden = true; deferredPrompt = null; });
+
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); // iPadOS masquerades as Mac
+  if (btn && isIOS && !standalone) btn.hidden = false;
+
+  btn?.addEventListener("click", async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === "accepted") btn.hidden = true;
+      deferredPrompt = null;            // a prompt object is single-use
+      return;
+    }
+    // iOS: installing is a manual gesture Safari owns — show the steps.
+    // Class .dialog so the app-wide focus trap + Esc handling apply.
+    let dlg = document.getElementById("install-dialog");
+    if (!dlg) {
+      dlg = document.createElement("div");
+      dlg.className = "dialog";
+      dlg.id = "install-dialog";
+      dlg.innerHTML = `
+        <div class="dialog-card">
+          <h3>Install Sxratch</h3>
+          <p class="muted">Add it to your Home Screen and it runs full-screen,
+            works offline, and keeps your songs on the device:</p>
+          <ul class="help-list">
+            <li>Tap the <b>Share</b> button in Safari's toolbar</li>
+            <li>Scroll down and tap <b>Add to Home Screen</b></li>
+            <li>Tap <b>Add</b></li>
+          </ul>
+          <div class="dialog-actions">
+            <button class="btn primary" id="install-close">Got it</button>
+          </div>
+        </div>`;
+      document.body.appendChild(dlg);
+      dlg.querySelector("#install-close").addEventListener("click", () => { dlg.hidden = true; });
+    }
+    dlg.hidden = false;
+    dlg.querySelector("#install-close").focus();
+  });
+}
+
 // ---------- Boot (needs a user gesture for audio) ----------
 const overlay = document.getElementById("start-overlay");
+let booting = false, booted = false;
 document.getElementById("start-btn").addEventListener("click", async () => {
+  // One-shot: a double-click (or a second click racing engine.init) would run
+  // setup() twice, and the second `new Waveform` throws — the canvas has
+  // already transferred its control to the render worker.
+  if (booting || booted) return;
+  booting = true;
   try {
     await engine.init();
     await engine.resume();
     engine.crossfadeCurve = config.gestures.crossfadeCurve ?? "power";
     engine.hamster = config.gestures.hamsterMode ?? false;
+    engine.setCueMode(config.cueMode ?? "stereo");
     setup();
+    booted = true;
     overlay.style.display = "none";
   } catch (err) {
     console.error(err);
-    alert("Couldn't start audio: " + err.message);
+    // No alert(): render the failure into the start card so the user gets a
+    // styled, actionable message (and a Retry) instead of a browser popup.
+    const card = overlay.querySelector(".start-card");
+    let msg = card && card.querySelector(".start-error");
+    if (card && !msg) {
+      msg = document.createElement("p");
+      msg.className = "start-error";
+      card.insertBefore(msg, document.getElementById("start-btn"));
+    }
+    if (msg) {
+      msg.textContent = "Couldn't start audio — " +
+        (err && err.message ? err.message : "this browser may not support AudioWorklet.");
+    }
+    document.getElementById("start-btn").textContent = "Retry";
+    booting = false; // allow Retry
   }
 });
 
@@ -120,7 +644,24 @@ function setup() {
     analysers[id] = { node: an, buf: new Float32Array(an.fftSize), el: document.getElementById(`vu-${id}`) };
 
     // Scratch pad (mouse / touch press-drag)
-    attachScratchPad(document.getElementById(`pad-${id}`), deck, { sensitivity: 0.0024 });
+    const padEl = document.getElementById(`pad-${id}`);
+    attachScratchPad(padEl, deck, { sensitivity: 0.0024 });
+
+    // Keyboard access to the platter: focus it and nudge with ← →.
+    padEl.tabIndex = 0;
+    padEl.setAttribute("role", "slider");
+    padEl.setAttribute("aria-label", `Deck ${id} platter — drag to scratch, arrow keys nudge`);
+    padEl.setAttribute("aria-valuemin", "0");
+    padEl.setAttribute("aria-valuemax", "1");
+    padEl.addEventListener("keydown", (e) => {
+      const dir = e.code === "ArrowRight" ? 1 : e.code === "ArrowLeft" ? -1 : 0;
+      if (!dir) return;
+      e.preventDefault();
+      e.stopPropagation();
+      deck.touchStart();
+      deck.jog(dir * (e.shiftKey ? 6 : 2.5));
+      setTimeout(() => deck.touchEnd(), 70);
+    });
 
     // Interactive waveform: scrub / seek / hot cues
     attachWaveformScrub(canvas, deck, wave, {
@@ -139,6 +680,7 @@ function setup() {
   setupLoading();
   setupTransport();
   setupMixer();
+  setupTopbarMaster();
   setupDialogs();
   setupWaveTools();
   setupHotcues();
@@ -151,34 +693,134 @@ function setup() {
   setupNav();
   setupGlobalRecorder();
   setupPresets();
+  setupDemoChips();
+  updateDeckGuards("A");   // empty decks boot with their transport visibly guarded
+  updateDeckGuards("B");
   attachTrackpadGestures(engine, ui, config);
+  maybeStartTour();
 
   // Debug handle (handy in the console for testing/automation).
   window.sxratch = { engine, ui, analysers, hot, config, coach, get sampler() { return sampler; }, get midi() { return midi; } };
 
-  // Keep the platters as perfect circles that fit the (dynamic) scratch zone.
-  sizePlatters();
-  const ro = new ResizeObserver(() => sizePlatters());
-  ro.observe(document.getElementById("scratch-zone"));
+  // Layout class manager. Portrait phones get a REAL portrait layout
+  // (body.portrait-mode) — the old approach of CSS-rotating the whole page
+  // 90° is gone: native widgets, scrolling and viewport math all behave now.
+  function updateLayoutClass() {
+    const isStudio = document.body.classList.contains("view-studio");
+    const isLandscape = window.innerWidth > window.innerHeight;
+    const portrait = !isLandscape && !isStudio;
 
-  window.addEventListener("resize", () => {
-    ui.waves.A?.resize();
-    ui.waves.B?.resize();
-    sizePlatters();
+    const wasPortrait = document.body.classList.contains("portrait-mode");
+    const wasLandscapeCls = document.body.classList.contains("use-landscape-layout");
+
+    document.body.classList.toggle("use-landscape-layout", !portrait && !isStudio);
+    document.body.classList.toggle("portrait-mode", portrait);
+
+    if (wasPortrait !== portrait || wasLandscapeCls !== (!portrait && !isStudio)) {
+      requestAnimationFrame(() => {
+        sizePlatters();
+        ui.waves.A?.resize();
+        ui.waves.B?.resize();
+      });
+    }
+  }
+
+  // ONE relayout path (was copy-pasted across five listeners): re-derive the
+  // layout class, resize the waveform canvases, refit the platters — coalesced
+  // through a single rAF so bursts of resize events do the work once.
+  let relayoutQueued = false;
+  function relayout() {
+    if (relayoutQueued) return;
+    relayoutQueued = true;
+    requestAnimationFrame(() => {
+      relayoutQueued = false;
+      updateLayoutClass();
+      ui.waves.A?.resize();
+      ui.waves.B?.resize();
+      sizePlatters();
+    });
+  }
+
+  // Crossfade fan-out: engine.setCrossfade fires this for EVERY source
+  // (fader drag, keyboard, gestures, MIDI, coach), so UI sync and practice
+  // instrumentation live in one place.
+  engine.onCrossfade = (v) => {
+    ui.syncCrossfade(v);
+    coach?.onCrossfade(v);
+  };
+
+  // Keep the platters as perfect circles that fit the (dynamic) scratch zone.
+  // The observer also re-derives the layout class: element resize fires even in
+  // environments where window `resize` doesn't (viewport emulation, webviews).
+  updateLayoutClass();
+  new ResizeObserver(relayout).observe(document.getElementById("console")); // scratch-zone is display:contents in the landscape grid
+
+  // Sampler / Beat FX dock toggle
+  document.getElementById("drawer-btn")?.addEventListener("click", () => {
+    const on = document.body.classList.toggle("drawer-open");
+    document.getElementById("drawer-btn").classList.toggle("active", on);
+    relayout();
   });
+
+  window.addEventListener("resize", relayout);
+  document.addEventListener("fullscreenchange", relayout);
+  window.visualViewport?.addEventListener("resize", relayout);
+  window.addEventListener("orientationchange", () => setTimeout(relayout, 100));
+
+  // Backgrounded browsers (esp. iOS Safari) can suspend the AudioContext;
+  // resume whenever the tab becomes visible again or returns from BFCache.
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) engine.resume(); });
+  window.addEventListener("pageshow", () => engine.resume());
+
+  // Focus containment for every .dialog (present or created later): trap Tab
+  // while open, restore focus to the opener on close. Esc-close already exists.
+  const dialogTraps = new Map();
+  const onDialogToggle = (dlg) => {
+    dialogTraps.get(dlg)?.();
+    dialogTraps.delete(dlg);
+    if (!dlg.hidden) dialogTraps.set(dlg, ui.trapFocus(dlg));
+  };
+  new MutationObserver((muts) => {
+    for (const m of muts) {
+      if (m.attributeName === "hidden" && m.target.classList?.contains("dialog")) onDialogToggle(m.target);
+    }
+  }).observe(document.body, { attributes: true, attributeFilter: ["hidden"], subtree: true });
 
   requestAnimationFrame(frameLoop);
 }
 
-/** Size each platter to the largest circle that fits its jog pad. */
+/** Size each platter from stable viewport/shell geometry.
+ * Avoid measuring the platter's own content box: that created a feedback loop
+ * where restoring from a smaller browser/fullscreen state could keep shrinking
+ * the jog wheels on each resize.
+ */
 function sizePlatters() {
+  const shell = document.querySelector(".controller-shell");
+  const topbar = document.getElementById("topbar");
+  const shellRect = shell?.getBoundingClientRect();
+  const topbarH = topbar?.getBoundingClientRect().height || 60;
+  const portrait = document.body.classList.contains("portrait-mode");
+  const minSize = portrait ? 96 : window.innerHeight < 560 ? 118 : 190;
+  const maxSize = window.innerWidth >= 1500 ? 520 : 430;
+  // Portrait: two platters share the width (shell is a 2-column grid);
+  // landscape: three columns as before.
+  const byViewport = portrait
+    ? Math.min(window.innerWidth * 0.40, Math.max(96, (window.innerHeight - topbarH) * 0.26))
+    : Math.min(
+        window.innerWidth * 0.245,
+        Math.max(120, (window.innerHeight - topbarH) * 0.54)
+      );
+  const byShell = shellRect
+    ? Math.max(96, (shellRect.width / (portrait ? 2 : 3)) * (portrait ? 0.74 : 0.78))
+    : byViewport;
+  const size = Math.round(Math.max(minSize, Math.min(byViewport, byShell, maxSize)));
+  document.documentElement.style.setProperty("--deck-platter-size", `${size}px`);
   for (const id of ["A", "B"]) {
     const pad = document.getElementById(`pad-${id}`);
     const plat = pad && pad.querySelector(".platter");
     if (!plat) continue;
-    const size = Math.max(90, Math.min(pad.clientWidth * 0.86, pad.clientHeight * 0.82, 260));
-    plat.style.width = `${size}px`;
-    plat.style.height = `${size}px`;
+    plat.style.width = "";
+    plat.style.height = "";
   }
 }
 
@@ -245,41 +887,194 @@ async function loadFile(deck, file) {
     applyLoaded(deck, audio, file.name.replace(/\.[^.]+$/, ""));
   } catch (err) {
     console.error(err);
-    ui.toast("Couldn't decode that file");
+    ui.toast("Couldn't decode that file", { severity: "error" });
   }
 }
 
 async function loadURL(deck, url) {
   ui.toast("Fetching…");
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000); // don't hang forever
   try {
-    const res = await fetch(url, { mode: "cors" });
+    const res = await fetch(url, { mode: "cors", signal: ctrl.signal });
     if (!res.ok) throw new Error(res.status + "");
-    const buf = await res.arrayBuffer();
+    // Stream with progress when the host reports a length — big files no
+    // longer look frozen behind a single "Fetching…" toast.
+    const total = Number(res.headers.get("content-length")) || 0;
+    let buf;
+    if (res.body && total > 0) {
+      const reader = res.body.getReader();
+      const chunks = [];
+      let got = 0, lastPct = -1;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        got += value.length;
+        const pct = Math.min(99, Math.floor((got / total) * 100));
+        if (pct >= lastPct + 10) { lastPct = pct; ui.toast(`Fetching… ${pct}%`); }
+      }
+      const all = new Uint8Array(got);
+      let o = 0;
+      for (const c of chunks) { all.set(c, o); o += c.length; }
+      buf = all.buffer;
+    } else {
+      buf = await res.arrayBuffer();
+    }
     const audio = await engine.decode(buf);
     const name = decodeURIComponent(url.split("/").pop().split("?")[0]) || "track";
     applyLoaded(deck, audio, name.replace(/\.[^.]+$/, ""));
   } catch (err) {
     console.error(err);
-    ui.toast("Load failed — check the URL allows cross-origin (CORS)");
+    ui.toast(err && err.name === "AbortError"
+      ? "Load timed out — the host is too slow or unreachable"
+      : "Load failed — check the URL allows cross-origin (CORS)", { severity: "error" });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-function applyLoaded(deck, audio, name) {
+/**
+ * Load a decoded buffer onto a deck and refresh every readout.
+ * opts.bpm   — known tempo (presets, PAD renders, doubles): shown immediately.
+ * opts.detect — set false to skip BPM detection (FX one-shots, doubles).
+ */
+// Guarded-control styling: with no track loaded, a deck's transport and hot
+// cues LOOK unavailable (aria-disabled + .is-disabled) while staying
+// clickable, so activating one still explains itself via toast. Real
+// `disabled` would silence that guidance.
+function updateDeckGuards(deck) {
+  const has = !!engine.decks[deck].buffer;
+  document
+    .querySelectorAll(`.transport[data-deck="${deck}"] .btn, .hotcues[data-deck="${deck}"] .hotcue-chip`)
+    .forEach((b) => {
+      b.classList.toggle("is-disabled", !has);
+      if (has) b.removeAttribute("aria-disabled");
+      else b.setAttribute("aria-disabled", "true");
+    });
+}
+
+function applyLoaded(deck, audio, name, opts = {}) {
   engine.decks[deck].loadBuffer(audio, name);
   ui.waves[deck].setBuffer(audio);
   ui.setTitle(deck, name);
   ui.updatePosition(deck, 0);
   ui.setPlaying(deck, false);
-  hot[deck] = [null, null, null, null]; // fresh track, clear hot cues
+  hot[deck] = Array(HOT_CUE_COUNT).fill(null); // fresh track, clear hot cues
   renderHot(deck);
+  drawArtThumb(deck);
+  updateDeckGuards(deck);
+
+  if (demoChips[deck]) demoChips[deck].hidden = true;
+
+  const token = ++bpmDetectToken[deck]; // any older in-flight detection is stale
+  if (opts.bpm) {
+    engine.decks[deck].setBpm(opts.bpm);
+    bpmKnown[deck] = true;
+    // Known tempo ⇒ anchored beat grid (PAD renders / presets start on the one).
+    ui.waves[deck].setBeatGrid({ bpm: opts.bpm, offset: 0, anchored: true });
+  } else {
+    bpmKnown[deck] = false;
+    ui.waves[deck].setBeatGrid(null);
+    if (opts.detect !== false) {
+      // Detect off the load path; only apply if this deck still holds the track.
+      setTimeout(() => {
+        if (bpmDetectToken[deck] !== token || engine.decks[deck].buffer !== audio) return;
+        const grid = detectBeatGrid(audio);
+        if (grid && bpmDetectToken[deck] === token && engine.decks[deck].buffer === audio) {
+          engine.decks[deck].setBpm(grid.bpm);
+          engine.decks[deck].beatOffset = grid.offset;
+          bpmKnown[deck] = true;
+          ui.setBpm(deck, true);
+          // Detected tempo & downbeat offset ⇒ accurate aligned beat grid
+          ui.waves[deck].setBeatGrid({ bpm: grid.bpm, offset: grid.offset, anchored: true });
+        }
+      }, 40);
+    }
+  }
+  ui.setBpm(deck, bpmKnown[deck]);
   ui.toast(`Deck ${deck}: ${name}`);
+}
+
+/** Set a deck's BPM by hand (tap or typed) — readout, grid and FX sync follow. */
+function setDeckBpm(deck, bpm) {
+  const d = engine.decks[deck];
+  if (!d.buffer) { ui.toast("Load a track first"); return false; }
+  bpmDetectToken[deck]++; // cancel any in-flight auto-detection
+  d.setBpm(bpm);
+  bpmKnown[deck] = true;
+  ui.setBpm(deck, true);
+  // Manual tempo ⇒ beat ticks only (the downbeat is unknown — no bar numbers).
+  ui.waves[deck].setBeatGrid({ bpm, offset: 0, anchored: false });
+  return true;
+}
+
+/** Tap-to-set + double-click-to-type on a deck's BPM readout. */
+function attachBpmEntry(el, deck) {
+  const tapper = createTapTempo();
+  let flashTimer = null;
+  el.addEventListener("click", () => {
+    const bpm = tapper.tap(performance.now());
+    if (bpm == null) {
+      if (tapper.count >= 1 && engine.decks[deck].buffer) {
+        el.classList.add("tapping");
+        clearTimeout(flashTimer);
+        flashTimer = setTimeout(() => el.classList.remove("tapping"), 2100);
+      }
+      return;
+    }
+    if (setDeckBpm(deck, bpm)) ui.toast(`Deck ${deck}: tapped ${bpm} BPM`);
+  });
+  el.addEventListener("dblclick", (e) => {
+    e.preventDefault();
+    tapper.reset();
+    el.classList.remove("tapping");
+    const current = engine.decks[deck].bpm || 120;
+    const typed = prompt(`Deck ${deck} BPM`, String(current));
+    if (typed == null) return;
+    const bpm = parseFloat(typed);
+    if (!(bpm >= 40 && bpm <= 240)) { ui.toast("BPM must be 40–240", { severity: "error" }); return; }
+    if (setDeckBpm(deck, Math.round(bpm * 10) / 10)) ui.toast(`Deck ${deck}: ${bpm} BPM set`);
+  });
+}
+
+/** Render a real mini-waveform of the loaded track into the album-art tile. */
+function drawArtThumb(deck) {
+  const art = arts[deck];
+  const wave = ui.waves[deck];
+  if (!art || !wave || !wave.peaks || !wave.peakCount) return;
+  let cv = art.querySelector("canvas");
+  if (!cv) { cv = document.createElement("canvas"); art.appendChild(cv); }
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(24, art.clientWidth || 64);
+  const h = Math.max(24, art.clientHeight || 64);
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = DECK_COLORS[deck];
+  ctx.globalAlpha = 0.85;
+  const n = wave.peakCount, mid = h / 2;
+  for (let x = 0; x < w; x++) {
+    const p = Math.min(n - 1, Math.floor((x / w) * n));
+    const min = wave.peaks[p * 2], max = wave.peaks[p * 2 + 1];
+    ctx.beginPath();
+    ctx.moveTo(x + 0.5, mid - max * (mid - 1));
+    ctx.lineTo(x + 0.5, mid - min * (mid - 1) + 0.5);
+    ctx.stroke();
+  }
+  art.classList.add("has-art");
 }
 
 function instantDoubles(from) {
   const src = engine.decks[from];
   if (!src.buffer) { ui.toast(`Deck ${from} is empty`); return; }
   const to = from === "A" ? "B" : "A";
-  applyLoaded(to, src.buffer, src.name);
+  applyLoaded(to, src.buffer, src.name, {
+    bpm: bpmKnown[from] ? src.bpm : null,
+    detect: false, // same audio — copying the source deck's knowledge is truthful
+  });
   engine.decks[to].seek(src.position);
   if (src.playing) engine.decks[to].play();
   ui.toast(`Doubled ${from} → ${to}`);
@@ -289,70 +1084,77 @@ function instantDoubles(from) {
 function setupGlobalRecorder() {
   const recBtn = document.getElementById("record-btn");
   if (!recBtn) return;
-  
-  let rec = null;
-  let chunks = [];
-  let isRecording = false;
+  // The button is [red dot][label] — only the label text changes.
+  const recLabel = () => recBtn.querySelector(".rec-label") || recBtn;
+
+  const recorder = createMixRecorder(engine);
   let startTime = 0;
   let timerInterval = null;
 
-  const dest = engine.ctx.createMediaStreamDestination();
-  engine.limiter.connect(dest);
+  const download = (blob, ext) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `sxratch-mix-${new Date().toISOString().slice(0, 10)}.${ext}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  };
 
-  recBtn.addEventListener("click", () => {
-    if (!window.MediaRecorder) {
-      ui.toast("MediaRecorder not supported in this browser");
-      return;
-    }
+  const resetUI = () => {
+    clearInterval(timerInterval);
+    recBtn.classList.remove("recording");
+    document.body.classList.remove("recording");
+    recLabel().textContent = "REC";
+  };
 
-    if (!isRecording) {
-      // Start Recording
-      chunks = [];
-      try {
-        rec = new MediaRecorder(dest.stream);
-      } catch (err) {
-        console.error(err);
-        ui.toast("Could not start recording");
+  if (recorder) {
+    recorder.onerror = (msg) => { resetUI(); ui.toast(msg); ui.announce?.(msg); };
+  }
+
+  // Also offer a lossless WAV alongside the compressed take (decode the blob
+  // through the live context, then reuse the PAD's WAV encoder). Capped: a
+  // decoded float mix is ~23 MB/min, so very long takes ship compressed-only.
+  const WAV_CAP_SECONDS = 12 * 60;
+  const offerWav = async (blob) => {
+    try {
+      const buf = await engine.ctx.decodeAudioData(await blob.arrayBuffer());
+      if (buf.duration > WAV_CAP_SECONDS) {
+        ui.toast("Take over 12 min — saved compressed only");
         return;
       }
+      download(bufferToWav(buf), "wav");
+    } catch (err) {
+      console.warn("WAV conversion failed; compressed file already saved", err);
+    }
+  };
 
-      rec.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) chunks.push(e.data);
-      };
-
-      rec.onstop = () => {
-        clearInterval(timerInterval);
-        const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `sxratch-mix-${new Date().toISOString().slice(0, 10)}.webm`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 4000);
-        ui.toast("Mix saved!");
-        recBtn.textContent = "🔴 REC";
-      };
-
-      rec.start();
-      isRecording = true;
+  recBtn.addEventListener("click", async () => {
+    if (!recorder) {
+      ui.toast("Recording is not supported in this browser", { severity: "error" });
+      return;
+    }
+    if (!recorder.recording) {
+      if (!recorder.start()) return; // onerror already surfaced it
       startTime = Date.now();
       recBtn.classList.add("recording");
-      ui.toast("Recording started...");
-
+      document.body.classList.add("recording"); // subtle red frame on the whole rig
+      ui.toast("Recording started");
+      ui.announce?.("Recording started");
       timerInterval = setInterval(() => {
         const elapsed = Math.floor((Date.now() - startTime) / 1000);
         const m = Math.floor(elapsed / 60);
         const s = elapsed % 60;
-        recBtn.textContent = `🔴 REC [${m}:${s.toString().padStart(2, "0")}]`;
+        recLabel().textContent = `REC ${m}:${s.toString().padStart(2, "0")}`;
       }, 1000);
-
     } else {
-      // Stop Recording
-      if (rec && rec.state !== "inactive") {
-        rec.stop();
-      }
-      isRecording = false;
-      recBtn.classList.remove("recording");
+      const took = Math.round((Date.now() - startTime) / 1000);
+      const result = await recorder.stop();
+      resetUI();
+      if (!result) { ui.toast("Nothing was recorded", { severity: "error" }); return; }
+      download(result.blob, result.ext);
+      ui.toast("Mix saved — preparing WAV…", { severity: "ok" });
+      ui.announce?.(`Recording stopped — ${Math.floor(took / 60)} minutes ${took % 60} seconds saved`);
+      offerWav(result.blob);
     }
   });
 }
@@ -360,8 +1162,8 @@ function setupGlobalRecorder() {
 // ---------- Presets Loader ----------
 function setupPresets() {
   document.querySelectorAll(".preset-select").forEach((sel) => {
-    const deckId = sel.dataset.deck;
     sel.addEventListener("change", async () => {
+      const deckId = sel.dataset.deck || "A";
       const val = sel.value;
       if (!val) return;
       sel.disabled = true;
@@ -369,6 +1171,7 @@ function setupPresets() {
       try {
         let buffer = null;
         let label = "";
+        let opts = { detect: false }; // synth FX one-shots have no meaningful BPM
 
         if (val === "scratch") {
           label = "Scratch Tool (Synth)";
@@ -379,21 +1182,101 @@ function setupPresets() {
         } else if (val === "beat") {
           label = "Practice Beat (100 BPM)";
           buffer = makeBeat(engine.ctx, 100, 24);
-          engine.decks[deckId].bpm = 100; // set deck BPM
+          opts = { bpm: 100 }; // known tempo — show it immediately
         }
 
         if (buffer) {
-          applyLoaded(deckId, buffer, label);
+          applyLoaded(deckId, buffer, label, opts);
         }
       } catch (err) {
         console.error(err);
-        ui.toast("Error generating preset");
+        ui.toast("Couldn't generate that preset", { severity: "error" });
       } finally {
         sel.disabled = false;
         sel.value = ""; // reset selector placeholder
       }
     });
   });
+}
+
+// ---------- Demo chips + first-run tour ----------
+function setupDemoChips() {
+  const load = {
+    A: () => applyLoaded("A", makeBeat(engine.ctx, 100, 24), "Demo Beat (100 BPM)", { bpm: 100 }),
+    B: () => applyLoaded("B", generateScratchPreset(engine.ctx), "Scratch Tool (Synth)", { detect: false }),
+  };
+  for (const id of ["A", "B"]) {
+    demoChips[id]?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      load[id]();
+    });
+  }
+}
+
+/**
+ * First-run coach marks: short steps over live UI. Reuses the practice-mode
+ * .coach-target highlight. Runs once per flagKey (localStorage); "Skip" and
+ * Esc both end it. One generic runner serves the deck tour AND the PAD tour.
+ */
+let activeQuickTourEnd = null;
+function runTour(flagKey, steps) {
+  try { if (localStorage.getItem(flagKey)) return; } catch {}
+  if (document.getElementById("tour-tip")) return; // one tour at a time
+  let i = -1, target = null;
+  const tip = document.createElement("div");
+  tip.id = "tour-tip";
+  tip.setAttribute("role", "dialog");
+  tip.setAttribute("aria-label", "Quick tour");
+  tip.innerHTML = `<p class="tour-text"></p>
+    <div class="tour-actions">
+      <span class="tour-count"></span>
+      <button type="button" class="btn tour-skip">Skip</button>
+      <button type="button" class="btn primary tour-next">Next</button>
+    </div>`;
+  const end = () => {
+    try { localStorage.setItem(flagKey, "1"); } catch {}
+    target?.classList.remove("coach-target");
+    tip.remove();
+    window.removeEventListener("keydown", onKey, true);
+    if (activeQuickTourEnd === end) activeQuickTourEnd = null;
+  };
+  activeQuickTourEnd = end;
+  const show = () => {
+    i++;
+    target?.classList.remove("coach-target");
+    if (i >= steps.length) { end(); return; }
+    target = document.querySelector(steps[i].sel);
+    if (!target) { show(); return; }
+    target.classList.add("coach-target");
+    tip.querySelector(".tour-text").textContent = steps[i].text;
+    tip.querySelector(".tour-count").textContent = `${i + 1} / ${steps.length}`;
+    tip.querySelector(".tour-next").textContent = i === steps.length - 1 ? "Done" : "Next";
+  };
+  const onKey = (e) => { if (e.code === "Escape") { end(); e.stopPropagation(); } };
+  tip.querySelector(".tour-skip").addEventListener("click", end);
+  tip.querySelector(".tour-next").addEventListener("click", show);
+  window.addEventListener("keydown", onKey, true);
+  document.body.appendChild(tip);
+  show();
+  tip.querySelector(".tour-next").focus();
+}
+
+function maybeStartTour() {
+  const coarse = window.matchMedia("(pointer: coarse)").matches;
+  runTour("sxratch.toured", [
+    { sel: ".wave-stage", text: "Load a track: tap a LOAD DEMO chip, drop an audio file anywhere on a deck, or use LOAD / LINK." },
+    { sel: "#pad-A", text: coarse ? "This is the platter — press and drag left/right to scratch." : "This is the platter — press-drag to scratch, or hold right Ctrl and move one finger on the trackpad." },
+    { sel: "#crossfader", text: "The crossfader blends Deck A and B. It snaps to the centre notch — double-click any control to reset it." },
+  ]);
+}
+
+/** The studio's own steps, on first PAD entry (anchored to the DAW shell). */
+function maybeStartPadTour() {
+  runTour("sxratch.dawtoured", [
+    { sel: "#daw-heads", text: "Tracks live here — synths, drum kits and audio. M mutes, S solos, ⏺ arms a track for recording. ＋ adds more." },
+    { sel: "#daw-timeline", text: "The timeline holds regions: drag to move, pull the edges to resize, double-click to edit notes. The ✏ tool draws new regions, ✂ splits them." },
+    { sel: ".daw-transport", text: "Play, loop and record from here. Arm an audio track and press ● to record your mic or interface while the other tracks play." },
+  ]);
 }
 
 // ---------- Sampler ----------
@@ -405,10 +1288,18 @@ function setupSampler() {
     const pad = document.createElement("div");
     pad.className = "samp-pad";
     pad.dataset.slot = String(i);
-    pad.innerHTML = `<input type="file" accept="audio/*" hidden /><button class="samp-stop" title="Stop">■</button><span class="samp-key"></span><span class="samp-name">empty</span>`;
+    // Keyboard/AT support for what is visually a pad surface.
+    pad.setAttribute("role", "button");
+    pad.tabIndex = 0;
+    pad.innerHTML = `<input type="file" accept="audio/*" hidden /><button class="samp-stop" title="Stop" aria-label="Stop sample ${i + 1}" tabindex="-1">■</button><span class="samp-key"></span><span class="samp-name">empty</span>`;
     const input = pad.querySelector("input");
     pad.querySelector(".samp-stop").addEventListener("click", (e) => { e.stopPropagation(); sampler.stop(i); });
-    pad.addEventListener("click", () => {
+    pad.addEventListener("keydown", (e) => {
+      if (e.code === "Enter" || e.code === "Space") { e.preventDefault(); e.stopPropagation(); pad.click(); }
+      else if (e.code === "Delete" || e.code === "Backspace") { e.preventDefault(); sampler.stop(i); }
+    });
+    pad.addEventListener("click", (e) => {
+      if (pad.dataset.longpressed) { delete pad.dataset.longpressed; return; } // swallow the click after a long-press clear
       if (mappingSource) {
         mapRegionToPad(mappingSource.deckId, mappingSource.start, mappingSource.end, i);
         cancelMappingMode();
@@ -417,12 +1308,31 @@ function setupSampler() {
       if (sampler.slots[i]) triggerSample(i);
       else input.click();
     });
-    pad.addEventListener("dblclick", () => { sampler.clear(i); renderPad(i); });
+    // Clear = LONG-PRESS (600 ms), not dblclick: double-clicking fired the
+    // sample twice before clearing it. Delete/Backspace still clears too.
+    let pressTimer = null;
+    pad.addEventListener("pointerdown", () => {
+      if (!sampler.slots[i]) return;
+      pressTimer = setTimeout(() => {
+        pad.dataset.longpressed = "1";
+        sampler.clear(i);
+        renderPad(i);
+        haptic(20);
+        ui.toast(`Pad ${i + 1} cleared`);
+      }, 600);
+    });
+    const cancelPress = () => { clearTimeout(pressTimer); };
+    pad.addEventListener("pointerup", cancelPress);
+    pad.addEventListener("pointerleave", cancelPress);
+    pad.addEventListener("pointercancel", cancelPress);
+    pad.addEventListener("keydown", (e) => {
+      if ((e.code === "Delete" || e.code === "Backspace") && e.shiftKey) { e.preventDefault(); sampler.clear(i); renderPad(i); }
+    });
     input.addEventListener("change", async () => {
       if (input.files[0]) {
         ui.toast(`Loading pad ${i + 1}…`);
         try { await sampler.load(i, input.files[0]); renderPad(i); ui.toast(`Pad ${i + 1}: ${sampler.slots[i].name}`); }
-        catch { ui.toast("Couldn't decode that sound"); }
+        catch { ui.toast("Couldn't decode that sound", { severity: "error" }); }
       }
       input.value = "";
     });
@@ -439,7 +1349,7 @@ function setupSampler() {
   vol.addEventListener("input", () => sampler.setVolume(parseFloat(vol.value)));
 }
 
-function triggerSample(i) { if (sampler && sampler.trigger(i)) { flashPad(i); haptic(8); } }
+function triggerSample(i, vel = 1) { if (sampler && sampler.trigger(i, vel)) { flashPad(i); haptic(8); } }
 function flashPad(i) {
   const pad = document.querySelector(`.samp-pad[data-slot="${i}"]`);
   if (!pad) return;
@@ -453,6 +1363,9 @@ function renderPad(i) {
   pad.classList.toggle("loaded", !!s);
   pad.querySelector(".samp-name").textContent = s ? s.name : "empty";
   pad.querySelector(".samp-key").textContent = fmtKey(config.keys["samp" + (i + 1)]);
+  pad.setAttribute("aria-label", s
+    ? `Sampler pad ${i + 1}: ${s.name} — Enter fires, Delete stops`
+    : `Sampler pad ${i + 1}: empty — Enter loads a sound`);
 }
 function renderPads() { for (let i = 0; i < 8; i++) renderPad(i); }
 
@@ -461,13 +1374,27 @@ function setupTransport() {
   document.querySelectorAll(".play-btn").forEach((btn) =>
     btn.addEventListener("click", () => engine.decks[btn.dataset.deck].toggle())
   );
-  document.querySelectorAll(".cue-btn").forEach((btn) =>
-    btn.addEventListener("click", () => { engine.decks[btn.dataset.deck].goToCue(); coach?.notify(`cue${btn.dataset.deck}`); })
-  );
+  document.querySelectorAll(".cue-btn").forEach((btn) => {
+    const id = btn.dataset.deck;
+    const d = engine.decks[id];
+    const down = (e) => {
+      e.preventDefault();
+      d.cueDown();
+      coach?.notify(`cue${id}`);
+    };
+    const up = (e) => {
+      e.preventDefault();
+      d.cueUp();
+    };
+    btn.addEventListener("pointerdown", down);
+    btn.addEventListener("pointerup", up);
+    btn.addEventListener("pointerleave", up);
+    btn.addEventListener("pointercancel", up);
+  });
   document.querySelectorAll(".set-btn").forEach((btn) =>
     btn.addEventListener("click", () => {
       engine.decks[btn.dataset.deck].setCue();
-      ui.toast(`Cue ${btn.dataset.deck} set`);
+      ui.toast(`Deck ${btn.dataset.deck}: cue set`);
       coach?.notify(`setCue${btn.dataset.deck}`);
     })
   );
@@ -525,15 +1452,18 @@ function syncDeck(id) {
   const m = engine.decks[otherId];
   if (!d.buffer || !m.buffer) { ui.toast("Load both decks to sync"); return; }
   const masterEff = m.bpm * (1 + m.tempo / 100);
-  const target = Math.max(-8, Math.min(8, (masterEff / d.bpm - 1) * 100));
+  const range = d.tempoRange || 8;
+  const target = Math.max(-range, Math.min(range, (masterEff / d.bpm - 1) * 100));
   tempoFaders[id]?.set(target); // moves the fader + applies tempo + readout
-  // Align this deck's beat phase to the master's.
+  // Align this deck's beat phase to the master's, accounting for downbeat offsets.
   const eff = d.bpm * (1 + target / 100);
   if (d.duration > 0 && m.duration > 0) {
     const beatM = 60 / masterEff, beatD = 60 / eff;
-    const mPhase = ((m.position * m.duration) % beatM + beatM) % beatM;
+    const mOff = m.beatOffset || 0;
+    const dOff = d.beatOffset || 0;
+    const mPhase = (((m.position * m.duration - mOff) % beatM) + beatM) % beatM;
     const dTime = d.position * d.duration;
-    const dPhase = (dTime % beatD + beatD) % beatD;
+    const dPhase = (((dTime - dOff) % beatD) + beatD) % beatD;
     let delta = mPhase - dPhase;
     if (delta > beatD / 2) delta -= beatD;
     if (delta < -beatD / 2) delta += beatD;
@@ -549,17 +1479,24 @@ function setupMixer() {
     const deck = el.dataset.deck;
     const band = el.dataset.band;
     const svg = el.closest(".knob-dial").querySelector(".knob-scale");
-    const setArc = buildKnobScale(svg, band === "filter" ? "#6c7bff" : DECK_COLORS[deck]);
+    const setArc = buildKnobScale(svg, band === "filter" ? themeColors().accent : DECK_COLORS[deck]);
+    knobArcs.push({ svg, band, deck, setArc });
     let value = 0.5, dflt = 0.5, apply;
     if (band === "trim") { value = dflt = 0.67; apply = (v) => engine.decks[deck].setTrim(v); }
     else if (band === "filter") { value = dflt = 0.5; apply = (v) => engine.decks[deck].setFilter(v); }
     else { apply = (v) => { engine.decks[deck].setEQ(band, v); coach?.notify("eq"); }; }
+    const BAND_NAMES = { trim: "trim", high: "high EQ", mid: "mid EQ", low: "low EQ", filter: "filter" };
     const kh = attachKnob(el, {
       value, default: dflt,
       indicator: el, // rotate the whole knob so the dot orbits its centre
+      label: `Deck ${deck} ${BAND_NAMES[band] || band}`,
       onChange: (v) => { apply(v); setArc(v); },
     });
-    if (band === "mid") midiTargets["eq" + deck] = (v) => kh.set(v); // MIDI -> EQ mid sweep
+    // Every channel knob is a MIDI target: eqAlow/eqAmid/eqAhigh, trimA,
+    // filterA (and legacy eqA = mid) — all remappable via MIDI Learn.
+    if (band === "mid") midiTargets["eq" + deck] = (v) => kh.set(v);
+    const targetId = band === "trim" || band === "filter" ? band + deck : "eq" + deck + band;
+    midiTargets[targetId] = (v) => kh.set(v);
     apply(value); setArc(value);
   });
 
@@ -569,40 +1506,157 @@ function setupMixer() {
     engine.decks[id].setVolume(start);
     const vh = attachFader(document.getElementById(`vol-${id}`), {
       min: 0, max: 1, value: start, default: 1,
+      label: `Deck ${id} volume`,
+      valueText: (v) => Math.round(v * 100) + "%",
       ticks: [0, 0.25, 0.5, 0.75, 1].map((at) => ({ at, major: at === 1 })),
       onChange: (v) => engine.decks[id].setVolume(v),
     });
     midiTargets["vol" + id] = (v) => vh.set(v);
   }
 
-  // Tempo faders (vertical, ±8%, neutral = 0)
-  for (const id of ["A", "B"]) {
+  function initTempoFader(id, range = 8) {
+    const d = engine.decks[id];
+    d.setTempoRange(range);
     const read = document.getElementById(`tempo-${id}-read`);
     const fmt = (v) => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v).toFixed(1)}%`;
-    tempoFaders[id] = attachFader(document.getElementById(`tempo-${id}`), {
-      min: -8, max: 8, value: 0, default: 0, step: 0.1,
+    const faderEl = document.getElementById(`tempo-${id}`);
+    if (!faderEl) return;
+    const half = Math.round(range / 2);
+    tempoFaders[id] = attachFader(faderEl, {
+      min: -range, max: range, value: d.tempo, default: 0, step: 0.1,
+      label: `Deck ${id} tempo`,
+      valueText: fmt,
       ticks: [
-        { at: 8, label: "+8", major: true }, { at: 4 }, { at: 0, major: true },
-        { at: -4 }, { at: -8, label: "−8", major: true },
+        { at: range, label: `+${range}`, major: true }, { at: half }, { at: 0, major: true },
+        { at: -half }, { at: -range, label: `−${range}`, major: true },
       ],
-      onChange: (v) => { engine.decks[id].setTempo(v); read.textContent = fmt(v); coach?.notify("tempo"); },
+      onChange: (v) => {
+        d.setTempo(v);
+        read.textContent = fmt(v);
+        ui.setBpm(id, bpmKnown[id]); // effective BPM follows the tempo fader
+        coach?.notify("tempo");
+      },
     });
-    read.textContent = fmt(0);
+    read.textContent = fmt(d.tempo);
   }
 
-  // Crossfader (horizontal, neutral = centre)
+  // Tempo faders (vertical, selectable range ±6..±100%, neutral = 0) + Pitch Bend
+  for (const id of ["A", "B"]) {
+    initTempoFader(id, 8);
+
+    const rail = document.querySelector(`.deck-rail[data-deck="${id}"]`);
+    if (rail) {
+      const downBtn = rail.querySelector(".bend-down");
+      const upBtn = rail.querySelector(".bend-up");
+      const rangeBtn = rail.querySelector(".bend-range");
+
+      const onDown = (e) => { e.preventDefault(); engine.decks[id].nudgeStart(-1); };
+      const onStop = (e) => { e.preventDefault(); engine.decks[id].nudgeEnd(); };
+      downBtn?.addEventListener("pointerdown", onDown);
+      downBtn?.addEventListener("pointerup", onStop);
+      downBtn?.addEventListener("pointerleave", onStop);
+      downBtn?.addEventListener("pointercancel", onStop);
+
+      const onUp = (e) => { e.preventDefault(); engine.decks[id].nudgeStart(1); };
+      upBtn?.addEventListener("pointerdown", onUp);
+      upBtn?.addEventListener("pointerup", onStop);
+      upBtn?.addEventListener("pointerleave", onStop);
+      upBtn?.addEventListener("pointercancel", onStop);
+
+      const RANGES = [6, 8, 10, 16, 100];
+      let curRange = 8;
+      rangeBtn?.addEventListener("click", () => {
+        const idx = RANGES.indexOf(curRange);
+        curRange = RANGES[(idx + 1) % RANGES.length];
+        rangeBtn.textContent = `±${curRange}%`;
+        initTempoFader(id, curRange);
+        ui.toast(`Deck ${id} range: ±${curRange}%`);
+      });
+    }
+  }
+
+  // Headphone Cue (PFL) buttons
+  document.querySelectorAll(".pfl-btn").forEach((btn) => {
+    const deck = btn.dataset.deck;
+    btn.addEventListener("click", () => {
+      const active = engine.decks[deck].toggleCuePfl();
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+      ui.toast(`Deck ${deck} Headphone Cue ${active ? "ON" : "OFF"}`);
+    });
+  });
+
+  // Headphone volume & Cue/Master mix
+  const hpVol = document.getElementById("hp-vol");
+  if (hpVol) {
+    engine.setCueVolume(parseFloat(hpVol.value));
+    hpVol.addEventListener("input", () => engine.setCueVolume(parseFloat(hpVol.value)));
+  }
+  const hpMix = document.getElementById("hp-mix");
+  if (hpMix) {
+    engine.setCueMix(parseFloat(hpMix.value));
+    hpMix.addEventListener("input", () => engine.setCueMix(parseFloat(hpMix.value)));
+  }
+
+  // Crossfader (horizontal, neutral = centre, magnetic centre notch)
   const cf = attachFader(document.getElementById("crossfader"), {
     min: 0, max: 1, value: 0.5, default: 0.5,
+    label: "Crossfader",
+    valueText: (v) => (v === 0.5 ? "centre" : v < 0.5 ? `${Math.round((0.5 - v) * 200)}% toward A` : `${Math.round((v - 0.5) * 200)}% toward B`),
     ticks: [0, 0.25, 0.5, 0.75, 1].map((at) => ({ at, major: at === 0.5 })),
+    detent: { at: 0.5, radius: 0.02, onSnap: () => haptic(6) },
     onChange: (v) => engine.setCrossfade(v),
   });
   ui.crossfadeSet = cf.set; // let keyboard / gestures move the on-screen fader
   midiTargets.crossfade = (v) => cf.set(v); // and MIDI
 
-  // Master (kept as a compact native slider in the header)
+  // Master (hidden native slider keeps the value; the real control is the
+  // topbar knob built in setupTopbarMaster)
   const master = document.getElementById("master-vol");
   engine.setMasterVolume(parseFloat(master.value));
   master.addEventListener("input", () => engine.setMasterVolume(parseFloat(master.value)));
+}
+
+/**
+ * Topbar master strip: a REAL knob (drag ↕ / wheel / double-click to 90%) and
+ * a live output meter with peak-hold — replacing the painted decorations.
+ */
+function setupTopbarMaster() {
+  const wrap = document.querySelector("#topbar .master");
+  const input = document.getElementById("master-vol");
+  if (!wrap || !input || wrap.querySelector(".master-knob")) return;
+
+  const vu = document.createElement("div");
+  vu.className = "master-vu";
+  vu.setAttribute("aria-hidden", "true");
+  vu.innerHTML = "<i></i>";
+
+  const knob = document.createElement("div");
+  knob.className = "master-knob";
+  knob.innerHTML = '<span class="knob-dot"></span>';
+  knob.title = "Master volume — drag ↕ · wheel · double-click = 90%";
+  knob.setAttribute("role", "slider");
+  knob.setAttribute("aria-label", "Master volume");
+  knob.setAttribute("aria-valuemin", "0");
+  knob.setAttribute("aria-valuemax", "1");
+
+  wrap.append(vu, knob);
+  attachKnob(knob, {
+    value: parseFloat(input.value),
+    default: 0.9,
+    onChange: (v) => {
+      engine.setMasterVolume(v);
+      input.value = String(v); // keep the hidden slider (and anything reading it) in sync
+    },
+  });
+
+  // Live output level, tapped at the chain's final node (post-limiter AND
+  // post master volume — the meter shows what actually leaves the app).
+  masterAnalyser = engine.ctx.createAnalyser();
+  masterAnalyser.fftSize = 256;
+  masterBuf = new Float32Array(masterAnalyser.fftSize);
+  engine.master.connect(masterAnalyser);
+  masterVuEl = vu;
 }
 
 /**
@@ -626,7 +1680,8 @@ function buildKnobScale(svg, color) {
     const line = document.createElementNS(NS, "line");
     line.setAttribute("x1", x1); line.setAttribute("y1", y1);
     line.setAttribute("x2", x2); line.setAttribute("y2", y2);
-    line.setAttribute("stroke", major ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.22)");
+    line.setAttribute("stroke", major ? "currentColor" : "currentColor");
+    line.setAttribute("stroke-opacity", major ? 0.55 : 0.22);
     line.setAttribute("stroke-width", major ? 2.4 : 1.4);
     line.setAttribute("stroke-linecap", "round");
     svg.append(line);
@@ -652,10 +1707,10 @@ function buildKnobScale(svg, color) {
 }
 
 // ---------- Keyboard (configurable) ----------
+// UI sync happens in engine.onCrossfade (registered in setup), so every caller
+// just moves the engine — one crossfade path for keyboard, gestures and coach.
 function setCrossUI(v) {
-  v = Math.max(0, Math.min(1, v));
-  engine.setCrossfade(v);
-  ui.syncCrossfade(v);
+  engine.setCrossfade(Math.max(0, Math.min(1, v)));
 }
 
 function buildActions() {
@@ -664,15 +1719,17 @@ function buildActions() {
   return {
     playA: () => { A.toggle(); ui.flash("A"); },
     playB: () => { B.toggle(); ui.flash("B"); },
-    cueA: () => { A.goToCue(); coach?.notify("cueA"); },
-    cueB: () => { B.goToCue(); coach?.notify("cueB"); },
-    setCueA: () => { A.setCue(); ui.toast("Cue A set"); coach?.notify("setCueA"); },
-    setCueB: () => { B.setCue(); ui.toast("Cue B set"); coach?.notify("setCueB"); },
+    cueA: () => { A.cueDown(); coach?.notify("cueA"); },
+    cueB: () => { B.cueDown(); coach?.notify("cueB"); },
+    setCueA: () => { A.setCue(); ui.toast("Deck A: cue set"); coach?.notify("setCueA"); },
+    setCueB: () => { B.setCue(); ui.toast("Deck B: cue set"); coach?.notify("setCueB"); },
     crossLeft: () => setCrossUI(engine.crossfade - 0.05),
     crossRight: () => setCrossUI(engine.crossfade + 0.05),
     crossCenter: () => setCrossUI(0.5),
     hotA1: cue("A", 0), hotA2: cue("A", 1), hotA3: cue("A", 2), hotA4: cue("A", 3),
+    hotA5: cue("A", 4), hotA6: cue("A", 5), hotA7: cue("A", 6), hotA8: cue("A", 7),
     hotB1: cue("B", 0), hotB2: cue("B", 1), hotB3: cue("B", 2), hotB4: cue("B", 3),
+    hotB5: cue("B", 4), hotB6: cue("B", 5), hotB7: cue("B", 6), hotB8: cue("B", 7),
     samp1: () => triggerSample(0), samp2: () => triggerSample(1), samp3: () => triggerSample(2), samp4: () => triggerSample(3),
     samp5: () => triggerSample(4), samp6: () => triggerSample(5), samp7: () => triggerSample(6), samp8: () => triggerSample(7),
     loopA: () => toggleAutoLoop("A"), loopB: () => toggleAutoLoop("B"),
@@ -685,6 +1742,7 @@ let rebindCapture = null; // { type:'keys'|'gestures', name } while listening fo
 function setupKeyboard() {
   rebuildKeyMap();
   const actions = buildActions();
+  const A = engine.decks.A, B = engine.decks.B;
 
   // Capture phase: when rebinding, the next key press becomes the binding and
   // is swallowed so it can't also trigger an action / arm a deck.
@@ -717,6 +1775,12 @@ function setupKeyboard() {
     actions[action]?.(e);
     if (action.startsWith("cross") || action === "playBoth") e.preventDefault();
   });
+
+  window.addEventListener("keyup", (e) => {
+    const action = keyMap[e.code];
+    if (action === "cueA") A.cueUp();
+    else if (action === "cueB") B.cueUp();
+  });
 }
 
 // ---------- Settings / remapping panel ----------
@@ -725,8 +1789,8 @@ const KEY_ACTION_GROUPS = [
   ["Crossfader", [["crossLeft", "Nudge toward A"], ["crossRight", "Nudge toward B"], ["crossCenter", "Centre"]]],
   ["Sync & both", [["playBoth", "Play / pause both"], ["syncA", "Sync A → B"], ["syncB", "Sync B → A"]]],
   ["Loops", [["loopA", "Auto-loop Deck A"], ["loopB", "Auto-loop Deck B"]]],
-  ["Hot cues — Deck A", [["hotA1", "Cue 1"], ["hotA2", "Cue 2"], ["hotA3", "Cue 3"], ["hotA4", "Cue 4"]]],
-  ["Hot cues — Deck B", [["hotB1", "Cue 1"], ["hotB2", "Cue 2"], ["hotB3", "Cue 3"], ["hotB4", "Cue 4"]]],
+  ["Hot cues — Deck A", [["hotA1", "Cue 1"], ["hotA2", "Cue 2"], ["hotA3", "Cue 3"], ["hotA4", "Cue 4"], ["hotA5", "Cue 5"], ["hotA6", "Cue 6"], ["hotA7", "Cue 7"], ["hotA8", "Cue 8"]]],
+  ["Hot cues — Deck B", [["hotB1", "Cue 1"], ["hotB2", "Cue 2"], ["hotB3", "Cue 3"], ["hotB4", "Cue 4"], ["hotB5", "Cue 5"], ["hotB6", "Cue 6"], ["hotB7", "Cue 7"], ["hotB8", "Cue 8"]]],
   ["Sampler pads", [["samp1", "Pad 1"], ["samp2", "Pad 2"], ["samp3", "Pad 3"], ["samp4", "Pad 4"], ["samp5", "Pad 5"], ["samp6", "Pad 6"], ["samp7", "Pad 7"], ["samp8", "Pad 8"]]],
 ];
 const GESTURE_KEYS = [
@@ -838,7 +1902,51 @@ function renderSettings() {
   hamRow.append(hamL, ham);
   body.append(hamRow);
 
+  const audioTitle = document.createElement("div"); audioTitle.className = "set-group-title"; audioTitle.textContent = "Audio output & headphones";
+  body.append(audioTitle);
+
+  const cueRow = document.createElement("div"); cueRow.className = "set-row";
+  const cueL = document.createElement("span"); cueL.textContent = "Headphone cue routing";
+  const cueS = document.createElement("select");
+  cueS.className = "preset-select";
+  cueS.style.minHeight = "28px";
+  cueS.style.padding = "2px 6px";
+  cueS.appendChild(opt("stereo", "Stereo Master (Speakers & Headphones)", (config.cueMode || "stereo") === "stereo"));
+  cueS.appendChild(opt("split", "Split Cue (L: Master / R: Cue)", config.cueMode === "split"));
+  cueS.addEventListener("change", () => {
+    config.cueMode = cueS.value;
+    engine.setCueMode(cueS.value);
+    saveConfig();
+    ui.toast(`Headphone output: ${cueS.value === "split" ? "Split Cue (L: Master / R: Cue)" : "Stereo Master"}`);
+  });
+  cueRow.append(cueL, cueS);
+  body.append(cueRow);
+
+  renderAppearanceSettings(body);
   renderMidiHapticsSettings(body);
+}
+
+function renderAppearanceSettings(body) {
+  const title = document.createElement("div");
+  title.className = "set-group-title";
+  title.textContent = "Appearance";
+  body.append(title);
+
+  const row = document.createElement("label");
+  row.className = "set-row";
+  const l = document.createElement("span");
+  l.textContent = "Theme";
+  const sel = document.createElement("select");
+  sel.id = "theme-select";
+  sel.className = "set-select";
+  [["auto", "Follow system"], ["light", "Light"], ["dark", "Dark"]].forEach(([v, t]) => {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = t; o.selected = config.theme === v;
+    sel.append(o);
+  });
+  sel.addEventListener("change", () => setTheme(sel.value));
+  row.append(l, sel);
+  body.append(row);
 }
 
 function renderMidiHapticsSettings(body) {
@@ -876,13 +1984,24 @@ function renderMidiHapticsSettings(body) {
   // Learn rows for the mappable continuous controls
   const LEARNABLE = [
     ["crossfade", "Crossfader"], ["volA", "Deck A volume"], ["volB", "Deck B volume"],
-    ["eqA", "Deck A EQ (mid)"], ["eqB", "Deck B EQ (mid)"], ["jogA", "Deck A jog/scratch"], ["jogB", "Deck B jog/scratch"],
+    ["eqA", "Deck A EQ (mid)"], ["eqB", "Deck B EQ (mid)"],
+    ["eqAlow", "Deck A EQ (low)"], ["eqAhigh", "Deck A EQ (high)"],
+    ["eqBlow", "Deck B EQ (low)"], ["eqBhigh", "Deck B EQ (high)"],
+    ["trimA", "Deck A trim"], ["trimB", "Deck B trim"],
+    ["filterA", "Deck A filter"], ["filterB", "Deck B filter"],
+    ["jogA", "Deck A jog/scratch"], ["jogB", "Deck B jog/scratch"],
+    // Button actions — press a PAD/NOTE while learning to bind these:
+    ["playA", "Deck A play/pause"], ["playB", "Deck B play/pause"],
+    ["cueA", "Deck A cue"], ["cueB", "Deck B cue"],
+    ["syncA", "Deck A sync"], ["syncB", "Deck B sync"],
+    ["loopA", "Deck A auto-loop"], ["loopB", "Deck B auto-loop"],
   ];
   for (const [action, label] of LEARNABLE) {
     const row = document.createElement("div"); row.className = "set-row";
     const l = document.createElement("span");
-    const cc = config.midi.map[action]?.cc;
-    l.textContent = `${label} — CC ${cc ?? "—"}`;
+    const m = config.midi.map[action];
+    const bound = m?.cc != null ? `CC ${m.cc}` : m?.note != null ? `note ${m.note}` : "—";
+    l.textContent = `${label} — ${bound}`;
     const b = document.createElement("button");
     b.className = "key-btn" + (midiLearn === action ? " capturing" : "");
     b.textContent = midiLearn === action ? "move a control…" : "Learn";
@@ -919,8 +2038,15 @@ function setupMidi() {
     if (el) el.textContent = midiStatusText(info);
   };
   midi.onControl = (cc, value) => handleMidiCC(cc, value);
-  midi.onNote = (note, vel, ch, on) => handleMidiNote(note, on);
-  if (config.midi.enabled && midi.supported()) midi.enable();
+  midi.onNote = (note, vel, ch, on) => handleMidiNote(note, vel, on);
+  midi.onPitchBend = (bend) => handleMidiPitchBend(bend);
+  if (config.midi.enabled && midi.supported()) {
+    // The user previously enabled MIDI: if it can't start now (permission
+    // revoked, device gone), SAY so instead of silently doing nothing.
+    midi.enable().then((ok) => {
+      if (!ok) ui.toast("MIDI couldn't start — check browser permissions in ⚙ Settings", { severity: "error" });
+    });
+  }
 }
 
 function midiStatusText(info) {
@@ -939,12 +2065,16 @@ function handleMidiCC(cc, value) {
     ui.toast(`Mapped CC ${cc}`);
     return;
   }
+  // Studio-first: when the PAD view is up, learned DAW mixer mappings win.
+  if (document.body.classList.contains("view-studio") && DAW.midiCC?.(cc, value)) return;
   const map = config.midi.map;
-  for (const action of ["crossfade", "volA", "volB", "eqA", "eqB"]) {
-    if (map[action] && map[action].cc === cc) { midiTargets[action]?.(value); return; }
-  }
   if (map.jogA && map.jogA.cc === cc) return midiJog("A", value);
   if (map.jogB && map.jogB.cc === cc) return midiJog("B", value);
+  // Generic dispatch: any mapped action with an on-screen target responds —
+  // covers crossfade/volumes and every channel knob without a hardcoded list.
+  for (const [action, m] of Object.entries(map)) {
+    if (m && m.cc === cc && midiTargets[action]) { midiTargets[action](value); return; }
+  }
 }
 
 // A relative jog wheel sends 1..63 forward / 65..127 backward; treat each
@@ -959,17 +2089,49 @@ function midiJog(deck, value01) {
   st.timer = setTimeout(() => { d.touchEnd(); st.active = false; }, 100);
 }
 
-function handleMidiNote(note, on) {
+function handleMidiNote(note, vel, on) {
+  if (document.body.classList.contains("view-studio")) {
+    DAW.midiNote?.(note, vel, on);
+    return;
+  }
   if (!on) return;
-  // Notes 36..43 -> sampler pads 1..8 (the common finger-drum / pad range).
-  if (note >= 36 && note <= 43) triggerSample(note - 36);
+  // MIDI Learn also accepts a NOTE (pads/buttons) for the pending action.
+  if (midiLearn) {
+    config.midi.map[midiLearn] = { note };
+    midiLearn = null;
+    saveConfig();
+    if (!document.getElementById("settings-dialog").hidden) renderSettings();
+    ui.toast(`Mapped note ${note}`);
+    return;
+  }
+  // Note-mapped transport (play/cue/sync/loop per deck, bound via MIDI Learn).
+  for (const [action, m] of Object.entries(config.midi.map)) {
+    if (m && m.note === note) {
+      const fn = buildActions()[action];
+      if (fn) { fn({ shiftKey: false }); return; } // hot-cue actions read e.shiftKey
+    }
+  }
+  // Notes 36..43 -> sampler pads 1..8 (the common finger-drum / pad range),
+  // velocity-sensitive.
+  if (note >= 36 && note <= 43) triggerSample(note - 36, vel);
+}
+
+// Pitch-bend wheel/buttons: a momentary ±8% rate push on the toolbar-active
+// deck that springs back on release — the classic beat-matching nudge. Applied
+// as a temporary worklet rate (the tempo fader state is untouched).
+function handleMidiPitchBend(bend) {
+  const shell = document.querySelector(".controller-shell");
+  const deck = shell?.dataset.activeDeck === "B" ? "B" : "A";
+  const d = engine.decks[deck];
+  const base = 1 + d.tempo / 100;
+  const pushed = Math.abs(bend) < 0.02 ? base : base * (1 + bend * 0.08);
+  d.node.port.postMessage({ type: "rate", value: pushed });
 }
 
 // ---------- Practice mode ----------
 function loadPracticeBeat(deck, bpm) {
   const buf = makeBeat(engine.ctx, bpm, 24);
-  applyLoaded(deck, buf, `practice • ${bpm} BPM`);
-  engine.decks[deck].bpm = bpm; // so auto-loop is beat-accurate
+  applyLoaded(deck, buf, `practice • ${bpm} BPM`, { bpm }); // known tempo → live readout + beat-accurate auto-loop
   return buf;
 }
 
@@ -996,11 +2158,11 @@ function setupLoopsFx() {
     btn.addEventListener("click", () => {
       const d = engine.decks[deckId];
       if (!d.buffer) {
-        ui.toast("Load a track first!");
+        ui.toast("Load a track first");
         return;
       }
       if (d.loop.start < 0 || d.loop.end <= d.loop.start) {
-        ui.toast("Set Loop IN and Loop OUT first to define a region.");
+        ui.toast("Set loop IN and OUT first to define a region");
         return;
       }
 
@@ -1054,23 +2216,19 @@ function setupLoopsFx() {
   });
 }
 
-// Tap the final mix into a MediaRecorder so a routine can be played back / saved.
+// Practice-mode adapter over the shared mix recorder (js/recorder.js): the
+// coach expects { start(), stop(cb → objectURL|null) }. Failures surface as a
+// toast instead of silently producing no routine playback.
 function makeRecorder() {
-  if (!window.MediaRecorder) return null;
-  const dest = engine.ctx.createMediaStreamDestination();
-  engine.limiter.connect(dest);
-  let rec = null, chunks = [];
+  const recorder = createMixRecorder(engine);
+  if (!recorder) return null;
+  recorder.onerror = (msg) => ui.toast(msg);
   return {
     start() {
-      chunks = [];
-      try { rec = new MediaRecorder(dest.stream); } catch { rec = null; return; }
-      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-      rec.start();
+      if (!recorder.start()) ui.toast("Routine recording unavailable — playback won't be offered");
     },
     stop(cb) {
-      if (!rec || rec.state === "inactive") { cb?.(null); return; }
-      rec.onstop = () => cb?.(URL.createObjectURL(new Blob(chunks, { type: rec.mimeType || "audio/webm" })));
-      try { rec.stop(); } catch { cb?.(null); }
+      recorder.stop().then((r) => cb?.(r ? URL.createObjectURL(r.blob) : null));
     },
   };
 }
@@ -1079,7 +2237,7 @@ function setupPractice() {
   coach = new PracticeCoach({ engine, ui, loadBeat: loadPracticeBeat });
   coach.recorder = makeRecorder();
   engine.onJog = (id, rate) => coach.onJog(id, rate);
-  engine.onCrossfade = (v) => coach.onCrossfade(v);
+  // (crossfade instrumentation rides the fan-out registered in setup())
 
   const dialog = document.getElementById("practice-dialog");
   const list = document.getElementById("practice-list");
@@ -1119,22 +2277,55 @@ function setupPractice() {
 let studioReady = false;
 function showView(view) {
   const studio = view === "studio";
+  // A coach mark anchored to the other view is no longer useful, and would
+  // otherwise overlap the Studio's resumable tour.
+  activeQuickTourEnd?.();
   document.body.classList.toggle("view-studio", studio);
-  document.getElementById("nav-decks").classList.toggle("active", !studio);
-  document.getElementById("nav-studio").classList.toggle("active", studio);
+  // Keep the REAL hidden attributes truthful: two <main>s are only valid when
+  // at most one is non-hidden. (#console's visual hiding is the CSS class —
+  // its author display rules would beat the hidden attribute anyway.)
+  document.getElementById("studio").hidden = !studio;
+  document.getElementById("console").hidden = studio;
+  const skip = document.getElementById("skip-link");
+  if (skip) skip.href = studio ? "#studio" : "#console";
+  const navDecks = document.getElementById("nav-decks");
+  const navStudio = document.getElementById("nav-studio");
+  navDecks.classList.toggle("active", !studio);
+  navStudio.classList.toggle("active", studio);
+  if (studio) { navStudio.setAttribute("aria-current", "page"); navDecks.removeAttribute("aria-current"); }
+  else { navDecks.setAttribute("aria-current", "page"); navStudio.removeAttribute("aria-current"); }
   if (studio) {
     if (!studioReady) {
       studioReady = true;
-      SongBuilder.init({
+      const studioInit = DAW.init({
         getCtx: () => engine.ctx,
-        toast: (m) => ui.toast(m),
-        onUse: (buf, label, deck) => { applyLoaded(deck, buf, label); showView("decks"); },
+        getOutput: () => engine.masterBus,
+        toast: (m, o) => ui.toast(m, o),
+        onUse: (buf, label, deck, bpm, sectionCues) => {
+          // PAD knows its own tempo — carry it onto the deck so the BPM
+          // readout, SYNC and auto-loops are correct for your composition.
+          applyLoaded(deck, buf, label, { bpm: bpm || null, detect: !bpm });
+          // Drop a hot cue at each section boundary so the arrangement is
+          // instantly navigable on the deck (slots 1..8).
+          if (Array.isArray(sectionCues) && sectionCues.length) {
+            sectionCues.slice(0, HOT_CUE_COUNT).forEach((pos, i) => {
+              if (pos > 0 && pos < 1) hot[deck][i] = pos;
+              else if (pos === 0) hot[deck][i] = 0;
+            });
+            renderHot(deck);
+          }
+          showView("decks");
+        },
         getSampler: () => sampler,
+        refreshSamplerPad: (i) => renderPad(i),
       });
+      Promise.resolve(studioInit).then(() => DAW.maybeStartTour?.());
     }
+    else DAW.maybeStartTour?.();
   } else {
-    SongBuilder.stopPreview();
+    DAW.stopPreview();
   }
+  window.dispatchEvent(new Event("resize"));
 }
 function setupNav() {
   document.getElementById("nav-decks").addEventListener("click", () => showView("decks"));
@@ -1144,27 +2335,51 @@ function setupNav() {
 // ---------- Dialogs ----------
 function setupDialogs() {
   const help = document.getElementById("help-dialog");
-  document.getElementById("help-btn").addEventListener("click", () => (help.hidden = false));
+  const helpKeys = document.getElementById("help-keys");
+  // The bindings section is generated from the live config so it can never
+  // drift from what the keys actually do (unlike hand-written help text).
+  const fillHelpKeys = () => {
+    if (!helpKeys) return;
+    let html = '<div class="set-group-title">Your key bindings</div><div class="help-keys-grid">';
+    for (const [, rows] of KEY_ACTION_GROUPS) {
+      for (const [name, label] of rows) {
+        html += `<span>${label}</span><kbd>${fmtKey(config.keys[name])}</kbd>`;
+      }
+    }
+    html += "</div>";
+    helpKeys.innerHTML = html;
+  };
+  const openHelp = () => {
+    fillHelpKeys();
+    help.hidden = false;
+    document.getElementById("help-close")?.focus();
+  };
+  document.getElementById("help-btn").addEventListener("click", openHelp);
   document.getElementById("help-close").addEventListener("click", () => (help.hidden = true));
   [help, document.getElementById("url-dialog")].forEach((d) =>
     d.addEventListener("click", (e) => { if (e.target === d) d.hidden = true; })
   );
+
+  // "?" opens the cheat sheet; Esc closes whichever dialog is open.
+  window.addEventListener("keydown", (e) => {
+    if (e.target.closest && e.target.closest("input, textarea, select")) return;
+    if (e.key === "?" && help.hidden) { openHelp(); e.preventDefault(); return; }
+    if (e.code === "Escape") {
+      for (const id of ["help-dialog", "url-dialog", "settings-dialog", "practice-dialog", "projects-dialog", "section-sheet"]) {
+        const d = document.getElementById(id);
+        if (d && !d.hidden) { d.hidden = true; e.preventDefault(); return; }
+      }
+    }
+  });
 }
 
-// ---------- Waveform zoom + stacked beat-match view ----------
+// ---------- Waveform zoom ----------
 function setupWaveTools() {
   document.querySelectorAll(".zoom-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const wave = ui.waves[btn.dataset.deck];
       wave.zoomBy(btn.dataset.dir === "in" ? 1.5 : 1 / 1.5);
     });
-  });
-  const stackBtn = document.getElementById("stack-btn");
-  stackBtn.addEventListener("click", () => {
-    const on = document.body.classList.toggle("stack-view");
-    stackBtn.classList.toggle("active", on);
-    ui.waves.A?.resize();
-    ui.waves.B?.resize();
   });
 }
 
@@ -1173,17 +2388,20 @@ function setupHotcues() {
   for (const id of ["A", "B"]) {
     const wrap = document.querySelector(`.hotcues[data-deck="${id}"]`);
     wrap.innerHTML = "";
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < HOT_CUE_COUNT; i++) {
       const chip = document.createElement("button");
       chip.className = "hotcue-chip";
       chip.dataset.deck = id;
       chip.dataset.slot = String(i);
-      chip.textContent = id === "A" ? String(i + 1) : String(i + 6);
-      chip.title = "Click: set / jump · Shift-click: clear";
+      chip.textContent = String(i + 1);
+      chip.title = "Click: set / jump · double-click or Shift-click: clear";
       chip.addEventListener("click", (e) => {
         if (e.shiftKey) clearCue(id, i);
         else hitCue(id, i);
       });
+      // Double-click = clear, matching the app-wide reset gesture (faders,
+      // knobs and waveform cue markers all already clear on double-click).
+      chip.addEventListener("dblclick", (e) => { e.preventDefault(); clearCue(id, i); });
       wrap.appendChild(chip);
     }
     renderHot(id);
@@ -1202,7 +2420,7 @@ function setCueSlot(id, slot, pos) {
   hot[id][slot] = pos;
   renderHot(id);
   haptic(12);
-  ui.toast(`Deck ${id}: cue ${id === "A" ? slot + 1 : slot + 6} set`);
+  ui.toast(`Deck ${id}: hot cue ${slot + 1} set`);
 }
 
 function clearCue(id, slot) {
@@ -1225,20 +2443,41 @@ function renderHot(id) {
 }
 
 // ---------- Animation loop: VU meters + platter rotation ----------
+/** RMS → meter height %, linear in dB from −30 dBFS (bottom) to 0 dBFS (top),
+ *  matching the printed scale beside the centre meters. */
+function vuPercent(rms) {
+  if (!(rms > 0)) return 0;
+  const db = 20 * Math.log10(rms);
+  return Math.max(0, Math.min(100, ((db + 30) / 30) * 100));
+}
+
 function frameLoop() {
   const now = performance.now();
   if (coach) coach.update();
   if (bothBtn) bothBtn.classList.toggle("playing", engine.decks.A.playing && engine.decks.B.playing);
 
+  // Live master output meter (with a slowly-decaying peak-hold cap).
+  if (masterAnalyser && masterVuEl) {
+    masterAnalyser.getFloatTimeDomainData(masterBuf);
+    let sum = 0;
+    for (let i = 0; i < masterBuf.length; i++) sum += masterBuf[i] * masterBuf[i];
+    const lvl = vuPercent(Math.sqrt(sum / masterBuf.length));
+    masterPeak = Math.max(lvl, masterPeak - 0.7);
+    masterVuEl.style.setProperty("--level", lvl.toFixed(1) + "%");
+    masterVuEl.style.setProperty("--peak", Math.min(99, masterPeak).toFixed(1) + "%");
+  }
+
   for (const id of ["A", "B"]) {
-    // VU
+    // VU (dB-calibrated so the printed scale next to it is honest)
     const a = analysers[id];
     if (a) {
       a.node.getFloatTimeDomainData(a.buf);
       let sum = 0;
       for (let i = 0; i < a.buf.length; i++) sum += a.buf[i] * a.buf[i];
-      const rms = Math.sqrt(sum / a.buf.length);
-      a.el.style.setProperty("--level", Math.min(100, rms * 180) + "%");
+      const lvl = vuPercent(Math.sqrt(sum / a.buf.length));
+      a.peak = Math.max(lvl, (a.peak || 0) - 0.8);
+      a.el.style.setProperty("--level", lvl + "%");
+      a.el.style.setProperty("--peak", Math.min(99, a.peak).toFixed(1) + "%");
     }
 
     // Platter rotation — extrapolate the playhead since the last position post
@@ -1270,6 +2509,7 @@ function frameLoop() {
 function drawDeckVisualizer(id) {
   const canvas = document.getElementById(`viz-${id}`);
   if (!canvas || !engine.ready) return;
+  if (!canvas.clientWidth) return; // hidden (e.g. inside the controller shell) — don't burn frames
   const d = engine.decks[id];
   if (!d || !d.analyser) return;
 
@@ -1301,10 +2541,11 @@ function drawDeckVisualizer(id) {
     const percent = val / 255;
     const barHeight = Math.max(2, percent * h * 0.9);
 
-    // Color gradient based on side: Deck A is cyan, Deck B is pink
-    const baseHue = id === "A" ? 170 : 325;
-    const hue = baseHue + (i / barCount) * 20;
-    ctx.fillStyle = `hsla(${hue}, 90%, 65%, 0.85)`;
+    // Deck-coloured bars, fading toward the outer edge. Reads the theme
+    // token rather than a hardcoded hue (65% lightness was invisible on
+    // a light stage).
+    ctx.fillStyle = DECK_COLORS[id];
+    ctx.globalAlpha = 0.9 - (i / barCount) * 0.45;
 
     // Draw left half (moving left from center)
     const lx = midX - (i * totalBarWidth) - totalBarWidth;
@@ -1314,6 +2555,7 @@ function drawDeckVisualizer(id) {
     const rx = midX + (i * totalBarWidth);
     ctx.fillRect(rx, h - barHeight, barWidth, barHeight);
   }
+  ctx.globalAlpha = 1;
 }
 
 function enterMappingMode(deckId, start, end, btn) {
@@ -1327,7 +2569,7 @@ function enterMappingMode(deckId, start, end, btn) {
     pad.classList.add("mappable");
   });
   
-  ui.toast(`Tap any Sampler Pad (1-8) to map Deck ${deckId} loop region...`);
+  ui.toast(`Tap a sampler pad (1–8) to map the Deck ${deckId} loop region`);
 }
 
 function cancelMappingMode() {
@@ -1345,10 +2587,10 @@ function mapRegionToPad(deckId, start, end, slotIndex) {
     const sliceName = `${d.name || "Track"} [Slice]`;
     sampler.setBuffer(slotIndex, slicedBuffer, sliceName);
     renderPad(slotIndex);
-    ui.toast(`Mapped Deck ${deckId} region to Pad ${slotIndex + 1}!`);
+    ui.toast(`Mapped Deck ${deckId} region to pad ${slotIndex + 1}`, { severity: "ok" });
   } catch (err) {
     console.error(err);
-    ui.toast("Failed to extract loop region");
+    ui.toast("Couldn't extract the loop region", { severity: "error" });
   }
 }
 
@@ -1371,6 +2613,7 @@ function extractAudioRegion(ctx, sourceBuffer, startFraction, endFraction) {
     const destData = newBuffer.getChannelData(c);
     destData.set(srcData.subarray(start, end));
   }
-  
+
   return newBuffer;
 }
+// (Phase 1 polish: live BPM + master metering + A|B toolbar switch — see DESIGN-REVIEW.md)

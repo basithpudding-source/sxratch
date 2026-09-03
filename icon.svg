@@ -1,15 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Sxratch">
+  <!-- Colours mirror css/tokens.css (dark theme): bg = sx-bg, ring = sx-brand-a,
+       label = sx-deck-b, tonearm = sx-chrome, platter/lines = surface/line tokens.
+       Keep them in sync when the palette changes, then run: npm run icons -->
   <!-- Full-bleed background keeps the maskable safe-zone covered when cropped -->
-  <rect width="512" height="512" rx="104" fill="#0a0b10"/>
+  <rect width="512" height="512" rx="104" fill="#0a0f1c"/>
   <!-- Platter -->
-  <circle cx="256" cy="256" r="150" fill="#15171f" stroke="#23262f" stroke-width="6"/>
-  <circle cx="256" cy="256" r="150" fill="none" stroke="#37e6c8" stroke-width="3" opacity="0.5"/>
-  <circle cx="256" cy="256" r="116" fill="none" stroke="#2a2d38" stroke-width="2"/>
-  <circle cx="256" cy="256" r="86" fill="none" stroke="#2a2d38" stroke-width="2"/>
+  <circle cx="256" cy="256" r="150" fill="#131b2c" stroke="#2b3650" stroke-width="6"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#48ddd3" stroke-width="3" opacity="0.5"/>
+  <circle cx="256" cy="256" r="116" fill="none" stroke="#1c2740" stroke-width="2"/>
+  <circle cx="256" cy="256" r="86" fill="none" stroke="#1c2740" stroke-width="2"/>
   <!-- Label + spindle -->
-  <circle cx="256" cy="256" r="50" fill="#ff5d8f"/>
-  <circle cx="256" cy="256" r="11" fill="#0a0b10"/>
+  <circle cx="256" cy="256" r="50" fill="#ff6175"/>
+  <circle cx="256" cy="256" r="11" fill="#0a0f1c"/>
   <!-- Tonearm -->
-  <line x1="372" y1="150" x2="292" y2="232" stroke="#cfd3dc" stroke-width="11" stroke-linecap="round"/>
-  <circle cx="372" cy="150" r="15" fill="#cfd3dc"/>
+  <line x1="372" y1="150" x2="292" y2="232" stroke="#cdd6ea" stroke-width="11" stroke-linecap="round"/>
+  <circle cx="372" cy="150" r="15" fill="#cdd6ea"/>
 </svg>

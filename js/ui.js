@@ -11,6 +11,68 @@ export class UI {
     this.timeEl = { A: document.getElementById("time-A"), B: document.getElementById("time-B") };
     this.playBtn = { A: document.getElementById("play-A"), B: document.getElementById("play-B") };
     this.crossfadeSet = null; // registered by app to the custom crossfader's setter
+    this.bpmEl = { A: null, B: null }; // live BPM readouts (registered by the deck console)
+
+    // Screen-reader plumbing: toasts double as polite status announcements,
+    // and announce() drives an offscreen assertive region for events that
+    // must interrupt (recording started/stopped, engine failures).
+    if (this.toastEl) {
+      this.toastEl.setAttribute("role", "status");
+      this.toastEl.setAttribute("aria-live", "polite");
+    }
+    this.announceEl = document.createElement("div");
+    this.announceEl.setAttribute("aria-live", "assertive");
+    this.announceEl.setAttribute("role", "alert");
+    this.announceEl.className = "sr-only";
+    document.body.appendChild(this.announceEl);
+  }
+
+  /** Assertive screen-reader announcement (visually hidden). */
+  announce(msg) {
+    // Clear first so repeating the same message is re-announced.
+    this.announceEl.textContent = "";
+    requestAnimationFrame(() => { this.announceEl.textContent = msg; });
+  }
+
+  /**
+   * Trap Tab focus inside an open dialog, close on Esc via the app's global
+   * handler, and restore focus to the previously-focused element on close.
+   * Returns a release() function. Also stamps dialog ARIA roles.
+   */
+  trapFocus(dialogEl) {
+    dialogEl.setAttribute("role", "dialog");
+    dialogEl.setAttribute("aria-modal", "true");
+    const opener = document.activeElement;
+    const focusables = () => [...dialogEl.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )].filter((e) => !e.disabled && e.offsetParent !== null);
+    const onKey = (e) => {
+      if (e.key !== "Tab") return;
+      const f = focusables();
+      if (!f.length) return;
+      const first = f[0], lastEl = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); lastEl.focus(); }
+      else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); first.focus(); }
+    };
+    dialogEl.addEventListener("keydown", onKey);
+    (focusables()[0] || dialogEl).focus?.();
+    return () => {
+      dialogEl.removeEventListener("keydown", onKey);
+      opener?.focus?.();
+    };
+  }
+
+  /**
+   * Update a deck's BPM readout. Shows the *effective* tempo (track BPM ×
+   * pitch fader) — and "--" when the BPM genuinely isn't known, never a fake.
+   */
+  setBpm(deck, known) {
+    const el = this.bpmEl[deck];
+    if (!el) return;
+    const d = this.engine.decks[deck];
+    el.textContent = known && d.buffer
+      ? (d.bpm * (1 + d.tempo / 100)).toFixed(1)
+      : "--";
   }
 
   setWaveform(deck, wave) { this.waves[deck] = wave; }
@@ -36,7 +98,9 @@ export class UI {
   setPlaying(deck, playing) {
     const btn = this.playBtn[deck];
     btn.classList.toggle("playing", playing);
-    btn.textContent = playing ? "❚❚" : "▶";
+    btn.innerHTML = playing
+      ? '<span aria-hidden="true">❚❚</span><span>PAUSE</span>'
+      : '<span aria-hidden="true">▶</span><span>PLAY</span>';
   }
 
   syncCrossfade(v) {
@@ -51,10 +115,34 @@ export class UI {
     );
   }
 
-  toast(msg) {
-    this.toastEl.textContent = msg;
-    this.toastEl.classList.add("show");
-    clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => this.toastEl.classList.remove("show"), 1600);
+  /**
+   * Toast v2 — stacking pills instead of a single self-clobbering slot.
+   *  - toast(msg) keeps working everywhere (severity "info").
+   *  - toast(msg, { severity: "error" | "ok", duration }) styles the pill,
+   *    and errors also fire the assertive announcer (a 2s pill is missable).
+   *  - Dwell scales with message length instead of a flat 1600 ms.
+   *  - At most 3 pills; the oldest drops off.
+   */
+  toast(msg, opts = {}) {
+    const { severity = "info", duration } = opts;
+    if (severity === "error") this.announce(msg);
+    const host = this.toastEl;
+    if (!host) return;
+    const pill = document.createElement("div");
+    pill.className = "toast-pill" + (severity !== "info" ? " toast-" + severity : "");
+    pill.textContent = msg;
+    host.appendChild(pill);
+    while (host.children.length > 3) host.firstElementChild.remove();
+    void pill.offsetWidth;              // flush so the .show transition runs
+    pill.classList.add("show");
+    const ms = duration ?? Math.min(
+      6000,
+      Math.max(severity === "error" ? 2600 : 1600, 900 + msg.length * 55)
+    );
+    setTimeout(() => {
+      pill.classList.remove("show");
+      setTimeout(() => pill.remove(), 300);
+    }, ms);
   }
 }
+// (BPM readouts intentionally show "--" until a tempo is actually known.)

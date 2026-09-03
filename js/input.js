@@ -22,7 +22,7 @@ export function attachScratchPad(el, deck, opts = {}) {
   let active = false;
   let lastX = 0;
   let lastT = 0;
-  let pointerId = null;
+  let isRimNudge = false;
 
   const down = (e) => {
     active = true;
@@ -30,14 +30,43 @@ export function attachScratchPad(el, deck, opts = {}) {
     lastX = e.clientX;
     lastT = e.timeStamp;
     capture(el, pointerId);
-    el.classList.add("touching");
-    deck.touchStart();
-    if (opts.onScratchStart) opts.onScratchStart();
+
+    // Differentiate platter rim nudge from vinyl scratch:
+    // Dragging near the outer rim nudges speed (like pushing/dragging the rim of a turntable)
+    // while touching the vinyl surface stops the record to scratch.
+    const platEl = el.querySelector(".platter") || el;
+    const rect = platEl.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const radius = Math.min(rect.width, rect.height) / 2;
+    const dist = Math.hypot(e.clientX - cx, e.clientY - cy);
+    isRimNudge = dist > radius * 0.84 || e.target.classList?.contains("platter-ring");
+
+    if (isRimNudge && deck.playing) {
+      el.classList.add("nudging");
+    } else {
+      isRimNudge = false;
+      el.classList.add("touching");
+      deck.touchStart();
+      if (opts.onScratchStart) opts.onScratchStart();
+    }
     e.preventDefault();
   };
 
   const move = (e) => {
     if (!active || e.pointerId !== pointerId) return;
+
+    if (isRimNudge) {
+      const dx = e.clientX - lastX;
+      if (dx > 3) {
+        deck.nudgeStart(1);
+      } else if (dx < -3) {
+        deck.nudgeStart(-1);
+      }
+      e.preventDefault();
+      return;
+    }
+
     // Process the high-frequency samples the browser coalesced into this event
     // (touchscreens report 120-240Hz between 60Hz frames) so fast flicks get
     // accurate, fine-grained velocity instead of one averaged delta per frame.
@@ -64,9 +93,15 @@ export function attachScratchPad(el, deck, opts = {}) {
     if (!active || e.pointerId !== pointerId) return;
     active = false;
     release(el, pointerId);
-    el.classList.remove("touching");
-    deck.touchEnd();
-    if (opts.onScratchEnd) opts.onScratchEnd();
+    if (isRimNudge) {
+      el.classList.remove("nudging");
+      deck.nudgeEnd();
+    } else {
+      el.classList.remove("touching");
+      deck.touchEnd();
+      if (opts.onScratchEnd) opts.onScratchEnd();
+    }
+    isRimNudge = false;
     e.preventDefault();
   };
 
@@ -80,7 +115,9 @@ export function attachScratchPad(el, deck, opts = {}) {
 }
 
 /**
- * Rotary knob: vertical drag changes value. Also supports wheel.
+ * Rotary knob: vertical drag changes value. Also supports wheel and, for
+ * keyboard users, focus + arrow keys (Home = min, End = max, double-click /
+ * Delete = neutral).
  * @param {HTMLElement} el
  * @param {object} opts { value (0..1), onChange, indicator (el to rotate) }
  */
@@ -93,11 +130,22 @@ export function attachKnob(el, opts = {}) {
   let startVal = 0;
   let pointerId = null;
 
+  // Screen-reader / keyboard affordances for what is visually just a div.
+  // opts.label is the accessible NAME — without it the control announces as
+  // an anonymous slider (the visible <label> is an unassociated sibling).
+  if (!el.hasAttribute("role")) el.setAttribute("role", "slider");
+  if (!el.hasAttribute("tabindex")) el.tabIndex = 0;
+  if (opts.label && !el.hasAttribute("aria-label")) el.setAttribute("aria-label", opts.label);
+  el.setAttribute("aria-valuemin", "0");
+  el.setAttribute("aria-valuemax", "1");
+  el.setAttribute("aria-orientation", "vertical");
+
   const render = () => {
     const angle = (value - 0.5) * range;
     const ind = opts.indicator || el;
     ind.style.transform = `rotate(${angle}deg)`;
     el.setAttribute("aria-valuenow", value.toFixed(2));
+    if (opts.valueText) el.setAttribute("aria-valuetext", opts.valueText(value));
   };
 
   const set = (v) => {
@@ -105,6 +153,18 @@ export function attachKnob(el, opts = {}) {
     render();
     opts.onChange?.(value);
   };
+
+  el.addEventListener("keydown", (e) => {
+    const step = e.shiftKey ? 0.1 : 0.02;
+    if (e.code === "ArrowUp" || e.code === "ArrowRight") set(value + step);
+    else if (e.code === "ArrowDown" || e.code === "ArrowLeft") set(value - step);
+    else if (e.code === "Home") set(0);
+    else if (e.code === "End") set(1);
+    else if (e.code === "Delete" || e.code === "Backspace") set(def);
+    else return;
+    e.preventDefault();
+    e.stopPropagation(); // don't trigger global transport shortcuts while adjusting
+  });
 
   el.addEventListener("pointerdown", (e) => {
     active = true;
@@ -140,11 +200,9 @@ export function attachKnob(el, opts = {}) {
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
-/** Move the crossfader and keep engine + UI in sync (single source of truth). */
+/** Move the crossfader (UI sync fans out from engine.onCrossfade). */
 function nudgeCrossfade(engine, ui, value) {
-  const v = clamp(value, 0, 1);
-  engine.setCrossfade(v);
-  ui.syncCrossfade(v);
+  engine.setCrossfade(clamp(value, 0, 1));
 }
 
 /**
@@ -153,7 +211,8 @@ function nudgeCrossfade(engine, ui, value) {
  *
  * @param {HTMLElement} el
  * @param {object} opts { min, max, value, default, orientation, step,
- *                        ticks:[{at,label,major}], onChange }
+ *                        ticks:[{at,label,major}], onChange,
+ *                        detent:{at,radius,onSnap} — magnetic centre notch }
  * @returns {{ set:(v:number, fire?:boolean)=>void, get:()=>number, el:HTMLElement }}
  */
 export function attachFader(el, opts = {}) {
@@ -162,6 +221,14 @@ export function attachFader(el, opts = {}) {
   const vertical = (opts.orientation || (el.classList.contains("h") ? "h" : "v")) === "v";
   const def = opts.default ?? (min + max) / 2;
   let value = opts.value ?? def;
+  let inDetent = false; // for the snap haptic — fire once per entry
+
+  if (!el.hasAttribute("role")) el.setAttribute("role", "slider");
+  if (!el.hasAttribute("tabindex")) el.tabIndex = 0;
+  if (opts.label && !el.hasAttribute("aria-label")) el.setAttribute("aria-label", opts.label);
+  el.setAttribute("aria-valuemin", String(min));
+  el.setAttribute("aria-valuemax", String(max));
+  el.setAttribute("aria-orientation", vertical ? "vertical" : "horizontal");
 
   el.classList.add("fader", vertical ? "v" : "h");
   el.innerHTML = "";
@@ -196,15 +263,39 @@ export function attachFader(el, opts = {}) {
     if (vertical) fill.style.height = p + "%";
     else fill.style.width = p + "%";
     el.setAttribute("aria-valuenow", value.toFixed(3));
+    if (opts.valueText) el.setAttribute("aria-valuetext", opts.valueText(value));
   };
 
   const set = (v, fire = true) => {
     v = clamp(v, min, max);
     if (opts.step) v = Math.round(v / opts.step) * opts.step;
+    // Magnetic détente (e.g. crossfader centre): snap within the radius and
+    // fire onSnap once each time the handle clicks into the notch.
+    const d = opts.detent;
+    if (d && Math.abs(v - d.at) <= (d.radius ?? 0.02) * (max - min)) {
+      v = d.at;
+      if (!inDetent) { inDetent = true; d.onSnap?.(); }
+    } else if (d) {
+      inDetent = false;
+    }
     value = v;
     render();
     if (fire) opts.onChange?.(value);
   };
+
+  el.addEventListener("keydown", (e) => {
+    const fine = (max - min) / 50;
+    const coarse = (max - min) / 10;
+    const step = e.shiftKey ? coarse : fine;
+    if (e.code === "ArrowUp" || e.code === "ArrowRight") set(value + step);
+    else if (e.code === "ArrowDown" || e.code === "ArrowLeft") set(value - step);
+    else if (e.code === "Home") set(min);
+    else if (e.code === "End") set(max);
+    else if (e.code === "Delete" || e.code === "Backspace") set(def);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  });
 
   let active = false, pointerId = null;
   const valueFromEvent = (e) => {
@@ -332,7 +423,9 @@ export function attachTrackpadGestures(engine, ui, config) {
   window.addEventListener(
     "wheel",
     (e) => {
-      if (e.target.closest && e.target.closest("input, .knob, .dialog, .waveform, .fader")) return;
+      // .daw-mixer: horizontal trackpad swipes over the DAW mixer should
+      // scroll its strip carousel, not nudge the (hidden) deck crossfader.
+      if (e.target.closest && e.target.closest("input, .knob, .dialog, .waveform, .fader, .daw-mixer")) return;
       const gg = g();
       const { dx, dy } = normDelta(e);
       if (Math.abs(dx) < Math.abs(dy)) { // vertical-dominant: not a crossfade
@@ -361,7 +454,8 @@ export function attachWaveformScrub(canvas, deck, wave, cb = {}) {
 
   canvas.addEventListener("pointerdown", (e) => {
     active = true; moved = false; pointerId = e.pointerId;
-    lastX = downX = e.clientX; lastT = e.timeStamp;
+    lastX = downX = e.clientX;
+    lastT = e.timeStamp;
     capture(canvas, pointerId);
     canvas.classList.add("grabbing");
     deck.touchStart();
@@ -379,7 +473,8 @@ export function attachWaveformScrub(canvas, deck, wave, cb = {}) {
       const dx = ev.clientX - lastX;
       let dt = (ev.timeStamp - lastT) / 1000;
       if (dt <= 0) dt = 1 / 240;
-      lastX = ev.clientX; lastT = ev.timeStamp;
+      lastX = ev.clientX;
+      lastT = ev.timeStamp;
       // Grab the "tape": dragging right rewinds, dragging left fast-forwards,
       // 1:1 with the pixels on screen so it feels physical.
       const rate = clamp((-dx / dt) * secPerPx, -16, 16);
@@ -402,6 +497,7 @@ export function attachWaveformScrub(canvas, deck, wave, cb = {}) {
       } else {
         const ci = wave.cueAt(x);
         cb.onSeek?.(ci >= 0 ? wave.cues[ci].pos : wave.positionAtX(x));
+        needleRipple(canvas, e.clientX - rect.left, e.clientY - rect.top);
       }
     }
     e.preventDefault();
@@ -411,7 +507,22 @@ export function attachWaveformScrub(canvas, deck, wave, cb = {}) {
 
   canvas.addEventListener("dblclick", (e) => {
     const rect = canvas.getBoundingClientRect();
-    const ci = wave.cueAt(e.clientX - rect.left);
+    const x = e.clientX - rect.left;
+    const ci = wave.cueAt(x);
     if (ci >= 0 && wave.cues[ci].label != null) cb.onClearCue?.(wave.cues[ci].label - 1);
   });
+}
+
+/** Needle-drop ripple: a small expanding ring where the waveform was tapped. */
+function needleRipple(canvas, x, y) {
+  const host = canvas.parentElement;
+  if (!host) return;
+  if (getComputedStyle(host).position === "static") host.style.position = "relative";
+  const dot = document.createElement("span");
+  dot.className = "needle-ripple";
+  dot.style.left = x + "px";
+  dot.style.top = y + "px";
+  host.appendChild(dot);
+  dot.addEventListener("animationend", () => dot.remove());
+  setTimeout(() => dot.remove(), 700); // safety net if animations are disabled
 }

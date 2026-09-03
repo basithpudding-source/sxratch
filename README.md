@@ -4,50 +4,78 @@ A browser-based DJ rig with two modes, switched from the **SXRATCH / PAD** toggl
 in the top bar:
 
 - **SXRATCH** — the DJ decks: **scratching and mixing** with two decks, per-deck vertical BeatFX modules, split frequency visualizers, crossfader curves, Hamster Mode, global mix recording, preloaded synthetic presets, and loop region sampler mapping, for **desktop** (mouse / trackpad) and **mobile** (touch). Drag a platter to scratch; slide the center crossfader to blend.
-- **PAD** — a **Studio Song Builder**: compose a full multi-track backing (chords, bass, lead, drums, and imported sampler rows across arranged sections with custom section renaming, undo/redo state stacks, persistent auto-save, JSON export/import, and a synth/sample sound-engine switch), then **send it straight to a deck** to scratch and mix your own composition, or download it as a WAV.
+- **PAD** — a **multitrack studio**: arrange synth, drum and audio regions on a musical timeline, record microphone/interface audio or live MIDI, edit notes and clips, automate and mix the tracks, then send the result to a deck, a sampler pad, WAV stems, or a MIDI file.
 
-## PAD · Song Builder
+## PAD · Studio DAW
 
-Open **PAD** from the top bar. Build an arrangement as an ordered timeline of
-**sections** (Intro / Verse / Pre-Chorus / Chorus / Bridge / Outro) — custom-name, reorder,
-duplicate or delete them; each chip's width is proportional to its duration.
+Open **PAD** from the top bar. The Studio uses one beat-based timeline with a global
+tempo and time signature. Playback is realtime, so edits and mixer moves are heard
+without waiting for a render; offline rendering is used only when bouncing or
+exporting.
 
-* **Section Custom Renaming:** Double-click or type in the **Name** input inside the section editor header to custom-name your arrangement blocks (e.g. "Verse 1 Vocal", "Double Drop"). The timeline arrangement chips update instantly.
-* **Undo / Redo History:** Full state-cloning undo/redo stacks allow you to revert or repeat any step trigger, note write, tempo slider edit, or structural change. Fully accessible via toolbar **Undo / Redo** buttons and global `Ctrl+Z` / `Ctrl+Y` keyboard shortcuts.
-* **Persistent Auto-Save & File Transfer:** The builder automatically serializes the entire song structure to browser `localStorage` on every note toggle, drum edit, and parameter change. Use the **Export JSON** and **Import JSON** buttons to backup projects to local files and reload them instantly.
-* **Synth or Sampled Engine:** The **Sound** selector defaults to the offline synth engine, or can load General MIDI-style sampled instruments for richer playback when the network is available.
+### Tracks, regions and arrangement
 
-Each section has its own **key**, **time signature** (4/4, 3/4, 6/8, 5/4, 7/8, 12/8…),
-**bar count**, and **step grid** (8th / 16th / triplet), plus these lanes:
+- **Track types** — add Chords & Keys, Bass, Lead, Chorus / Atmosphere, Drum Kit, or
+  Audio tracks. Track headers support rename, recolour, drag-to-reorder, duplicate,
+  delete, mute, solo, record-arm, automation, and live level meters. MIDI tracks use
+  the built-in instrument roster in `js/synth.js`; drum tracks choose from the
+  built-in kits; audio tracks can import a file or record an input.
+- **Regions** — Select and Split work across MIDI, drum, and audio regions; Draw creates
+  MIDI/drum regions. Drag a region to move it, pull either edge to trim/resize it, or use
+  multi-select, copy/cut/paste, duplicate, delete, quantize, and grid/bar nudging.
+  Audio files can also be dropped straight onto an audio lane.
+- **Timeline** — choose a rhythmic snap grid or turn the magnet off for free
+  positioning, zoom the arrangement, follow the playhead, add named markers, click
+  the ruler to seek, and drag on it to define a loop. Tempo and meter are set in the
+  transport.
+- **History** — arrangement, editor, import, track, device and mixer changes use the
+  Studio undo/redo history (`Ctrl+Z`, `Ctrl+Y`, or `Ctrl+Shift+Z`).
 
-- **Chords** — build a chord on a scrollable piano (it names the chord live, including
-  inversions and slash chords), then tap/drag it onto a single-row timeline. Sounds:
-  warm pad, strings, electric piano, drawbar organ, acoustic guitar.
-- **Bass** — a diatonic note grid (click a note, drag to sustain); **Root-follow**
-  auto-writes a bassline from the chords. Sounds: electric, synth, upright, sub.
-- **Lead** — a melody grid. Sounds: synth, square, flute, bell, plucked guitar.
-- **Drums** — a full-kit step sequencer (kick, snare, toms, hats, crash). Kits:
-  acoustic, 808, electronic, bossa, lo-fi.
-- **Sampler** — **port the SXRATCH sampler-pad samples into the arrangement.** Import
-  the loaded pads, pick a sample, **transpose it on a keyboard** (with live preview),
-  set a length, then **Add row** to a custom multi-row grid. Drag across cells to play
-  it — like the other lanes the playback lasts as long as the dragged region and stops
-  where it ends. Add as many rows as you need; remove any with **×**.
-- **Sampler rows** — import the currently loaded SXRATCH sampler pads into PAD,
-  choose a key/length, then place those samples on the arrangement grid.
+### Record and edit
 
-A per-section **Play** auditions it with a live playhead (the active chord lights up
-and a cursor sweeps the grids). **Preview song** plays the whole arrangement;
-**→ Deck A / → Deck B** render it (via `OfflineAudioContext`) and load it onto that
-deck so you can scratch it in SXRATCH; **⬇ WAV** downloads it.
+- **Audio recording** — arm an Audio track, choose a microphone or interface, and
+  press **●**. The other tracks play for overdubbing while PAD captures the input;
+  optional monitoring, automatic latency alignment, and a per-track recording offset
+  are available in Devices. The finished take lands as a waveform region.
+- **MIDI and drum recording** — arm a synth or drum track and perform with the
+  on-screen/QWERTY keyboard or a Web MIDI controller. Notes and drum hits are captured
+  while the arrangement plays. The metronome and 0/1/2-bar count-in work for either
+  recording type.
+- **Loop takes** — recording across an active loop separates captured passes into
+  alternate takes. Expand **TAKES** on the track and choose which pass is active.
+- **Region editor** — double-click a synth or drum region to open its piano/drum roll.
+  Draw, erase, multi-select, move, resize, transpose or quantize notes and edit their
+  velocities. Audio regions open a waveform editor with clip gain, fade-in/out, and
+  raw or tempo-following repitch playback.
+- **Keyboard and Devices** — the playable keyboard can stay pinned while another
+  lower panel is open. Devices selects the synth patch, drum kit, or audio input and
+  exposes the track fader/pan plus EQ, compressor, distortion, and shared reverb/delay
+  sends.
 
-**Sound engine — synth or sampled.** By default, instruments are synthesized in the
-browser (oscillators + filters + envelopes, Karplus–Strong plucks, noise-based drums),
-so the composer works offline with zero assets. Flip the **Sound** selector in the
-toolbar to **Sampled · GM** to play real multisampled **General MIDI instruments** and
-**sampled drum kits** instead (fetched on demand from a soundfont CDN, decoded only for
-the notes a song uses). The sampled engine is optional and falls back to synth playback
-if the remote assets can't load.
+### Mix, automate and deliver
+
+- **Automation** — each track can show editable lanes for volume, pan, reverb send,
+  and delay send. Automation is piecewise-linear and drives both realtime playback
+  and offline renders.
+- **Mixer** — every channel has mute/solo, FX bypass, fader, pan, reverb/delay sends,
+  and a meter. Shared Reverb and Delay returns feed a DAW master with three-band EQ,
+  fader, glue compression, metering, and a safety limiter. MIDI Learn can map controller
+  CCs to channel faders, pan, sends, and the master fader.
+- **File menu** — send the master to Deck A/B, bounce the selected track to its
+  corresponding SXRATCH sampler pad, download a master WAV, export one WAV stem per
+  track, or export MIDI (tempo, meter, markers, synth notes, and GM-channel drum hits).
+  Sending to a deck carries the exact BPM and creates hot cues from markers, or from
+  region starts when no markers exist.
+- **Project transfer and recovery** — JSON export/import carries the DAW document, but
+  not recorded or imported audio bytes; those clips remain in this browser. **Recover
+  previous save…** restores one of the retained checkpoints, and **New song** is
+  immediately undoable.
+
+PAD autosaves the versioned song document and audio clips to IndexedDB, with a
+synchronous `localStorage` fallback for page close or storage failure. Imported and
+recorded clips are pinned project data rather than disposable sampler cache entries.
+On first use, a valid legacy `sxratch.song` section-builder save is migrated into
+tracks and regions automatically.
 
 ## Run it
 
@@ -62,7 +90,9 @@ Then open **http://localhost:5173**.
 
 To use it on your phone, make sure the phone is on the same Wi‑Fi, find your computer's
 LAN IP (e.g. `192.168.1.x`), and open `http://<that-ip>:5173`. Set the port with
-`PORT=8080 npm start` if 5173 is taken.
+`PORT=8080 npm start` if 5173 is taken. Phones work in **both orientations**: landscape
+gets the full controller, portrait gets a purpose-built stacked layout (waveforms on
+top, both platters side by side, mixer below) — no forced rotation.
 
 Useful scripts:
 
@@ -70,8 +100,13 @@ Useful scripts:
 npm run build       # bundle/minify into dist/ for deployment
 npm run start:dist  # serve the production build from dist/
 npm test            # run the Node test suite
+npm run test:e2e    # build, then smoke-test source + dist in Chromium
+npm run test:all    # run both Node and browser suites
 npm run icons       # regenerate icon-192.png and icon-512.png from icon.svg
 ```
+
+Use Node **20.9 or newer**. After the first `npm install`, run
+`npx playwright install chromium` once before the browser suite.
 
 The dev server serves source ES modules directly. The production build keeps
 URL-loaded worklets and workers at stable paths (`js/scratch-processor.js`,
@@ -118,7 +153,9 @@ URL-loaded worklets and workers at stable paths (`js/scratch-processor.js`,
 
 **Split Deck Visualizers:** Inside the central crossfader section, Sxratch displays two independent frequency visualizers (`#viz-A` and `#viz-B`). They tap the pre-crossfader, post-volume, and post-FX audio signal of their respective decks. They render symmetrical, center-out frequency bars colored after each deck's theme (Cyan for Deck A, Pink for Deck B).
 
-**Global Mix Recorder:** Capture your entire master performance by clicking the **🔴 REC** button in the header. The button label displays a live timer of the recording (e.g. `🔴 REC [1:42]`). Click it again to stop and automatically download your session as a high-quality WebM/WAV audio file.
+**Global Mix Recorder:** Capture your entire master performance by clicking the **🔴 REC** button in the header. The button label displays a live timer of the recording (e.g. `🔴 REC [1:42]`). Click it again to stop and automatically download your session as a compressed audio file (WebM/Opus in Chrome and Firefox, M4A in Safari).
+
+**A note on tempo & pitch:** the tempo fader behaves like vinyl — speeding a track up raises its pitch, slowing it lowers it. This is a deliberate design choice (Sxratch is a scratch instrument first); there is currently no keylock/master-tempo mode.
 
 **Preloaded Synthetic Presets:** Get scratching immediately without loading files using the **Presets** dropdown on either deck. Choose from:
 * **Scratch Tool** — a synthesized classic vocal scratch sample.
@@ -128,8 +165,9 @@ URL-loaded worklets and workers at stable paths (`js/scratch-processor.js`,
 **Transport, sync & both decks:** Each deck has **⏮ to-start**, **⏪/⏩ hold-to-rewind/fast-forward**, **CUE / SET / ▶**, and **SYNC** (matches the deck's BPM and aligns the beat phase to the other deck). The centre **▶❚❚ BOTH** button (or `Space`) plays/pauses both decks simultaneously; `T`/`Y` sync A→B / B→A.
 
 **Extras & Sampler Pad Loop Mapping:**
-* **Instant Doubles** — The **DBL ⇄** button copies a deck's loaded track and playhead position onto the other deck instantly for beat-juggling routines.
-* **Stacked beat-match view** — The **⤢** button stacks the waveforms on top of each other with a shared central playhead, letting you line up the beats visually.
+* **Instant Doubles** — The **DBL** button copies a deck's loaded track, playhead position and BPM onto the other deck instantly for beat-juggling routines.
+* **Live BPM readout** — each deck shows its **effective BPM** (track BPM × pitch fader). Tempo is detected automatically when you load a file (onset-envelope autocorrelation, `js/bpm.js`); presets and PAD renders carry their exact tempo. The readout shows `--` until a tempo is actually known — it never guesses.
+* **A | B toolbar switch** — the centre toolbar (LINK · DBL · Presets · zoom) and the LOOP row are shared between decks; the **A | B** switch above the waveforms shows and sets which deck they control (it also follows the deck you last touched).
 * **Sampler & Loop Region Mapping** — 8 pads in the center of the mixer. Click an empty pad to load an audio file, click again to trigger it, **■** to stop it (or **■ STOP** to stop all), and double-click to clear. Adjust sampler volume with the fader.
 * **→ PAD Loop Mapping** — Create a loop on Deck A or B (using the auto **4-beat** loop or manual **IN / OUT** points). A **→ PAD** button appears in the loop row. Click **→ PAD** to enter Mapping Mode (the button highlights, and all sampler pads pulse green), then click a sampler pad (1-8) to extract and map that exact looped audio region. The pad's name updates to `[Track Name]... [Slice]`, and clicking the pad triggers the sliced region independently. Pads are triggerable via keys (default A S D F G H J K) and customizable in **⚙**.
 
@@ -226,8 +264,10 @@ royalty-free/Creative-Commons sources.
 
 ```
 index.html                  markup + app layout
-css/styles.css              dark DJ theme, responsive deck/mixer/practice UI
-css/studio.css              PAD studio styling + SXRATCH/PAD navigation
+css/tokens.css              shared colours, spacing and typography tokens
+css/styles.css              shared shell, top bar and responsive foundations
+css/decks.css               SXRATCH deck, mixer and practice UI
+css/daw.css                 PAD transport, timeline, editors, devices and mixer
 js/app.js                   bootstrap, UI wiring, recording, sampler, settings
 js/audio-engine.js          AudioContext, decks, EQ/filter/FX, crossfade, master bus
 js/scratch-processor.js     AudioWorklet variable-rate scratch engine
@@ -237,10 +277,18 @@ js/waveform.js              waveform model, peak computation, canvas/worker brid
 js/waveform-draw.js         shared waveform drawing routines
 js/waveform-worker.js       OffscreenCanvas waveform renderer
 js/practice.js              guided lessons, scoring, freestyle recorder hooks
-js/songbuilder.js           PAD composer, offline rendering, JSON/WAV import/export
-js/instruments.js           optional sampled General MIDI soundfont loader
-js/theory.js                music theory helpers used by PAD/tests
+js/daw.js                   PAD UI, song model, editing, persistence and exports
+js/daw-engine.js            realtime scheduler, recording graph and offline bounce
+js/daw-model.js             pure region, timing, clipboard and automation helpers
+js/daw-guidance.js          Studio shortcut registry and resumable guided tour
+js/idb-store.js             PAD audio clips, current song and recovery checkpoints
+js/synth.js                 built-in synth/drum voices and shared mix DSP
+js/store.js                 versioned localStorage envelopes and migrations
+js/wav.js                   AudioBuffer-to-WAV encoding
+js/theory.js                shared DSP/music helpers
 js/presets.js               synthetic deck presets
+js/bpm.js                   onset-envelope BPM detection for loaded tracks
+js/midiexport.js            Standard MIDI File writer for PAD regions/markers
 js/midi.js                  Web MIDI input + default controller map
 js/haptics.js               vibration helpers for mobile feedback
 js/ui.js                    display + toast helpers
@@ -252,7 +300,7 @@ twa-manifest.json           Bubblewrap/Trusted Web Activity config
 .well-known/assetlinks.json Android Digital Asset Links placeholder
 scripts/make-icons.js       icon PNG generation from icon.svg
 icon.svg / icon-*.png       app icons (SVG source + generated 192/512 PNGs)
-test/theory.test.js         Node test coverage for music-theory helpers
+test/*.test.js              Node tests for DSP, DAW models/engine and persistence
 jsconfig.json               editor type-checking (checkJs) config
 ```
 

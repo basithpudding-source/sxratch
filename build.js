@@ -33,32 +33,44 @@ await esbuild.build({
 });
 
 // AudioWorklets: separate entries, same output paths (run in AudioWorkletGlobalScope).
+// Their kernel imports (limiter-kernel.js, scratch-kernel.js) are inlined here.
 for (const w of ["scratch-processor", "limiter-processor"]) {
   await esbuild.build({
     ...common,
     entryPoints: [join(root, `js/${w}.js`)],
     outfile: join(dist, `js/${w}.js`),
+    sourcemap: true,
   });
 }
 
-// Waveform render worker: separate bundled entry, referenced by URL ("/js/...").
-await esbuild.build({
-  ...common,
-  entryPoints: [join(root, "js/waveform-worker.js")],
-  outfile: join(dist, "js/waveform-worker.js"),
-});
+// Render / export workers: separate bundled entries, referenced by URL at runtime.
+for (const w of ["waveform-worker", "wav-worker"]) {
+  await esbuild.build({
+    ...common,
+    entryPoints: [join(root, `js/${w}.js`)],
+    outfile: join(dist, `js/${w}.js`),
+    sourcemap: true,
+  });
+}
 
 // Stylesheets.
 await esbuild.build({
-  entryPoints: [join(root, "css/styles.css"), join(root, "css/studio.css")],
+  entryPoints: [
+    join(root, "css/tokens.css"),
+    join(root, "css/styles.css"),
+    join(root, "css/daw.css"),
+    join(root, "css/decks.css"),
+  ],
   minify: true,
   outdir: join(dist, "css"),
   logLevel: "info",
 });
 
-// Static assets that ship unchanged (file or directory).
-for (const f of ["index.html", "manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png", ".well-known"]) {
+// Static assets that ship unchanged.
+// NOTE: .well-known/ (TWA assetlinks) is deliberately NOT deployed — its
+// fingerprint is still a placeholder; restore it here when a Play Store
+// release is signed (see TWA.md).
+for (const f of ["index.html", "manifest.webmanifest", "sw.js", "icon.svg", "icon-192.png", "icon-512.png"]) {
   await cp(join(root, f), join(dist, f), { recursive: true });
 }
-
 console.log("\n  Built → dist/   (serve with: npm run start:dist)\n");

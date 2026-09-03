@@ -8,6 +8,7 @@
 // together don't clip harshly.
 
 import { crossfadeGains } from "./theory.js";
+import { makeReverbIR } from "./synth.js";
 
 export class Deck {
   /**
@@ -72,6 +73,12 @@ export class Deck {
     this.analyser.connect(this.crossGain);
     this.crossGain.connect(engine.masterBus);
 
+    // Pre-Fade Listen (PFL) headphone cue tap (post-EQ/filter/FX, pre-volume-fader)
+    this.pflGain = ctx.createGain();
+    this.pflGain.gain.value = 0;
+    this.fx.output.connect(this.pflGain);
+    this.pflGain.connect(engine.cueBus);
+
     // State
     this.buffer = null;       // decoded AudioBuffer (kept for waveform peaks)
     this.duration = 0;
@@ -79,8 +86,12 @@ export class Deck {
     this.position = 0;        // 0..1
     this.playing = false;
     this.cuePoint = 0;        // 0..1
-    this.tempo = 0;           // -8..+8 percent
+    this.cuePfl = false;      // headphone cue active
+    this.cueAuditioning = false; // CDJ-style hold-audition active
+    this.tempo = 0;           // percent within ±tempoRange
+    this.tempoRange = 8;      // 6, 8, 10, 16, 100
     this.bpm = 120;           // used for auto-loop length (set on load when known)
+    this.beatOffset = 0;      // detected downbeat offset in seconds
     this.loop = { active: false, start: -1, end: -1 };
 
     this.onPosition = null;   // callback(position, playing, rate)
@@ -144,6 +155,62 @@ export class Deck {
   setCue() { this.cuePoint = this.position; this.node.port.postMessage({ type: "cue", position: this.position }); }
   goToCue() { this.node.port.postMessage({ type: "seek", position: this.cuePoint }); this.position = this.cuePoint; }
 
+  /**
+   * Pioneer CDJ-style CUE button press.
+   * When playing: pauses and seeks back to cue.
+   * When paused: begins audition playback while held down.
+   */
+  cueDown() {
+    if (this.playing) {
+      this.pause();
+      this.goToCue();
+      return "stopped";
+    }
+    this.cueAuditioning = true;
+    this.goToCue();
+    this.play();
+    return "auditioning";
+  }
+
+  /** Release CDJ-style CUE button: stops and rewinds if auditioning. */
+  cueUp() {
+    if (this.cueAuditioning) {
+      this.cueAuditioning = false;
+      this.pause();
+      this.goToCue();
+      return "rewound";
+    }
+    return "idle";
+  }
+
+  setCuePfl(enabled) {
+    this.cuePfl = !!enabled;
+    this.pflGain.gain.setTargetAtTime(this.cuePfl ? 1 : 0, this.engine.ctx.currentTime, 0.01);
+  }
+
+  toggleCuePfl() {
+    this.setCuePfl(!this.cuePfl);
+    return this.cuePfl;
+  }
+
+  setTempoRange(range) {
+    this.tempoRange = Math.max(4, Math.min(100, Number(range) || 8));
+    this.setTempo(this.tempo);
+  }
+
+  /** Momentarily nudge playback speed (+1 = fast forward nudge, -1 = slow down nudge). */
+  nudgeStart(direction) {
+    const base = 1 + this.tempo / 100;
+    const factor = direction > 0 ? 1.04 : 0.96;
+    this.node.port.postMessage({ type: "rate", value: base * factor });
+  }
+
+  /** Release momentary nudge, restoring the base pitch/tempo rate. */
+  nudgeEnd() {
+    const base = 1 + this.tempo / 100;
+    this.node.port.postMessage({ type: "rate", value: base });
+  }
+
   touchStart() { this.node.port.postMessage({ type: "touchStart" }); }
   touchEnd() { this.node.port.postMessage({ type: "touchEnd" }); }
   jog(velocity) {
@@ -176,10 +243,18 @@ export class Deck {
   brake(on) { this.node.port.postMessage({ type: "brake", on: !!on }); }
   backspin() { this.node.port.postMessage({ type: "backspin" }); }
 
-  /** tempo in percent, e.g. -8..+8 */
+  /** Set the track BPM and keep tempo-synced FX (echo) on the beat. */
+  setBpm(bpm) {
+    this.bpm = bpm;
+    this.fx.setBpm(this.bpm * (1 + this.tempo / 100));
+  }
+
+  /** tempo in percent, clamped to ±tempoRange */
   setTempo(percent) {
-    this.tempo = percent;
-    this.node.port.postMessage({ type: "rate", value: 1 + percent / 100 });
+    const lim = this.tempoRange || 8;
+    this.tempo = Math.max(-lim, Math.min(lim, Number(percent) || 0));
+    this.node.port.postMessage({ type: "rate", value: 1 + this.tempo / 100 });
+    this.fx.setBpm(this.bpm * (1 + this.tempo / 100));
   }
 
   setVolume(v) { // 0..1
@@ -227,6 +302,9 @@ export class AudioEngine {
     this.ready = false;
     this.crossfadeCurve = "power"; // "linear" | "power" | "cut"
     this.hamster = false; // hamster reverse mode
+    this.cueMode = "stereo"; // "stereo" | "split"
+    this.cueMix = 0; // 0 = 100% CUE, 1 = 100% MASTER
+    this.cueVolume = 0.8; // 0..1
   }
 
   /** Must be called from a user gesture (click/touch). */
@@ -259,15 +337,75 @@ export class AudioEngine {
       this.limiter.release.value = 0.12;
     }
 
-    this.masterBus.connect(this.master);
-    this.master.connect(this.limiter);
-    this.limiter.connect(this.ctx.destination);
+    // Order matters: limiter BEFORE the master volume. Limiting depth is then
+    // independent of the monitor volume, and the recorder can tap the limiter
+    // for a full-scale mix regardless of how quiet the user is monitoring.
+    this.masterBus.connect(this.limiter);
+    this.limiter.connect(this.master);
+
+    // Headphone Cue / Pre-Fade Listen (PFL) bus
+    this.cueBus = this.ctx.createGain();
+    this.cueMasterTap = this.ctx.createGain();
+    this.cueMasterTap.gain.value = this.cueMix;
+    this.limiter.connect(this.cueMasterTap);
+    this.cueMasterTap.connect(this.cueBus);
+
+    this.cueVolumeNode = this.ctx.createGain();
+    this.cueVolumeNode.gain.value = this.cueVolume;
+    this.cueBus.connect(this.cueVolumeNode);
+
+    // Split Cue routing: Left = Master, Right = Cue
+    this.splitMerger = this.ctx.createChannelMerger(2);
+    this.masterMono = this.ctx.createGain();
+    this.cueMono = this.ctx.createGain();
+    this.master.connect(this.masterMono);
+    this.masterMono.connect(this.splitMerger, 0, 0); // Left = Master
+    this.cueVolumeNode.connect(this.cueMono);
+    this.cueMono.connect(this.splitMerger, 0, 1);    // Right = Cue
+
+    // Stereo routing
+    this.cueStereoGain = this.ctx.createGain();
+    this.cueStereoGain.gain.value = 1;
+    this.cueVolumeNode.connect(this.cueStereoGain);
+
+    this._updateOutputRouting();
 
     this.decks.A = new Deck(this, "A");
     this.decks.B = new Deck(this, "B");
 
     this.setCrossfade(0.5);
     this.ready = true;
+  }
+
+  _updateOutputRouting() {
+    if (!this.ctx) return;
+    try { this.master.disconnect(this.ctx.destination); } catch {}
+    try { this.cueStereoGain.disconnect(this.ctx.destination); } catch {}
+    try { this.splitMerger.disconnect(this.ctx.destination); } catch {}
+
+    if (this.cueMode === "split") {
+      this.splitMerger.connect(this.ctx.destination);
+    } else {
+      this.master.connect(this.ctx.destination);
+      this.cueStereoGain.connect(this.ctx.destination);
+    }
+  }
+
+  setCueMode(mode) {
+    this.cueMode = mode === "split" ? "split" : "stereo";
+    this._updateOutputRouting();
+  }
+
+  setCueVolume(v) {
+    const val = Math.max(0, Math.min(1, Number(v) || 0));
+    this.cueVolume = val;
+    this.cueVolumeNode?.gain.setTargetAtTime(val, this.ctx.currentTime, 0.01);
+  }
+
+  setCueMix(x) {
+    const val = Math.max(0, Math.min(1, Number(x) || 0));
+    this.cueMix = val;
+    this.cueMasterTap?.gain.setTargetAtTime(val, this.ctx.currentTime, 0.01);
   }
 
   async resume() {
@@ -327,12 +465,26 @@ export class BeatFX {
     const ctx = this.ctx;
     const inGain = ctx.createGain();
     const delay = ctx.createDelay(2);
-    delay.delayTime.value = 0.375;
+    delay.delayTime.value = 0.375; // re-synced to the deck BPM via setBpm()
     const fb = ctx.createGain();
     fb.gain.value = 0.4;
+    // Filter the feedback loop so repeats darken like an analog delay
+    // instead of accumulating hiss. Butterworth Q (0.707) keeps the corners
+    // flat — the default Q=1 adds ~1 dB resonance that, inside the loop,
+    // makes max-depth repeats ring for far longer than the feedback implies.
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 2600;
+    lp.Q.value = 0.707;
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 170;
+    hp.Q.value = 0.707;
     const out = ctx.createGain();
     inGain.connect(delay);
-    delay.connect(fb);
+    delay.connect(lp);
+    lp.connect(hp);
+    hp.connect(fb);
     fb.connect(delay);
     delay.connect(out);
     this.effects.echo = { in: inGain, out, delay, fb };
@@ -341,7 +493,7 @@ export class BeatFX {
     const ctx = this.ctx;
     const inGain = ctx.createGain();
     const conv = ctx.createConvolver();
-    conv.buffer = this._impulse(2.4, 2.6);
+    conv.buffer = makeReverbIR(ctx, { seconds: 2.1, decay: 2.8, predelay: 0.02, damp: 0.45 });
     const out = ctx.createGain();
     inGain.connect(conv);
     conv.connect(out);
@@ -351,7 +503,10 @@ export class BeatFX {
     const ctx = this.ctx;
     const inGain = ctx.createGain();
     const delay = ctx.createDelay(0.02);
-    delay.delayTime.value = 0.005;
+    // Base 8 ms: the delay is in a feedback cycle, so its effective time floors
+    // at one render quantum (~2.9 ms); with max modulation depth 4 ms the sweep
+    // stays in 4–12 ms and never crosses that floor or goes negative.
+    delay.delayTime.value = 0.008;
     const fb = ctx.createGain();
     fb.gain.value = 0.5;
     const out = ctx.createGain();
@@ -393,15 +548,11 @@ export class BeatFX {
     lfo.start();
     this.effects.phaser = { in: inGain, out, lfoGain };
   }
-  _impulse(dur, decay) {
-    const ctx = this.ctx;
-    const len = Math.floor(ctx.sampleRate * dur);
-    const buf = ctx.createBuffer(2, len, ctx.sampleRate);
-    for (let c = 0; c < 2; c++) {
-      const d = buf.getChannelData(c);
-      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
-    }
-    return buf;
+  /** Beat-sync the echo to a deck's effective BPM (dotted-eighth repeats). */
+  setBpm(bpm) {
+    if (!bpm || !isFinite(bpm) || bpm <= 0) return;
+    const t = Math.max(0.05, Math.min(1.9, (60 / bpm) * 0.75));
+    this.effects.echo.delay.delayTime.setTargetAtTime(t, this.ctx.currentTime, 0.08);
   }
 
   select(name) {
@@ -427,7 +578,7 @@ export class BeatFX {
     if (this.on) this.wet.gain.setTargetAtTime(d, t, 0.02);
     this.effects.echo.fb.gain.setTargetAtTime(0.2 + 0.55 * d, t, 0.02);
     this.effects.flanger.fb.gain.setTargetAtTime(0.3 + 0.45 * d, t, 0.02);
-    this.effects.flanger.lfoGain.gain.value = 0.001 + 0.005 * d;
+    this.effects.flanger.lfoGain.gain.value = 0.001 + 0.003 * d; // ≤4 ms swing (see _buildFlanger)
     this.effects.phaser.lfoGain.gain.value = 150 + 500 * d;
   }
 }
@@ -458,14 +609,21 @@ export class Sampler {
     this.slots[i] = { buffer, name };
   }
 
-  /** Fire a pad. Returns true if a sample played. Restarts cleanly on re-hit. */
-  trigger(i) {
+  /** Fire a pad (velocity-sensitive). Returns true if a sample played. */
+  trigger(i, vel = 1) {
     const slot = this.slots[i];
     if (!slot) return false;
     this.stop(i);
     const src = this.engine.ctx.createBufferSource();
     src.buffer = slot.buffer;
-    src.connect(this.gain);
+    if (vel !== 1) { // per-shot velocity gain (MIDI pads)
+      const g = this.engine.ctx.createGain();
+      g.gain.value = Math.max(0.05, Math.min(1.25, vel));
+      src.connect(g);
+      g.connect(this.gain);
+    } else {
+      src.connect(this.gain);
+    }
     src.onended = () => { if (this.active[i] === src) { this.active[i] = null; this.onChange?.(i); } };
     src.start();
     this.active[i] = src;
